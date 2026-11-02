@@ -11,7 +11,7 @@
 - **No notifications/reminders:** the app is opened manually; briefings play on demand.
 
 ## Assistant
-- Tone: warm best friend (chatty, upbeat, casual).
+- Tone: warm best friend: chatty and natural, like a real assistant. No raw stats or percentages; specific highlights tied to goals.
 - Name: user-configurable in settings (default name provided).
 
 ## Tabs
@@ -39,5 +39,10 @@
 - Weight history per exercise over time.
 - Progression hints (e.g. all reps hit → suggest +2.5 kg).
 
+### Goals
+- Medium-term and long-term goals, each with an optional deadline and an optional "why".
+- Mark achieved / archive.
+- Used by the AI as context to connect daily tasks and the week's activity to what you are working towards. No manual task-to-goal linking.
+
 ### Weekly review
-- Sunday summary of the week (tasks completed, gym sessions, progress), readable and playable as audio.
+- Titled "Overview of the week". Sunday summary of the week (tasks completed, gym sessions, progress), readable and playable as audio.

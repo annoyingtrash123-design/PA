@@ -93,6 +93,15 @@ Session = {"id":1,"template_id":1,"name":"Push A","date":"2026-11-02","completed
 Rotation projection for `/api/days`: today gets the next rotation item, each following day gets the following item (wrapping), unless a session was already completed today (then today shows that session, and projection continues from next).
 Progression: if every set of an exercise last time was done with `reps >= rep_max` at the same weight W, suggest W + 2.5; otherwise suggest W. No history → null.
 
+## Goals
+```json
+Goal = {"id":1,"title":"Pass my driving test","horizon":"medium"|"long","deadline":"2027-03-01"|null,
+        "why":"Freedom to visit family without relying on lifts","status":"active"|"achieved"|"archived",
+        "achieved_on":null|"2026-11-20","created":"2026-11-02"}
+```
+`GET /api/goals` (all, active first) -> `[Goal]`; `POST /api/goals` body Goal without id/created -> Goal; `PUT /api/goals/{id}` -> Goal; `DELETE /api/goals/{id}`.
+Goals are context for the AI only; tasks are not linked manually. Active goals (and goals achieved in the relevant period) are included in the Gemini context for day notes, daily briefings and the weekly overview, so the assistant can connect what was done to what it is working towards. The AI must only claim a task relates to a goal when it plausibly does.
+
 ## Day note (home screen "affirmation")
 `GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","text":"...","source":"gemini"|"template"}`
 A short (1–2 sentences, max ~40 words), grounded, specific note about *this* day — not generic or soppy. It references the actual shape of the day (how busy, when the busy stretch is, the one thing that matters most, a breather) and offers one practical, encouraging angle. Examples of the style: "Three things land before noon, then the afternoon opens up. Get the stand-up and Sam's email done early and the rest of the day is yours." / "A light day with just two tasks, both flexible. Good day to get the dentist booked and have a proper evening."
@@ -107,7 +116,7 @@ The briefing's `affirmation` field returns the same day note text.
  "affirmation":"You don't have to do it all today, just the next thing.",
  "stats":{"total":6,"done":2,"next_up":Occurrence|null}}
 ```
-Tone: warm best friend — chatty, upbeat, casual, affirming. Morning: weather, the day in order, workout, an affirmation. Evening: what got done (kindly), what's left, a gentle look at tomorrow. Weekly: tasks done over the Mon–Sun week of `date`, gym sessions, progress highlights, a look at next week.
+Tone: warm best friend: chatty, natural and human, like a real personal assistant who knows you. Never read out raw counts, fractions or percentages ("0 of 24 tasks", "50 percent"); talk about specific things done or coming up instead, and tie them to goals where they genuinely relate. Kind and low-key about quiet days/weeks (no guilt, no stats). Morning: weather, the day in order, workout, an affirmation. Evening: what got done (kindly), what's left, a gentle look at tomorrow. Weekly: tasks done over the Mon–Sun week of `date`, gym sessions, progress highlights, a look at next week.
 Gemini model via env `GEMINI_MODEL` (default `gemini-2.5-flash`); on any failure or no key, fall back to template text.
 
 `POST /api/tts` body `{"text":"...","voice":"en-US-JennyNeural"}` → `audio/mpeg` bytes. Uses `edge-tts` CLI; falls back to `piper` if installed; else 503.
