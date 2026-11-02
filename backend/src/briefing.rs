@@ -1,3 +1,4 @@
+use crate::daynote;
 use crate::db::{fmt_date, parse_date, today};
 use crate::error::{AppError, Res};
 use crate::gym::{self, WorkoutPlan};
@@ -11,53 +12,6 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration as StdDuration;
-
-const AFFIRMATIONS: [&str; 40] = [
-    "You don't have to do it all today, just the next thing.",
-    "Small steps still count as steps.",
-    "You are doing better than you think you are.",
-    "Rest is productive too.",
-    "Be as kind to yourself as you would be to a good friend.",
-    "Progress, not perfection.",
-    "You have handled hard days before, and you will handle this one too.",
-    "Your pace is the right pace.",
-    "It's okay to start again as many times as you need to.",
-    "You are allowed to take up space and take your time.",
-    "Today is a fresh page, and you get to decide what goes on it.",
-    "You are more capable than your to-do list gives you credit for.",
-    "Showing up counts, even on the messy days.",
-    "Good things are built a little at a time.",
-    "You deserve the same patience you give everyone else.",
-    "One calm breath at a time is a perfectly good plan.",
-    "You are growing, even when it doesn't feel like it.",
-    "Done is better than perfect.",
-    "Your effort matters, even when nobody sees it.",
-    "You are enough, exactly as you are today.",
-    "Be proud of how far you've come.",
-    "Doing something is always better than waiting for the perfect moment.",
-    "You can do hard things, and you can also take breaks.",
-    "Let today be gentle and let it be good.",
-    "Your best today might look different from yesterday, and that's fine.",
-    "Every little win is worth celebrating.",
-    "You get to choose where your energy goes today.",
-    "Consistency beats intensity, so keep showing up.",
-    "It's okay to ask for help, and it's okay to say no.",
-    "You are building a life you can be proud of, one day at a time.",
-    "Trust yourself, you know more than you think.",
-    "Slow progress is still progress.",
-    "Today you get to start with kindness, for yourself first.",
-    "You have everything you need to take the next step.",
-    "Rest when you need to, then keep going when you're ready.",
-    "Your future self is already grateful for what you do today.",
-    "Breathe in, breathe out, and begin where you are.",
-    "Not everything has to be figured out today.",
-    "You make a difference, even in the smallest ways.",
-    "Whatever happens today, you will have done your best, and that is plenty.",
-];
-
-pub fn affirmation_for(d: NaiveDate) -> &'static str {
-    AFFIRMATIONS[(d.num_days_from_ce() as usize) % AFFIRMATIONS.len()]
-}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
@@ -319,13 +273,29 @@ fn next_up(items: &[Occurrence], date: NaiveDate) -> Option<Occurrence> {
     undone.first().map(|o| (*o).clone())
 }
 
+/// Short grounded line about the week, used as the weekly "affirmation".
+fn week_line(w: &Week) -> String {
+    let mut s = if w.total == 0 {
+        "No tasks were planned this week".to_string()
+    } else {
+        format!("{} of {} tasks done this week", w.done, w.total)
+    };
+    if let Some((wd, _, dn)) = w.days.iter().filter(|(_, _, dn)| *dn > 0).max_by_key(|(_, _, dn)| *dn) {
+        s.push_str(&format!(", with {wd} the strongest at {dn}"));
+    }
+    if w.next_total > 0 {
+        s.push_str(&format!(". Next week has {} on the list", w.next_total));
+    }
+    s.push('.');
+    s
+}
+
 // ---------------------------------------------------------------- template
 
 fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
     let d = c.date;
     let n = name_suffix(&c.user);
     let a = &c.assistant;
-    let aff = affirmation_for(d);
     let mut parts: Vec<String> = vec![];
     match c.kind {
         Kind::Morning => {
@@ -358,8 +328,19 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             if let Some(p) = &c.workout {
                 parts.push(workout_sentence(p, d));
             }
-            parts.push(format!("{} {aff}", pick(&["Before you head off, a little reminder:", "And here's something to carry with you today:", "One last thing:"], d, 13)));
-            parts.push(pick(&["You've got this!", "I'm cheering for you all day long.", "Go have a lovely day, and I'll be right here if you need me."], d, 17).into());
+            parts.push(match daynote::key_task(&c.items) {
+                Some(k) if !k.done => {
+                    let kp = item_phrase(k);
+                    match d.num_days_from_ce() as usize % 3 {
+                        0 => format!("If you only get one thing done today, make it {kp}."),
+                        1 => format!("Start with {kp} and the rest of the day gets easier to read."),
+                        _ => format!("The one to watch today is {kp}."),
+                    }
+                }
+                Some(_) => "Everything on the list is already done, so the rest of the day is yours.".into(),
+                None => "Nothing is waiting on you, so the day is yours to shape.".into(),
+            });
+            parts.push(pick(&["I'll be right here if the plan changes.", "Have a good one, and shout if you need me.", "Go get started, and I'll be here when you need me."], d, 17).into());
         }
         Kind::Evening => {
             parts.push(match d.num_days_from_ce() as usize % 3 {
@@ -414,8 +395,14 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             if let Some(w) = weather {
                 parts.push(format!("It ended up as {} today.", w.summary.to_lowercase()));
             }
-            parts.push(format!("{} {aff}", pick(&["Before you drift off, here's a thought:", "Let me leave you with this:"], d, 19)));
-            parts.push(pick(&["Sleep well, and be gentle with yourself.", "Rest up, I'll see you tomorrow.", "Goodnight, you did enough today."], d, 23).into());
+            parts.push(match &c.tomorrow {
+                Some((wd, items, _)) => match daynote::key_task(items) {
+                    Some(k) => format!("The first thing to think about for {wd} is {}, so nothing else needs your attention tonight.", item_phrase(k)),
+                    None => format!("{wd} has nothing scheduled, so there's nothing to prepare tonight."),
+                },
+                None => "Nothing else needs your attention tonight.".into(),
+            });
+            parts.push(pick(&["Sleep well.", "Rest up, I'll see you tomorrow.", "Goodnight."], d, 23).into());
         }
         Kind::Weekly => {
             let w = c.week.as_ref().unwrap();
@@ -462,8 +449,8 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             }
             ahead.push('.');
             parts.push(ahead);
-            parts.push(format!("{} {aff}", pick(&["Here's something to take into the new week:", "One last thought before the week begins:"], d, 29)));
-            parts.push(pick(&["Be proud of yourself, I certainly am.", "Enjoy the rest of your weekend. I'm right here whenever you need me."], d, 31).into());
+            parts.push(week_line(w));
+            parts.push(pick(&["Enjoy the rest of your weekend.", "I'm right here whenever you need me."], d, 31).into());
         }
     }
     parts.join(" ")
@@ -477,9 +464,9 @@ fn system_prompt(c: &Ctx) -> String {
         _ => "between 120 and 220 words",
     };
     let focus = match c.kind {
-        Kind::Morning => "This is the MORNING briefing. Greet them, mention the weather if given, walk through the day in order (naturally mentioning times for timed tasks and the part of day for untimed ones), mention today's workout and any progression hint, and end with the affirmation.",
-        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, give a gentle look at tomorrow, and end with the affirmation and a calm goodnight.",
-        Kind::Weekly => "This is the WEEKLY review, read on Sunday. Summarise tasks completed over the Monday to Sunday week, the gym sessions, any progress highlights, then look ahead to next week, and end with the affirmation.",
+        Kind::Morning => "This is the MORNING briefing. Greet them, mention the weather if given, walk through the day in order (naturally mentioning times for timed tasks and the part of day for untimed ones), mention today's workout and any progression hint, and end with one grounded, specific closing line, such as the key task to start with. Never use generic affirmations or cliches like 'you\'ve got this'.",
+        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, give a gentle look at tomorrow, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
+        Kind::Weekly => "This is the WEEKLY review, read on Sunday. Summarise tasks completed over the Monday to Sunday week, the gym sessions, any progress highlights, then look ahead to next week, and end with one short grounded line about the week. No generic affirmations or cliches.",
     };
     format!(
         "You are {a}, the user's warm, upbeat best friend and personal assistant. You are writing a script that will be read aloud by a text-to-speech voice, so write exactly how a chatty, caring friend would talk.\n\
@@ -558,7 +545,6 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
             s.push_str(&format!("Next week: {} tasks scheduled; workouts: {}\n", w.next_total, if w.next_workouts.is_empty() { "none planned".into() } else { w.next_workouts.join(", ") }));
         }
     }
-    s.push_str(&format!("Affirmation to close with: {}\n", affirmation_for(c.date)));
     s
 }
 
@@ -579,7 +565,7 @@ fn clean_script(raw: &str) -> String {
     lines.join(" ")
 }
 
-async fn gemini(st: &AppState, key: &str, system: &str, user: &str) -> Result<String, String> {
+pub async fn gemini(st: &AppState, key: &str, system: &str, user: &str) -> Result<String, String> {
     let model = std::env::var("GEMINI_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "gemini-2.5-flash".into());
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
     let body = json!({
@@ -628,7 +614,7 @@ pub struct BriefingOut {
     text: String,
     source: &'static str,
     weather: Option<Weather>,
-    affirmation: &'static str,
+    affirmation: String,
     stats: Stats,
 }
 
@@ -664,9 +650,13 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
     }
     let text = text.unwrap_or_else(|| template_text(&ctx, &weather));
 
+    let affirmation = match &ctx.week {
+        Some(w) => week_line(w),
+        None => daynote::note_for(&st, date, use_ai).await?.0,
+    };
     let stats = match &ctx.week {
         Some(w) => Stats { total: w.total, done: w.done, next_up: None },
         None => Stats { total: ctx.items.len(), done: count_done(&ctx.items), next_up: next_up(&ctx.items, date) },
     };
-    Ok(Json(BriefingOut { kind: kind.name(), date: fmt_date(date), text, source, weather, affirmation: affirmation_for(date), stats }))
+    Ok(Json(BriefingOut { kind: kind.name(), date: fmt_date(date), text, source, weather, affirmation, stats }))
 }

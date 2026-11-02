@@ -9,6 +9,7 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL").ok();
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(crate::daynote::CREATE_TABLE)?;
     Ok(conn)
 }
 

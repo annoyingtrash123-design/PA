@@ -1,4 +1,5 @@
 mod briefing;
+mod daynote;
 mod db;
 mod error;
 mod gym;
@@ -64,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/sets", put(gym::session_sets))
         .route("/api/sessions/{id}/complete", post(gym::session_complete))
         .route("/api/briefing", get(briefing::briefing))
+        .route("/api/day-note", get(daynote::day_note))
         .route("/api/tts", post(tts::speak))
         .route("/health", get(|| async { "ok" }))
         .fallback(error::fallback)
