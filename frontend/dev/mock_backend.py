@@ -16,7 +16,7 @@ iso = lambda d: d.isoformat()
 S = {
     "settings": {"assistant_name": "Sunny", "user_name": "Alex", "voice": "en-US-JennyNeural",
                  "location_name": "London", "latitude": 51.5072, "longitude": -0.1276,
-                 "gemini_api_key_set": False},
+                 "gemini_api_key_set": False, "timezone": "Australia/Sydney"},
     "categories": [
         {"id": 1, "name": "Chores", "color": "#A1887F"},
         {"id": 2, "name": "Exercise", "color": "#6BAA75"},
@@ -73,6 +73,11 @@ S = {
     ],
     "rotation": {"items": [{"template_id": 1}, {"template_id": 2}, {"template_id": 3}, {"rest": True}], "next_index": 0},
     "sessions": [],
+    "memory": {"weather": {"comfortable_max": 18, "hot_above": 22, "too_hot_above": 25, "likes_rain": True, "avoid_sunburn": True},
+               "notes": [{"id": 1, "text": "I work from an office most weekdays"}],
+               "work": {"enabled": True, "days": [0, 1, 2, 3, 4], "start": "10:00", "end": "17:00", "holiday_region": "AU-NSW", "lunch_minutes": 60},
+               "rhythm": {"wake_from": "06:00", "wake_to": "07:00", "sleep_from": "23:00", "sleep_to": "00:00"}},
+    "days_off": set(),
     "next_id": 100,
 }
 # history: (exercise_id) -> list of {date, sets}
@@ -159,14 +164,23 @@ def day(d):
     wk = None
     if d >= TODAY:
         wk = plan_at(S["rotation"]["next_index"] + (d - TODAY).days)
-    return {"date": iso(d), "weekday": d.strftime("%A"), "items": items, "workout": wk}
+    # mock public holiday: the Friday of the current week
+    holiday = "Mock Public Holiday" if d == TODAY - timedelta(days=TODAY.weekday()) + timedelta(days=4) else None
+    off = iso(d) in S["days_off"]
+    w = S["memory"]["work"]
+    work = {"start": w["start"], "end": w["end"]} if (w["enabled"] and d.weekday() in w["days"] and not holiday and not off) else None
+    return {"date": iso(d), "weekday": d.strftime("%A"), "items": items, "workout": wk,
+            "work": work, "holiday": holiday, "day_off": off}
+
+
+MORNING_TEXT = ("Good morning, Alex! Here's how your Monday looks. It's a light rain kind of day, around fourteen at most, which suits you just fine, so lean into it and make the home bits cosy. You've got a good mix today, so let me walk you through it.\n\nStarting with life admin: you've got the groceries to pick up at half past five, and the laundry is due this afternoon. Neither is heavy, but the laundry is best started early so it's dry by tonight. Work is mostly the team stand-up at ten, and you'll want to clear your inbox right after while it's fresh. That should be the main brain-heavy stretch, and everything else is gentle by comparison.\n\nOn the exercise side, it's push day today. Bench press leads, then overhead press and triceps pushdowns. Last time you hit sixty on the bench, so there's a good chance you can nudge that up a little if the reps feel solid. I'd do it late afternoon, after the laundry is in and before the shops, so your energy is high and you're not rushing.\n\nFor the social side, you said you wanted to call your mum this evening, and she'll love hearing about the trip, so maybe save that for after dinner when you can properly settle in. There are no appointments today, which is a nice breather, though the dentist booking is still floating about for later this week.\n\nIf I were ordering the day, I'd do the morning routine, stand-up, a short email clear-out, then the laundry on. Lunch, a walk if the rain eases, then the gym, groceries on the way home, dinner, and finally the call with your mum. That leaves your evening unhurried.\n\nLooking back at yesterday, you watered the plants a bit late, but they're fine, and it counted. That kind of steady follow-through is exactly what keeps your driving test goal moving. And tomorrow looks lighter, just the stand-up and a pull session, so don't worry about squeezing everything in today. One thing at a time, and you'll be right on track. Have a lovely day!")
 
 
 def briefing(kind, d):
     dd = day(d)
     done = sum(1 for i in dd["items"] if i["done"])
     nxt = next((i for i in dd["items"] if not i["done"]), None)
-    texts = {"morning": "Good morning, Alex! It's a lovely day to get things done. You've got a few things lined up, starting with your morning routine, then stand-up at ten. Push day is on the cards later, so fuel up! Take it one step at a time.",
+    texts = {"morning": MORNING_TEXT,
              "evening": "Hey you! Nice work today. Let's wind down together, there's a little left on the list but nothing that can't wait until tomorrow.",
              "weekly": "What a week! You got a good chunk of your tasks done and trained a few times. Next week, let's keep the rhythm going and be kind to ourselves."}
     return {"kind": kind, "date": iso(d), "text": texts[kind], "source": "template",
@@ -337,6 +351,49 @@ class H(BaseHTTPRequestHandler):
             n = len(day(d)["items"])
             return {"date": iso(d), "source": "template",
                     "text": f"{n} things on today, with room to breathe in between. Start with the one that matters most and the rest will follow."}
+        if r0 == "digest":
+            import time
+            time.sleep(float(os.getenv("MOCK_DIGEST_DELAY", "1.5")))
+            d = date.fromisoformat(q["date"]) if q.get("date") else TODAY
+            if os.getenv("MOCK_DIGEST") == "fail":
+                return 500, {"error": "digest failed"}
+            wx = None if os.getenv("MOCK_WEATHER") == "off" else {
+                "summary": "Light rain", "temp_max": 14, "temp_min": 8, "precip_prob": 80, "uv_max": 3.5}
+            return {"date": iso(d), "weather": wx, "source": "template",
+                    "weather_comment": None if wx is None else "A proper rainy one, 14 at most. Cosy if you're home, and nice to listen to from your desk. Pack sun cream anyway if the clouds break.",
+                    "overview": "Your morning is about getting settled: the routine, then stand-up at ten. The afternoon is wide open, which is a lovely chance to get the groceries sorted without rushing. Call your mum in the evening, and keep a breather before push day. All of it nudges you towards that driving test."}
+        if r0 == "days-off":
+            if m == "POST":
+                S["days_off"].add(b["date"])
+            elif m == "DELETE":
+                S["days_off"].discard(parts[1])
+                return 204, None
+            return sorted(S["days_off"])
+        if r0 == "memory":
+            mem = S["memory"]
+            if len(parts) == 1:
+                return mem
+            if parts[1] == "rhythm" and m == "PUT":
+                mem["rhythm"].update(b)
+                return mem
+            if parts[1] == "work" and m == "PUT":
+                mem["work"].update(b)
+                return mem
+            if parts[1] == "weather" and m == "PUT":
+                mem["weather"].update(b)
+                return mem
+            if parts[1] == "notes":
+                if m == "POST":
+                    mem["notes"].append({"id": nid(), "text": b["text"]})
+                else:
+                    i = int(parts[2])
+                    if m == "PUT":
+                        for n in mem["notes"]:
+                            if n["id"] == i:
+                                n["text"] = b["text"]
+                    elif m == "DELETE":
+                        mem["notes"] = [n for n in mem["notes"] if n["id"] != i]
+                return mem
         if r0 == "tts":
             if os.getenv("MOCK_TTS") == "off":
                 return 503, {"error": "tts unavailable"}

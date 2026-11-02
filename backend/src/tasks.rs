@@ -505,6 +505,41 @@ pub struct Day {
     pub weekday: String,
     pub items: Vec<Occurrence>,
     pub workout: Option<gym::WorkoutPlan>,
+    /// Work hours for the day (not a task); null on non-work days, days off and holidays.
+    pub work: Option<WorkHours>,
+    pub holiday: Option<String>,
+    pub day_off: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DayInfo {
+    pub work: Option<WorkHours>,
+    pub holiday: Option<String>,
+    pub day_off: bool,
+}
+
+impl Day {
+    pub fn info(&self) -> DayInfo {
+        DayInfo { work: self.work.clone(), holiday: self.holiday.clone(), day_off: self.day_off }
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct WorkHours {
+    pub start: String,
+    pub end: String,
+}
+
+/// (work hours, public holiday name, is a day off) for a date.
+pub fn day_info(conn: &Connection, mem_work: &crate::memory::WorkPrefs, days_off: &[String], d: NaiveDate) -> (Option<WorkHours>, Option<String>, bool) {
+    if !mem_work.enabled {
+        return (None, None, days_off.contains(&fmt_date(d)));
+    }
+    let ds = fmt_date(d);
+    let holiday = crate::holidays::lookup(conn, &mem_work.holiday_region, &ds);
+    let off = days_off.contains(&ds);
+    let works = mem_work.days.contains(&d.weekday().num_days_from_monday()) && holiday.is_none() && !off;
+    (works.then(|| WorkHours { start: mem_work.start.clone(), end: mem_work.end.clone() }), holiday, off)
 }
 
 /// Move unfinished one-off tasks dated before `today` to `today`.
@@ -575,6 +610,10 @@ pub fn resolve_items(conn: &Connection, start: NaiveDate, n: i64) -> rusqlite::R
     Ok(out)
 }
 
+pub fn years_between(a: NaiveDate, b: NaiveDate) -> Vec<i32> {
+    (a.year()..=b.year()).collect()
+}
+
 pub fn weekday_name(d: NaiveDate) -> String {
     d.format("%A").to_string()
 }
@@ -587,10 +626,15 @@ pub fn build_days(conn: &Connection, start: NaiveDate, n: i64) -> rusqlite::Resu
     }
     let items = resolve_items(conn, start, n)?;
     let workouts = gym::project(conn, start, n, t)?;
+    let work = crate::memory::load(conn)?.work;
+    let off = crate::memory::days_off(conn)?;
     Ok(items
         .into_iter()
         .zip(workouts)
-        .map(|((d, items), workout)| Day { date: fmt_date(d), weekday: weekday_name(d), items, workout })
+        .map(|((d, items), workout)| {
+            let (w, holiday, day_off) = day_info(conn, &work, &off, d);
+            Day { date: fmt_date(d), weekday: weekday_name(d), items, workout, work: w, holiday, day_off }
+        })
         .collect())
 }
 
@@ -606,6 +650,7 @@ pub async fn days(State(st): State<AppState>, Query(q): Query<HashMap<String, St
     if !(1..=62).contains(&n) {
         return Err(AppError::bad("days must be between 1 and 62"));
     }
+    crate::holidays::ensure(&st, &years_between(start, start + Duration::days(n))).await;
     let conn = st.db.lock().unwrap();
     Ok(Json(build_days(&conn, start, n)?))
 }

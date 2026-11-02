@@ -5,7 +5,7 @@ import flet as ft
 import theme as T
 from api import ApiError
 from widgets.base import BaseView
-from widgets.common import OccurrenceTile, card, chip, heading, muted, btn_style
+from widgets.common import card, now_in, chip, heading, muted, btn_style
 from widgets.player import VoicePlayer
 
 
@@ -64,72 +64,109 @@ class HomeView(BaseView):
     def __init__(self, ctx):
         super().__init__(ctx)
         self.player = VoicePlayer(ctx)
-        self.kind = "morning" if datetime.now().hour < 17 else "evening"
+        self.kind = "morning" if now_in(ctx).hour < 17 else "evening"
         self.brief_text = None
-        self.brief_kind = None
-        self.briefing_extra = None  # weather from last briefing fetch
-        self.day_note = None
+        self.overview = None
         self.busy = False
 
     def refresh(self, soft=False):
-        if not soft:
-            self.briefing_extra = None
         super().refresh(soft)
+        self._load_digest()
+        self._load_briefing()
 
     # ---- data
     def render(self):
-        today = date.today()
+        today = now_in(self.ctx).date()
         day = self.ctx.api.days(today.isoformat(), 1)[0]
-        if self.briefing_extra is None:
-            try:
-                self.briefing_extra = self.ctx.api.briefing("morning", today.isoformat(), ai=False)
-            except ApiError:
-                self.briefing_extra = {}
         items = day["items"]
         total, done = len(items), sum(1 for o in items if o["done"])
-        nxt = pick_next_up(items)
-        try:
-            self.day_note = (self.ctx.api.day_note(today.isoformat()) or {}).get("text") or None
-        except ApiError:
-            self.day_note = None
-        extra = self.briefing_extra or {}
+        nxt = pick_next_up(items, now_in(self.ctx))
         user = self.ctx.settings.get("user_name") or ""
-        hello = f"{greeting()}, {user}" if user else greeting()
+        hello = f"{greeting(now_in(self.ctx))}, {user}" if user else greeting(now_in(self.ctx))
+        self.weather_holder = ft.Container(visible=False)
+        self.day_holder = ft.Container()
+        self.play_btn = ft.FilledButton(
+            "Read it to me", icon=ft.Icons.PLAY_ARROW_ROUNDED, on_click=self._play, height=58, expand=True, disabled=True,
+            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=29), bgcolor=T.LAV, color=T.ON_ACCENT,
+                                 text_style=ft.TextStyle(size=18, weight=ft.FontWeight.W_600)))
+        self.kind_sel = ft.SegmentedButton(
+            selected={self.kind}, show_selected_icon=False, on_change=self._kind_changed,
+            segments=[ft.Segment(value="morning", label=ft.Text("Morning")), ft.Segment(value="evening", label=ft.Text("Wind-down"))])
+        self.brief_text = None
+        self._set_day_card(loading=True)
+        return [self._header(hello, today), self.weather_holder, self._progress(done, total, nxt),
+                ft.Row([self.kind_sel], alignment=ft.MainAxisAlignment.CENTER), self.day_holder]
 
-        controls = [self._header(hello, today, extra.get("weather"))]
-        if self.day_note:
-            controls.append(self._day_note(self.day_note))
-        controls.append(self._progress(done, total, nxt))
-        controls.append(self._brief_section())
-        controls.append(self._list(items))
-        return controls
+    def _loading_row(self):
+        return ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2.5, color=T.LAV),
+                       muted(f"{self.ctx.name} is looking at your day...", 14)], spacing=12)
+
+    def _load_digest(self):
+        try:
+            dg = self.ctx.api.digest(now_in(self.ctx).date().isoformat()) or {}
+        except ApiError:
+            dg = {}
+        self.overview = dg.get("overview")
+        w = dg.get("weather")
+        self.weather_holder.content = self._weather_card(w, dg.get("weather_comment")) if w else None
+        self.weather_holder.visible = bool(w)
+        try:
+            self.weather_holder.update()
+        except Exception:
+            pass
+
+    def _load_briefing(self):
+        kind = self.kind
+        self.brief_text = None
+        self._set_day_card(loading=True)
+        self._upd_day()
+        try:
+            b = self.ctx.api.briefing(kind, now_in(self.ctx).date().isoformat())
+            text = (b or {}).get("text")
+        except ApiError:
+            text = None
+        if kind != self.kind:  # user switched meanwhile
+            return
+        self.brief_text = text
+        self.play_btn.disabled = not (text or self.overview)
+        self._set_day_card()
+        self._upd_day()
+
+    def _upd_day(self):
+        try:
+            self.day_holder.update()
+        except Exception:
+            pass
 
     # ---- sections
-    def _header(self, hello, today, weather):
-        row = [ft.Column([ft.Text(hello, size=26, weight=ft.FontWeight.W_700, color=T.TEXT),
-                          muted(pretty_date(today), 14)], spacing=2, expand=True)]
-        col = [ft.Row(row)]
-        if weather:
-            col.append(ft.Row([chip(f"{weather.get('summary', '')}  {round(weather.get('temp_min', 0))}-{round(weather.get('temp_max', 0))}°C",
-                                    weather_icon(weather.get("summary")), bgcolor=T.LAV_SOFT),
-                               chip(self.ctx.settings.get("location_name") or "", ft.Icons.PLACE_OUTLINED)
-                               if self.ctx.settings.get("location_name") else ft.Container()], spacing=8, wrap=True))
-        return ft.Column(col, spacing=10)
+    def _header(self, hello, today):
+        return ft.Column([ft.Text(hello, size=26, weight=ft.FontWeight.W_700, color=T.TEXT),
+                          muted(pretty_date(today), 14)], spacing=2)
 
-    def _day_note(self, text):
-        return card(ft.Row([ft.Icon(ft.Icons.WB_TWILIGHT, color=T.LAV, size=22),
-                            ft.Column([muted("Your day", 11, weight=ft.FontWeight.W_600),
-                                       ft.Text(text, size=15, color=T.TEXT)], spacing=3, expand=True)], spacing=12,
-                           vertical_alignment=ft.CrossAxisAlignment.START), bgcolor=T.RAISED)
+    def _weather_card(self, w, comment):
+        chips = [chip(f"{round(w.get('temp_min', 0))}-{round(w.get('temp_max', 0))}°C", bgcolor=T.LAV_SOFT)]
+        if (w.get("uv_max") or 0) >= 3:
+            chips.append(chip(f"UV {round(w['uv_max'])}", ft.Icons.WB_SUNNY_OUTLINED, bgcolor=T.SAGE_SOFT))
+        if (w.get("precip_prob") or 0) >= 40:
+            chips.append(chip(f"rain {round(w['precip_prob'])}%", ft.Icons.WATER_DROP_OUTLINED, bgcolor=T.SAGE_SOFT))
+        loc = self.ctx.settings.get("location_name")
+        top = ft.Row([ft.Icon(weather_icon(w.get("summary")), color=T.LAV, size=26),
+                      ft.Column([ft.Text(w.get("summary", ""), size=16, weight=ft.FontWeight.W_600, color=T.TEXT),
+                                 muted(loc, 12) if loc else ft.Container()], spacing=0, expand=True)],
+                     spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        col = [top, ft.Row(chips, spacing=8, wrap=True, run_spacing=6)]
+        if comment:
+            col.append(ft.Text(comment, size=16, color=T.TEXT, style=ft.TextStyle(height=1.45)))
+        return card(ft.Column(col, spacing=12), bgcolor=T.RAISED)
 
     def _progress(self, done, total, nxt):
         ring = ft.Stack([
-            ft.ProgressRing(value=(done / total) if total else 0, width=92, height=92, stroke_width=10,
+            ft.ProgressRing(value=(done / total) if total else 0, width=64, height=64, stroke_width=7,
                             color=T.LAV, bgcolor=T.LAV_SOFT, stroke_cap=ft.StrokeCap.ROUND),
-            ft.Container(ft.Column([ft.Text(f"{done}/{total}", size=20, weight=ft.FontWeight.W_700, color=T.TEXT)],
+            ft.Container(ft.Column([ft.Text(f"{done}/{total}", size=15, weight=ft.FontWeight.W_700, color=T.TEXT)],
                                    alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                         width=92, height=92, alignment=ft.alignment.center),
-        ], width=92, height=92)
+                         width=64, height=64, alignment=ft.alignment.center),
+        ], width=64, height=64)
         if total == 0:
             nxt_col = [heading("Nothing planned", 16), muted("A blank canvas. Add something in Tasks.")]
         elif nxt is None:
@@ -137,72 +174,50 @@ class HomeView(BaseView):
         else:
             nxt_col = [muted("NEXT UP", 11), ft.Text(nxt["title"], size=17, weight=ft.FontWeight.W_600, color=T.TEXT, max_lines=2),
                        muted(nxt["time"] or T.PART_LABELS.get(nxt["part_of_day"], ""), 13)]
-        return card(ft.Row([ring, ft.Column(nxt_col, spacing=3, expand=True)], spacing=18,
-                           vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        return card(ft.Row([ring, ft.Column(nxt_col, spacing=3, expand=True)], spacing=16,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=14)
 
-    def _brief_section(self):
-        self.brief_btn = ft.FilledButton(
-            "Brief me" if self.kind == "morning" else "Wind-down",
-            icon=ft.Icons.WB_SUNNY_OUTLINED if self.kind == "morning" else ft.Icons.NIGHTLIGHT_OUTLINED,
-            on_click=self._brief, height=58, expand=True,
-            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=29), bgcolor=T.LAV, color=T.ON_ACCENT,
-                                 text_style=ft.TextStyle(size=18, weight=ft.FontWeight.W_600)))
-        self.kind_sel = ft.SegmentedButton(
-            selected={self.kind}, show_selected_icon=False, on_change=self._kind_changed,
-            segments=[ft.Segment(value="morning", label=ft.Text("Morning")), ft.Segment(value="evening", label=ft.Text("Wind-down"))])
-        self.brief_card_holder = ft.Container()
-        self._set_brief_card()
-        return ft.Column([ft.Row([self.brief_btn]), ft.Row([self.kind_sel], alignment=ft.MainAxisAlignment.CENTER),
-                          self.brief_card_holder], spacing=10)
+    def _paragraphs(self, text):
+        paras = [p.strip() for p in text.replace("\r", "").split("\n\n") if p.strip()]
+        if len(paras) <= 1 and len(text) > 500:
+            import re
+            sents = re.split(r"(?<=[.!?])\s+", text.strip())
+            n = max(3, min(5, round(len(sents) / 4)))
+            size = -(-len(sents) // n)
+            paras = [" ".join(sents[i:i + size]) for i in range(0, len(sents), size)]
+        return paras
 
-    def _set_brief_card(self):
-        if not self.brief_text:
-            self.brief_card_holder.content = None
+    def _set_day_card(self, loading=False):
+        if loading:
+            self.day_holder.content = card(self._loading_row(), bgcolor=T.RAISED)
             return
-        title = "Your morning briefing" if self.brief_kind == "morning" else "Your wind-down"
-        self.brief_card_holder.content = card(ft.Column([
-            ft.Row([ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, color=T.LAV, size=18), heading(f"{title} from {self.ctx.name}", 15)], spacing=8),
-            ft.Text(self.brief_text, size=15, color=T.TEXT, selectable=True),
-            self.player], spacing=10), bgcolor=T.CARD)
+        text = self.brief_text or self.overview
+        title = "Your day" if self.kind == "morning" else "Your wind-down"
+        if not text:
+            text = "I couldn't put your day into words just now. Check the Tasks tab for what's on."
+        col = [ft.Row([ft.Icon(ft.Icons.WB_TWILIGHT if self.kind == "morning" else ft.Icons.NIGHTLIGHT_OUTLINED, color=T.LAV, size=20),
+                       muted(f"{title.upper()} WITH {self.ctx.name.upper()}", 11, weight=ft.FontWeight.W_600)], spacing=8)]
+        col += [ft.Text(p, size=16, color=T.TEXT, style=ft.TextStyle(height=1.5), selectable=True) for p in self._paragraphs(text)]
+        col += [ft.Row([self.play_btn]), self.player]
+        self.day_holder.content = card(ft.Column(col, spacing=14), bgcolor=T.RAISED)
 
     def _kind_changed(self, e):
         self.kind = next(iter(e.control.selected))
-        self.brief_btn.text = "Brief me" if self.kind == "morning" else "Wind-down"
-        self.brief_btn.icon = ft.Icons.WB_SUNNY_OUTLINED if self.kind == "morning" else ft.Icons.NIGHTLIGHT_OUTLINED
-        self.brief_btn.update()
+        self.player.visible = False
+        self._load_briefing()
 
-    def _brief(self, e):
-        if self.busy:
+    def _play(self, e):
+        text = self.brief_text or self.overview
+        if self.busy or not text:
             return
         self.busy = True
-        self.brief_btn.disabled = True
-        self.brief_btn.text = "Thinking..."
-        self.brief_btn.update()
+        self.play_btn.disabled = True
+        self.play_btn.text = "Getting ready..."
+        self.play_btn.update()
         try:
-            try:
-                b = self.ctx.api.briefing(self.kind, date.today().isoformat())
-            except ApiError as err:
-                self.ctx.snack(err.message)
-                return
-            self.brief_text, self.brief_kind = b["text"], self.kind
-            self.player.visible = False
-            self._set_brief_card()
-            self.brief_card_holder.update()
-            self.player.speak(b["text"], self.ctx.settings.get("voice") or "en-US-JennyNeural")
+            self.player.speak(text, self.ctx.settings.get("voice") or "en-US-JennyNeural")
         finally:
             self.busy = False
-            self.brief_btn.disabled = False
-            self.brief_btn.text = "Brief me" if self.kind == "morning" else "Wind-down"
-            self.brief_btn.update()
-
-    def _list(self, items):
-        out = [heading("Today")]
-        if not items:
-            out.append(muted("No tasks today."))
-        for label, group in group_items(items):
-            inner = []
-            if label:
-                inner.append(muted(label.upper(), 11, weight=ft.FontWeight.W_600))
-            inner += [OccurrenceTile(self.ctx, o, lambda: self.refresh(soft=True)) for o in group]
-            out.append(card(ft.Column(inner, spacing=4), padding=12))
-        return ft.Column(out, spacing=8)
+            self.play_btn.disabled = False
+            self.play_btn.text = "Read it to me"
+            self.play_btn.update()

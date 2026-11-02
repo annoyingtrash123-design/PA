@@ -8,6 +8,26 @@ pub struct Weather {
     pub summary: String,
     pub temp_max: i64,
     pub temp_min: i64,
+    /// Max precipitation probability for the day, percent (None if the provider gave none).
+    pub precip_prob: Option<i64>,
+    /// Max UV index for the day, one decimal.
+    pub uv_max: Option<f64>,
+}
+
+/// `PA_FAKE_WEATHER="summary,max,min,precip,uv"` overrides the lookup (testing).
+fn fake() -> Option<Weather> {
+    let raw = std::env::var("PA_FAKE_WEATHER").ok()?;
+    let f: Vec<&str> = raw.split(',').map(str::trim).collect();
+    if f.len() < 3 || f[0].is_empty() {
+        return None;
+    }
+    Some(Weather {
+        summary: f[0].to_string(),
+        temp_max: f[1].parse::<f64>().ok()?.round() as i64,
+        temp_min: f[2].parse::<f64>().ok()?.round() as i64,
+        precip_prob: f.get(3).and_then(|x| x.parse::<f64>().ok()).map(|x| x.round() as i64),
+        uv_max: f.get(4).and_then(|x| x.parse::<f64>().ok()),
+    })
 }
 
 pub fn wmo_summary(code: i64) -> &'static str {
@@ -41,7 +61,7 @@ pub fn wmo_summary(code: i64) -> &'static str {
 
 async fn fetch(st: &AppState, lat: f64, lon: f64, date: &str) -> Option<Weather> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&start_date={date}&end_date={date}"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max&timezone=auto&start_date={date}&end_date={date}"
     );
     let resp = st.http.get(url).timeout(Duration::from_secs(8)).send().await.ok()?;
     if !resp.status().is_success() {
@@ -52,11 +72,16 @@ async fn fetch(st: &AppState, lat: f64, lon: f64, date: &str) -> Option<Weather>
     let code = daily.get("weather_code")?.get(0)?.as_i64()?;
     let max = daily.get("temperature_2m_max")?.get(0)?.as_f64()?;
     let min = daily.get("temperature_2m_min")?.get(0)?.as_f64()?;
-    Some(Weather { summary: wmo_summary(code).to_string(), temp_max: max.round() as i64, temp_min: min.round() as i64 })
+    let precip_prob = daily.get("precipitation_probability_max").and_then(|x| x.get(0)).and_then(Value::as_f64).map(|x| x.round() as i64);
+    let uv_max = daily.get("uv_index_max").and_then(|x| x.get(0)).and_then(Value::as_f64).map(|x| (x * 10.0).round() / 10.0);
+    Some(Weather { summary: wmo_summary(code).to_string(), temp_max: max.round() as i64, temp_min: min.round() as i64, precip_prob, uv_max })
 }
 
 /// Weather for a date; `None` on any failure. Successful lookups are cached per date and location.
 pub async fn for_date(st: &AppState, lat: f64, lon: f64, date: &str) -> Option<Weather> {
+    if let Some(w) = fake() {
+        return Some(w);
+    }
     let key = format!("{date}|{lat:.2}|{lon:.2}");
     if let Some(w) = st.weather_cache.lock().unwrap().get(&key) {
         return Some(w.clone());

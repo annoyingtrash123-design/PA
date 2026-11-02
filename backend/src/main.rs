@@ -1,9 +1,12 @@
 mod briefing;
 mod daynote;
 mod db;
+mod digest;
 mod error;
 mod goals;
 mod gym;
+mod holidays;
+mod memory;
 mod seed;
 mod settings;
 mod tasks;
@@ -68,6 +71,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/goals", get(goals::list).post(goals::create))
         .route("/api/goals/{id}", put(goals::update).delete(goals::delete))
         .route("/api/briefing", get(briefing::briefing))
+        .route("/api/memory", get(memory::get))
+        .route("/api/memory/weather", put(memory::put_weather))
+        .route("/api/memory/notes", post(memory::add_note))
+        .route("/api/memory/notes/{id}", put(memory::update_note).delete(memory::delete_note))
+        .route("/api/memory/work", put(memory::put_work))
+        .route("/api/memory/rhythm", put(memory::put_rhythm))
+        .route("/api/days-off", get(memory::days_off_get).post(memory::days_off_add))
+        .route("/api/days-off/{date}", axum::routing::delete(memory::days_off_delete))
+        .route("/api/digest", get(digest::digest))
         .route("/api/day-note", get(daynote::day_note))
         .route("/api/tts", post(tts::speak))
         .route("/health", get(|| async { "ok" }))
@@ -82,6 +94,9 @@ async fn main() {
     tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
     let path = std::env::var("DB_PATH").unwrap_or_else(|_| "./pa.db".into());
     let conn = db::open(&path).unwrap_or_else(|e| panic!("cannot open database {path}: {e}"));
+    if let Ok(Some(tz)) = db::get_setting(&conn, "timezone") {
+        db::set_timezone(&tz);
+    }
     seed::seed_if_empty(&conn).expect("seeding failed");
     let state = AppState { db: Arc::new(Mutex::new(conn)), http: http_client(), weather_cache: Arc::default() };
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);

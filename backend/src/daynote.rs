@@ -49,10 +49,10 @@ fn cache_put(conn: &Connection, date: &str, hash: &str, text: &str) {
 
 // ---------------------------------------------------------------- template
 
-const PARTS: [&str; 3] = ["morning", "afternoon", "evening"];
+pub const PARTS: [&str; 3] = ["morning", "afternoon", "evening"];
 
 /// Which part of the day an item sits in: by clock time if timed, else its part_of_day.
-fn part_idx(o: &Occurrence) -> Option<usize> {
+pub fn part_idx(o: &Occurrence) -> Option<usize> {
     if let Some(t) = &o.time {
         let h: u32 = t.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(12);
         return Some(if h < 12 { 0 } else if h < 17 { 1 } else { 2 });
@@ -72,7 +72,7 @@ fn qty(n: usize) -> &'static str {
     }
 }
 
-fn cap(s: &str) -> String {
+pub fn cap(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
@@ -119,7 +119,7 @@ fn second_task<'a>(items: &'a [Occurrence], key: &Occurrence) -> Option<&'a Occu
     })
 }
 
-fn idx(d: NaiveDate, salt: u64, len: usize) -> usize {
+pub fn idx(d: NaiveDate, salt: u64, len: usize) -> usize {
     let h = (d.num_days_from_ce() as u64).wrapping_add(salt.wrapping_mul(7919)).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
     ((h >> 33) as usize) % len
 }
@@ -245,8 +245,10 @@ If one of the goals given plausibly relates to a task today, you may tie them to
 Never use clichés or generic affirmations like 'you've got this', 'believe in yourself', 'one step at a time' or 'you are enough'. \
 Do not mention the gym or workouts. Do not invent tasks, times or numbers. Output only the note.";
 
-fn gemini_context(items: &[Occurrence], d: NaiveDate, goals: &[Goal]) -> String {
-    let mut s = format!("Date: {}, {}\nItems in order:\n", tasks::weekday_name(d), d.format("%B %-d"));
+fn gemini_context(items: &[Occurrence], d: NaiveDate, goals: &[Goal], mem: &crate::memory::Memory, info: &tasks::DayInfo) -> String {
+    let mut s = format!("Date: {}, {}\n", tasks::weekday_name(d), d.format("%B %-d"));
+    s.push_str(&crate::digest::context_line(info, "Today's"));
+    s.push_str("Items in order:\n");
     let mut parts = [0usize; 3];
     for o in items {
         let when = match &o.time {
@@ -266,8 +268,19 @@ fn gemini_context(items: &[Occurrence], d: NaiveDate, goals: &[Goal]) -> String 
     if let Some(k) = key_task(items) {
         s.push_str(&format!("Suggested key task to name: {}\n", phrase(k)));
     }
+    s.push_str(&crate::memory::context_block(mem));
     s.push_str(&goals::context_block(goals, &[], d));
     s
+}
+
+/// On holidays and days off, open with a warm line about it.
+fn with_frame(t: String, info: &tasks::DayInfo) -> String {
+    if info.holiday.is_some() || info.day_off {
+        if let Some(f) = crate::digest::frame_sentence(info) {
+            return format!("{f} {t}");
+        }
+    }
+    t
 }
 
 fn acceptable(t: &str) -> bool {
@@ -280,16 +293,19 @@ fn acceptable(t: &str) -> bool {
 /// The day note for `date`. `use_ai=false` never calls Gemini (a cached Gemini note is still used).
 pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(String, &'static str)> {
     let ds = fmt_date(date);
-    let (items, key, goals) = {
+    crate::holidays::ensure(st, &tasks::years_between(date, date)).await;
+    let (items, key, goals, mem, info) = {
         let conn = st.db.lock().unwrap();
         let mut days = tasks::build_days(&conn, date, 1)?;
-        (days.remove(0).items, settings::gemini_key(&conn), goals::list_active(&conn)?)
+        let day = days.remove(0);
+        let info = day.info();
+        (day.items, settings::gemini_key(&conn), goals::list_active(&conn)?, crate::memory::load(&conn)?, info)
     };
     let all_done = !items.is_empty() && items.iter().all(|o| o.done);
     if items.is_empty() || all_done {
-        return Ok((template_note(&items, date, &goals), "template"));
+        return Ok((with_frame(template_note(&items, date, &goals), &info), "template"));
     }
-    let hash = format!("{}{:08x}", plan_hash(&items), goals::fingerprint(&goals, date).bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)));
+    let hash = format!("{}{:08x}", plan_hash(&items), format!("{}#{}", goals::fingerprint(&goals, date), crate::memory::fingerprint(&mem) + &format!("{:?}", info)).bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)));
     {
         let conn = st.db.lock().unwrap();
         if let Some(t) = cache_get(&conn, &ds, &hash) {
@@ -297,7 +313,7 @@ pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(Stri
         }
     }
     if let (true, Some(key)) = (use_ai, key) {
-        match briefing::gemini_guarded(st, &key, SYSTEM, &gemini_context(&items, date, &goals), 0.9, 60).await {
+        match briefing::gemini_guarded(st, &key, SYSTEM, &gemini_context(&items, date, &goals, &mem, &info), 0.9, 60).await {
             Ok(t) if acceptable(&t) => {
                 let conn = st.db.lock().unwrap();
                 cache_put(&conn, &ds, &hash, &t);
@@ -307,7 +323,7 @@ pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(Stri
             Err(e) => tracing::warn!("gemini day note failed, using template: {e}"),
         }
     }
-    Ok((template_note(&items, date, &goals), "template"))
+    Ok((with_frame(template_note(&items, date, &goals), &info), "template"))
 }
 
 #[derive(Serialize)]

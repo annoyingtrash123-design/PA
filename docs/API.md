@@ -11,8 +11,9 @@ Settings = {
   "assistant_name": "Sunny",
   "user_name": "",                // what the assistant calls you
   "voice": "en-US-JennyNeural",   // or "en-US-AriaNeural"
-  "location_name": "London",
-  "latitude": 51.5072, "longitude": -0.1276,
+  "location_name": "Sydney",
+  "latitude": -33.8688, "longitude": 151.2093,
+  "timezone": "Australia/Sydney", // IANA name; defines "today"/"now" on the (UTC) server; PUT validates it
   "gemini_api_key_set": false     // read-only; key is written via "gemini_api_key" in PUT body, never returned
 }
 ```
@@ -51,7 +52,10 @@ Day = {
   "date": "2026-11-02",
   "weekday": "Monday",
   "items": [Occurrence],          // sorted: timed by time, then untimed by part_of_day order morning, afternoon, evening, anytime
-  "workout": WorkoutPlan | null   // only for today and future days, from the gym rotation projection
+  "workout": WorkoutPlan | null,  // only for today and future days, from the gym rotation projection
+  "work": {"start":"10:00","end":"17:00"} | null,  // work hours (memory.work); null on non-work days, days off and public holidays. NOT a task: not tickable, not counted in progress
+  "holiday": "Christmas Day" | null,               // public holiday for memory.work.holiday_region (Nager.Date; null if lookup fails)
+  "day_off": false                                 // true when the date is in /api/days-off
 }
 Occurrence = {
   "task_id": 1, "date": "2026-11-02",
@@ -106,11 +110,19 @@ Goals are context for the AI only; tasks are not linked manually. Active goals (
 ```json
 Memory = {
   "weather": {"comfortable_max": 18, "hot_above": 22, "too_hot_above": 25, "likes_rain": true, "avoid_sunburn": true},
+  "work": {"enabled": true, "days": [0,1,2,3,4], "start": "10:00", "end": "17:00", "holiday_region": "AU-NSW", "lunch_minutes": 60},
+  "rhythm": {"wake_from": "06:00", "wake_to": "07:00", "sleep_from": "23:00", "sleep_to": "00:00"},
   "notes": [{"id": 1, "text": "I work from an office most weekdays"}]
 }
 ```
-`GET /api/memory` -> Memory; `PUT /api/memory/weather` body weather object -> Memory; `POST /api/memory/notes` `{"text"}` -> Memory; `PUT /api/memory/notes/{id}` `{"text"}` -> Memory; `DELETE /api/memory/notes/{id}` -> Memory.
-Seed defaults are the values above with one example note. Memory (weather prefs + notes) is included in all Gemini context (digest, day note, briefings).
+`GET /api/memory` -> Memory; `PUT /api/memory/weather` body weather object (partial allowed; thresholds must satisfy comfortable_max <= hot_above <= too_hot_above, each -30..60) -> Memory; `PUT /api/memory/work` body partial work object (`days` are 0=Monday..6=Sunday; `start` < `end`, HH:MM; `lunch_minutes` 0..240; empty `holiday_region` = no holidays) -> Memory; `PUT /api/memory/rhythm` body partial rhythm object (HH:MM) -> Memory; `POST /api/memory/notes` `{"text"}` -> Memory; `PUT /api/memory/notes/{id}` `{"text"}` -> Memory; `DELETE /api/memory/notes/{id}` -> Memory (404 for unknown id; note text 1..500 chars).
+Seed defaults are the values above with one example note (also returned for existing databases that have no stored memory). Memory is included in all Gemini context (digest, day note, briefings).
+
+Work is a time block, not a task. Lunch is a flexible-time break of `lunch_minutes` (good for a quick call, bill, booking or shop). "Before work" means the window between waking and `work.start`; evening suggestions finish comfortably before `rhythm.sleep_from`.
+
+Days off: `GET /api/days-off` -> `["2026-12-24", ...]`; `POST /api/days-off` `{"date"}` -> list; `DELETE /api/days-off/{date}` -> list.
+Public holidays: fetched from Nager.Date (`https://date.nager.at/api/v3/PublicHolidays/{year}/AU`, no key), keeping entries where `global` is true or `counties` contains `holiday_region`; cached per (year, region) in the DB; any failure means no holidays (requests never fail). Env `PA_FAKE_HOLIDAYS="2026-12-25:Christmas Day,2026-12-28:Boxing Day (observed)"` overrides for testing.
+All text (briefings, digest, day note) knows the work hours: on work days the day is framed as before work / during work / after work; holidays and days off are mentioned warmly ("no work today").
 
 ## Digest (home screen)
 `GET /api/digest?date=2026-11-02` ->
@@ -124,6 +136,7 @@ Seed defaults are the values above with one example note. Memory (weather prefs 
 - `weather_comment`: 1-2 sentences, interprets the forecast against the memory weather prefs (cool is comfortable, warn kindly when hot/too hot, suggest sun cream / shade when UV >= 3 and avoid_sunburn, enjoy rain if likes_rain), and relates it to the day's plans where natural (e.g. office day vs home day, outdoor tasks, gym). Null if no weather.
 - `overview`: the assistant's digest and organisation of the day in prose, 2-4 short sentences, chatty and natural; groups the day into its shape (e.g. what the morning is about, the afternoon, the evening), names the key things, points out a breather, ties to goals where plausible. No raw counts/percentages. Never a bare list of every task. May mention the workout briefly.
 - Gemini when a key is set, cached by (date, hash of items + goals + memory + weather); template fallback otherwise. The day-note endpoint remains for the briefing's `affirmation` field.
+- Digest cache key also includes work/holiday/day-off info and the workout name.
 - Weather now also fetched with `precipitation_probability_max` and `uv_index_max` from Open-Meteo. Env `PA_FAKE_WEATHER` (e.g. `Light rain,14,8,80,1.5`) overrides the lookup for testing.
  (home screen "affirmation")
 `GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","text":"...","source":"gemini"|"template"}`
@@ -135,10 +148,13 @@ The briefing's `affirmation` field returns the same day note text.
 `GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02[&ai=false]` → (`ai=false` skips Gemini; template text only)
 ```json
 {"kind":"morning","date":"2026-11-02","text":"Good morning! ...","source":"gemini"|"template",
- "weather":{"summary":"Light rain","temp_max":14,"temp_min":8} | null,
+ "weather":{"summary":"Light rain","temp_max":14,"temp_min":8,"precip_prob":80,"uv_max":1.5} | null,
  "affirmation":"You don't have to do it all today, just the next thing.",
  "stats":{"total":6,"done":2,"next_up":Occurrence|null}}
 ```
+Morning is the main daily summary (shown as text on Home and read aloud): about 2-3 minutes spoken, roughly 320-450 words, flowing spoken prose (no markdown or lists): (1) warm hello + the weather interpreted through the memory preferences (and a holiday/day-off/work-hours note); (2) a kind look back at yesterday (what got done by name, what rolled over); (3) today broken down by task category/theme (life admin, work, chores, errands, study, exercise/gym with goal tie-ins, social, appointments with times); (4) a suggested order (quick small tasks first for momentum, or the big one first while fresh, with why; size is inferred from title/notes/checklist; respects fixed-time items and the work block, uses the window between waking and work start, puts a short errand in the flexible lunch hour, keeps the evening ending before bedtime); (5) a peek at tomorrow's notable things; (6) a grounded close. Evening stays about 150-250 words and nudges toward winding down for sleep. Weekly is unchanged.
+Briefing text from Gemini is cached in the DB by (kind, date, hash of the full prompt context incl. done states, goals, memory, work info and weather), so reloading Home does not call Gemini again; changing done states may regenerate.
+
 Tone: warm best friend: chatty, natural and human, like a real personal assistant who knows you. Never read out raw counts, fractions or percentages ("0 of 24 tasks", "50 percent"); talk about specific things done or coming up instead, and tie them to goals where they genuinely relate. Kind and low-key about quiet days/weeks (no guilt, no stats). Morning: weather, the day in order, workout, an affirmation. Evening: what got done (kindly), what's left, a gentle look at tomorrow. Weekly: tasks done over the Mon–Sun week of `date`, gym sessions, progress highlights, a look at next week.
 Gemini model via env `GEMINI_MODEL` (default `gemini-2.5-flash`); on any failure or no key, fall back to template text.
 

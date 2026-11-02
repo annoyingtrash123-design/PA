@@ -95,6 +95,21 @@ class Api:
     def day_note(self, date):
         return self._json("GET", "/api/day-note", params={"date": date})
 
+    def digest(self, date):
+        return self._json("GET", "/api/digest", params={"date": date})
+
+    # assistant memory
+    def memory(self): return self._json("GET", "/api/memory")
+    def save_memory_weather(self, w): return self._json("PUT", "/api/memory/weather", json=w)
+    def save_memory_work(self, w): return self._json("PUT", "/api/memory/work", json=w)
+    def save_memory_rhythm(self, r): return self._json("PUT", "/api/memory/rhythm", json=r)
+    def days_off(self): return self._json("GET", "/api/days-off")
+    def add_day_off(self, d): return self._json("POST", "/api/days-off", json={"date": d})
+    def remove_day_off(self, d): return self._json("DELETE", f"/api/days-off/{d}")
+    def add_note(self, text): return self._json("POST", "/api/memory/notes", json={"text": text})
+    def update_note(self, nid, text): return self._json("PUT", f"/api/memory/notes/{nid}", json={"text": text})
+    def delete_note(self, nid): return self._json("DELETE", f"/api/memory/notes/{nid}")
+
     def tts(self, text, voice):
         """Returns mp3 bytes. Raises ApiError (status 503 when voice is unavailable)."""
         return self._req("POST", "/api/tts", json={"text": text, "voice": voice}).content

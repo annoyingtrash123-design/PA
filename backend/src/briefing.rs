@@ -1,14 +1,16 @@
 use crate::daynote;
+use crate::digest;
 use crate::db::{fmt_date, parse_date, today};
 use crate::error::{AppError, Res};
 use crate::goals::{self, Goal};
 use crate::gym::{self, WorkoutPlan};
-use crate::tasks::{self, Occurrence};
+use crate::memory::{self, Memory};
+use crate::tasks::{self, DayInfo, Occurrence};
 use crate::weather::{self, Weather};
 use crate::{settings, AppState};
 use axum::extract::{Query, State};
 use axum::Json;
-use chrono::{Datelike, Duration, Local, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -62,6 +64,10 @@ struct Ctx {
     week: Option<Week>,
     goals: Vec<Goal>,
     goals_achieved: Vec<Goal>,
+    memory: Memory,
+    yesterday: Vec<Occurrence>,
+    info: DayInfo,
+    tomorrow_info: DayInfo,
 }
 
 fn count_done(items: &[Occurrence]) -> usize {
@@ -85,20 +91,31 @@ fn build_ctx(conn: &rusqlite::Connection, kind: Kind, date: NaiveDate) -> Res<Ct
         week: None,
         goals: goals::list_active(conn)?,
         goals_achieved: vec![],
+        memory: memory::load(conn)?,
+        yesterday: vec![],
+        info: DayInfo::default(),
+        tomorrow_info: DayInfo::default(),
     };
     match kind {
         Kind::Morning | Kind::Evening => {
-            let n = if kind == Kind::Evening { 2 } else { 1 };
-            let mut days = tasks::build_days(conn, date, n)?;
+            let morning = kind == Kind::Morning;
+            let start = if morning { date - Duration::days(1) } else { date };
+            let mut days = tasks::build_days(conn, start, if morning { 3 } else { 2 })?;
+            if morning {
+                let y = days.remove(0);
+                ctx.yesterday = y.items;
+            }
             let first = days.remove(0);
+            ctx.info = first.info();
             ctx.items = first.items;
             ctx.workout = first.workout;
             if kind == Kind::Evening {
                 ctx.gym_done = gym::completed_session_on(conn, date)?.map(|(_, _, name)| name);
-                if let Some(t) = days.pop() {
-                    let d = parse_date(&t.date).unwrap_or(date + Duration::days(1));
-                    ctx.tomorrow = Some((tasks::weekday_name(d), t.items, t.workout));
-                }
+            }
+            if let Some(t) = days.pop() {
+                let d = parse_date(&t.date).unwrap_or(date + Duration::days(1));
+                ctx.tomorrow_info = t.info();
+                ctx.tomorrow = Some((tasks::weekday_name(d), t.items, t.workout));
             }
         }
         Kind::Weekly => {
@@ -148,9 +165,12 @@ fn build_ctx(conn: &rusqlite::Connection, kind: Kind, date: NaiveDate) -> Res<Ct
     Ok(ctx)
 }
 
+pub const CREATE_TABLE: &str =
+    "CREATE TABLE IF NOT EXISTS briefing_cache (kind TEXT NOT NULL, date TEXT NOT NULL, hash TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY (kind, date, hash));";
+
 // ----------------------------------------------------------------- helpers
 
-fn say_time(t: &str) -> String {
+pub fn say_time(t: &str) -> String {
     let h: u32 = t.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(0);
     let m: u32 = t.get(3..5).and_then(|x| x.parse().ok()).unwrap_or(0);
     let (h12, ap) = match h {
@@ -162,7 +182,7 @@ fn say_time(t: &str) -> String {
     if m == 0 { format!("{h12} {ap}") } else { format!("{h12}:{m:02} {ap}") }
 }
 
-fn join(v: &[String]) -> String {
+pub fn join(v: &[String]) -> String {
     match v.len() {
         0 => String::new(),
         1 => v[0].clone(),
@@ -171,7 +191,7 @@ fn join(v: &[String]) -> String {
     }
 }
 
-fn limited(v: Vec<String>, max: usize) -> String {
+pub fn limited(v: Vec<String>, max: usize) -> String {
     if v.len() <= max {
         join(&v)
     } else {
@@ -195,7 +215,7 @@ fn ordinal(n: u32) -> String {
     format!("{n}{suf}")
 }
 
-fn pick<'a>(opts: &[&'a str], d: NaiveDate, salt: u64) -> &'a str {
+pub fn pick<'a>(opts: &[&'a str], d: NaiveDate, salt: u64) -> &'a str {
     let h = (d.num_days_from_ce() as u64)
         .wrapping_add(salt.wrapping_mul(7919))
         .wrapping_mul(6364136223846793005)
@@ -207,54 +227,14 @@ fn name_suffix(user: &str) -> String {
     if user.is_empty() { String::new() } else { format!(", {user}") }
 }
 
-fn item_phrase(o: &Occurrence) -> String {
+pub fn item_phrase(o: &Occurrence) -> String {
     match &o.time {
         Some(t) => format!("{} at {}", o.title, say_time(t)),
         None => o.title.clone(),
     }
 }
 
-/// Timed items first as "X at 7:30 AM", then untimed grouped by part of day.
-fn rundown(items: &[&Occurrence], d: NaiveDate) -> String {
-    let timed: Vec<String> = items.iter().filter(|o| o.time.is_some()).map(|o| item_phrase(o)).collect();
-    let mut out = vec![];
-    if !timed.is_empty() {
-        let lead = pick(&["On the schedule, you've got", "Timewise, you've got", "Your day has a few anchors:"], d, 11);
-        out.push(format!("{lead} {}.", join(&timed)));
-    }
-    for (part, lead) in [
-        ("morning", "For the morning, there's"),
-        ("afternoon", "For the afternoon, there's"),
-        ("evening", "And in the evening, there's"),
-        ("anytime", "And whenever you find a gap, there's"),
-    ] {
-        let v: Vec<String> = items.iter().filter(|o| o.time.is_none() && o.part_of_day == part).map(|o| o.title.clone()).collect();
-        if !v.is_empty() {
-            out.push(format!("{lead} {}.", join(&v)));
-        }
-    }
-    out.join(" ")
-}
 
-fn weather_line(w: &Weather, d: NaiveDate) -> String {
-    let s = w.summary.to_lowercase();
-    let base = match d.num_days_from_ce() % 2 {
-        0 => format!("Looking outside, it's {s} today, with a high of {} degrees and a low of {}.", w.temp_max, w.temp_min),
-        _ => format!("Weather-wise, expect {s}, topping out around {} degrees and dipping to {}.", w.temp_max, w.temp_min),
-    };
-    let tip = if s.contains("rain") || s.contains("drizzle") || s.contains("shower") || s.contains("thunder") {
-        " Maybe keep an umbrella close."
-    } else if s.contains("snow") {
-        " Wrap up warm out there."
-    } else if w.temp_max >= 26 {
-        " Stay hydrated today."
-    } else if w.temp_min <= 3 {
-        " It's a chilly one, so bundle up."
-    } else {
-        ""
-    };
-    format!("{base}{tip}")
-}
 
 fn hint_sentence(p: &WorkoutPlan) -> Option<String> {
     let mut fallback = None;
@@ -297,7 +277,7 @@ fn workout_sentence(p: &WorkoutPlan, d: NaiveDate) -> String {
 fn next_up(items: &[Occurrence], date: NaiveDate) -> Option<Occurrence> {
     let undone: Vec<&Occurrence> = items.iter().filter(|o| !o.done).collect();
     if date == today() {
-        let now = Local::now().format("%H:%M").to_string();
+        let now = crate::db::now_hm();
         if let Some(o) = undone.iter().find(|o| o.time.as_deref().is_some_and(|t| t >= now.as_str())) {
             return Some((*o).clone());
         }
@@ -331,75 +311,278 @@ fn near_deadline(goals: &[Goal], date: NaiveDate, days: i64) -> Option<String> {
 
 // ---------------------------------------------------------------- template
 
+// ------------------------------------------------------------ morning summary
+
+const BIG_WORDS: [&str; 11] = ["report", "essay", "clean", "revise", "revision", "project", "study", "tidy", "write", "organise", "organize"];
+const QUICK_WORDS: [&str; 10] = ["call", "pay", "reply", "book", "email", "text", "order", "send", "check", "buy"];
+
+/// Rough size guess from title, notes and checklist (there is no size field).
+pub fn is_big(o: &Occurrence) -> bool {
+    let words: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
+    let hit = |list: &[&str]| words.iter().any(|w| list.iter().any(|k| w == k || (k.len() >= 5 && w.starts_with(k))));
+    if hit(&BIG_WORDS) || o.checklist.len() >= 6 || o.notes.len() > 160 {
+        return true;
+    }
+    if hit(&QUICK_WORDS) || !o.checklist.is_empty() {
+        return false;
+    }
+    o.title.split_whitespace().count() >= 5
+}
+
+/// Quick, errand-like things that plausibly fit a lunch break.
+fn lunchable(o: &Occurrence) -> bool {
+    let w: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
+    o.time.is_none() && !is_big(o) && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
+}
+
+fn cat_name(o: &Occurrence) -> String {
+    o.category.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| "Other".into())
+}
+
+fn cat_lead(cat: &str, list: &str, d: NaiveDate, salt: u64) -> String {
+    let v = |a: String, b: String| if (d.num_days_from_ce() as u64 + salt) % 2 == 0 { a } else { b };
+    match cat {
+        "Appointments" => v(format!("Appointment-wise, you've got {list}."), format!("In the appointments column there's {list}.")),
+        "Work" => v(format!("On the work front you've got {list}."), format!("For work, there's {list}.")),
+        "Admin & Money" => v(format!("On the life admin front you've got {list}."), format!("Admin and money-wise, there's {list}.")),
+        "Chores" => v(format!("Around the house, there's {list}."), format!("On the chores front you've got {list}.")),
+        "Errands" => v(format!("Out and about, you've got {list}."), format!("Errand-wise, there's {list}.")),
+        "Study" => v(format!("On the study side there's {list}."), format!("For learning, you've got {list}.")),
+        "Exercise" => v(format!("For movement, there's {list}."), format!("On the exercise side you've got {list}.")),
+        "Social" => v(format!("Socially, there's {list}."), format!("For people time, you've got {list}.")),
+        "Self-care" => v(format!("For looking after yourself, there's {list}."), format!("On the self-care side you've got {list}.")),
+        _ => v(format!("And a few other bits: {list}."), format!("Then there's {list} on the side.")),
+    }
+}
+
+const CAT_ORDER: [&str; 9] = ["Appointments", "Work", "Admin & Money", "Chores", "Errands", "Study", "Exercise", "Social", "Self-care"];
+
+fn words_in(s: &str) -> usize {
+    s.split_whitespace().count()
+}
+
+fn morning_template(c: &Ctx, weather: &Option<Weather>) -> String {
+    let d = c.date;
+    let n = name_suffix(&c.user);
+    let a = &c.assistant;
+    let mut parts: Vec<String> = vec![];
+    // 1. hello, date, work frame, weather through the memory prefs
+    parts.push(match d.num_days_from_ce() as usize % 4 {
+        0 => format!("Good morning{n}! It's {a} here, and I'm so glad you're up."),
+        1 => format!("Hey{n}, good morning! {a} here, ready to walk through your day with you."),
+        2 => format!("Morning{n}! It's {a}. Grab something warm to drink and let's look at today together."),
+        _ => format!("Rise and shine{n}! {a} here with your morning rundown."),
+    });
+    let wd = tasks::weekday_name(d);
+    let mo = d.format("%B").to_string();
+    parts.push(match d.num_days_from_ce() as usize % 3 {
+        0 => format!("Today is {wd}, {mo} {}.", ordinal(d.day())),
+        1 => format!("It's {wd}, the {} of {mo}.", ordinal(d.day())),
+        _ => format!("Happy {wd}! It's {mo} {} today.", ordinal(d.day())),
+    });
+    if let Some(f) = digest::frame_sentence(&c.info) {
+        parts.push(f);
+    }
+    if let Some(w) = weather {
+        parts.push(digest::weather_comment_template(w, &c.memory, &c.items, &c.workout, &c.info, d));
+    }
+    // 2. yesterday
+    let mut yd: Vec<String> = vec![];
+    for o in c.yesterday.iter().filter(|o| o.done && !o.recurring) {
+        if !yd.contains(&o.title) {
+            yd.push(o.title.clone());
+        }
+    }
+    for o in c.yesterday.iter().filter(|o| o.done && o.recurring) {
+        if !yd.contains(&o.title) {
+            yd.push(o.title.clone());
+        }
+    }
+    let rolled: Vec<String> = c.items.iter().filter(|o| o.rolled_over_from.is_some() && !o.done).map(|o| o.title.clone()).collect();
+    let mut back = if yd.is_empty() {
+        pick(&["Yesterday was a quiet one on the list, and that's perfectly fine.", "Looking back, yesterday didn't leave much of a trail on the list, and there's no judgement here at all."], d, 51).to_string()
+    } else {
+        let lead = pick(&["Looking back at yesterday, you got", "Quick look back: yesterday you sorted", "Yesterday you got through"], d, 52);
+        format!("{lead} {}, which is lovely.", limited(yd.clone(), 3))
+    };
+    if !rolled.is_empty() {
+        back.push_str(&format!(" {} didn't quite happen, so it's moved across to today, with no pressure at all.", limited(rolled.clone(), 2)));
+    }
+    parts.push(back);
+    // 3. today by category
+    let todo: Vec<&Occurrence> = c.items.iter().filter(|o| !o.done).collect();
+    let already: Vec<String> = c.items.iter().filter(|o| o.done).map(|o| o.title.clone()).collect();
+    if c.items.is_empty() {
+        parts.push("Your list is wide open today, which means you get to decide what kind of day this is. Lovely.".into());
+    } else {
+        parts.push(pick(&["So, what does today hold?", "Here's how today breaks down.", "Let's go through what's on your plate."], d, 7).to_string());
+        let mut cats: Vec<String> = CAT_ORDER.iter().map(|s| s.to_string()).collect();
+        for o in &todo {
+            let cn = cat_name(o);
+            if !cats.contains(&cn) && cn != "Other" {
+                cats.push(cn);
+            }
+        }
+        cats.push("Other".into());
+        for (i, cn) in cats.iter().enumerate() {
+            let mut group: Vec<&Occurrence> = todo.iter().filter(|o| &cat_name(o) == cn).cloned().collect();
+            if group.is_empty() {
+                continue;
+            }
+            group.sort_by(|x, y| match (&x.time, &y.time) {
+                (Some(p), Some(q)) => p.cmp(q),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            });
+            let list: Vec<String> = group.iter().map(|o| item_phrase(o)).collect();
+            parts.push(cat_lead(cn, &limited(list, 3), d, i as u64));
+        }
+        if !already.is_empty() {
+            parts.push(format!("{} is already ticked off, so you've got a head start.", limited(already.clone(), 2)));
+        }
+    }
+    if let Some(p) = &c.workout {
+        let mut ws = workout_sentence(p, d);
+        if !p.rest {
+            if let Some((g, _)) = goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]) {
+                ws.push_str(&format!(" That one feeds straight into {}.", goals::goal_ref(g)));
+            }
+        }
+        parts.push(ws);
+    }
+    let workout_linked = c.workout.as_ref().is_some_and(|p| !p.rest && goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]).is_some());
+    if !workout_linked {
+        let texts: Vec<(String, String)> = todo.iter().map(|o| (o.title.clone(), o.title.clone())).collect();
+        if let Some((g, task)) = goals::find_link(&c.goals, &texts) {
+            parts.push(match d.num_days_from_ce() as usize % 2 {
+                0 => format!("And {task} is a nice little nudge toward {}.", goals::goal_ref(g)),
+                _ => format!("Worth knowing that {task} quietly helps with {}.", goals::goal_ref(g)),
+            });
+        }
+    }
+    if let Some(dl) = near_deadline(&c.goals, d, 21) {
+        parts.push(format!("Also, keep in mind that {dl}."));
+    }
+    // 4. suggested order
+    let fixed: Vec<String> = todo.iter().filter(|o| o.time.is_some()).map(|o| item_phrase(o)).collect();
+    let loose: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_none() && cat_name(o) != "Exercise").cloned().collect();
+    let big: Vec<&Occurrence> = loose.iter().filter(|o| is_big(o)).cloned().collect();
+    let quick: Vec<&Occurrence> = loose.iter().filter(|o| !is_big(o)).cloned().collect();
+    let titles = |v: &[&Occurrence], k: usize| -> Vec<String> { v.iter().take(k).map(|o| o.title.clone()).collect() };
+    let mut order: Vec<String> = vec![];
+    if !fixed.is_empty() {
+        order.push(format!("The fixed points are {}, so everything else bends around those.", limited(fixed, 3)));
+    }
+    let lunch_pick = c.info.work.as_ref().and_then(|_| quick.iter().find(|o| lunchable(o)).map(|o| o.title.clone()));
+    match (big.first(), quick.len()) {
+        (Some(b), q) if q >= 3 => order.push(format!(
+            "For the rest, I'd clear the quick ones first, {}, to build some momentum, and then give {} your proper attention while the afternoon is still on your side.",
+            limited(titles(&quick, 3), 3),
+            b.title
+        )),
+        (Some(b), _) => order.push(format!(
+            "For the rest, I'd start with {} while you're fresh, because it's the one that could drag, and let the small things{} fill the gaps afterwards.",
+            b.title,
+            if quick.is_empty() { String::new() } else { format!(", like {}", limited(titles(&quick, 2), 2)) }
+        )),
+        (None, q) if q > 0 => order.push(format!(
+            "Nothing loose is heavy, so run through {} in whatever order feels good, quickest first for an easy win.",
+            limited(titles(&quick, 3), 3)
+        )),
+        _ => {
+            if order.is_empty() {
+                order.push("There's nothing loose to put in order today, so the day can just unfold.".into());
+            }
+        }
+    }
+    if let Some(w) = &c.info.work {
+        let r = &c.memory.rhythm;
+        let mut s = format!(
+            "With work from {} to {}, the window between waking up around {} and starting is good for the first small thing",
+            say_time(&w.start),
+            say_time(&w.end),
+            say_time(&r.wake_to)
+        );
+        s.push_str(&match &lunch_pick {
+            Some(t) => format!(", and {t} would fit neatly into your lunch hour, whenever you take it."),
+            None => ", and your lunch hour, whenever you take it, is perfect for something short.".to_string(),
+        });
+        if !big.is_empty() {
+            s.push_str(" Anything heavier is best before work or once you've finished, rather than squeezed in between.");
+        }
+        order.push(s);
+        order.push(format!("Try to wrap up the evening comfortably before bedtime around {}.", say_time(&c.memory.rhythm.sleep_from)));
+    } else if c.info.holiday.is_some() || c.info.day_off {
+        order.push("With no work to fit around, take the order at your own pace and keep a long, lazy stretch free.".into());
+    } else {
+        order.push("Keep a decent break in the middle so the second half of the day doesn't feel like a slog.".into());
+    }
+    parts.extend(order);
+    // 5. tomorrow
+    if let Some((twd, titems, tw)) = &c.tomorrow {
+        let mut notable: Vec<&Occurrence> = titems.iter().filter(|o| cat_name(o) == "Appointments" || o.time.is_some()).collect();
+        if notable.is_empty() {
+            notable = titems.iter().filter(|o| !o.recurring).take(2).collect();
+        }
+        let mut s = if notable.is_empty() {
+            format!("Peeking at tomorrow, {twd}, it's looking nice and open so far.")
+        } else {
+            let ph: Vec<String> = notable.iter().map(|o| item_phrase(o)).collect();
+            format!("Peeking at tomorrow, {twd}, you've got {}.", limited(ph, 3))
+        };
+        if let Some(h) = &c.tomorrow_info.holiday {
+            s.push_str(&format!(" It's also a public holiday, {h}, so no work."));
+        } else if c.tomorrow_info.day_off {
+            s.push_str(" It's also a day off, so no work.");
+        }
+        if let Some(p) = tw.as_ref().filter(|p| !p.rest) {
+            s.push_str(&format!(" The gym has {} lined up.", p.name));
+        }
+        parts.push(s);
+    }
+    // evergreen filler keeps the spoken length in the 2-3 minute range on lighter days
+    let fillers = [
+        "Whatever happens, leave yourself a proper break in the middle of the day, even if it's just a few minutes away from every screen and a decent cup of something warm.",
+        "If the plan wobbles, that's completely okay. Move the flexible things later and keep the fixed ones where they are, and I'll happily help you re-sort whenever you open me.",
+        "Eat something proper at lunch, drink plenty of water, and don't let the small tasks turn into a way of avoiding the bigger one.",
+        "Have a rough idea of when you want to be finished tonight, so the evening stays yours rather than quietly filling up with leftovers.",
+        "Remember the list is a guide, not a contract, so be kind to yourself if the day goes a little sideways.",
+        "Take a moment now to picture how you want the day to feel when you finally put your feet up tonight, and let that steer what you say yes to.",
+    ];
+    let mut extra: Vec<&str> = vec![];
+    let mut fi = d.num_days_from_ce() as usize % fillers.len();
+    let total = |p: &Vec<String>, e: &Vec<&str>| p.iter().map(|x| words_in(x)).sum::<usize>() + e.iter().map(|x| words_in(x)).sum::<usize>() + 30;
+    while total(&parts, &extra) < 345 && extra.len() < fillers.len() {
+        extra.push(fillers[fi % fillers.len()]);
+        fi += 1;
+    }
+    parts.extend(extra.iter().map(|s| s.to_string()));
+    // 6. grounded close
+    parts.push(match daynote::key_task(&c.items) {
+        Some(k) if !k.done => {
+            let kp = item_phrase(k);
+            match d.num_days_from_ce() as usize % 3 {
+                0 => format!("If you only get one thing done today, make it {kp}."),
+                1 => format!("Start with {kp} and the rest of the day gets easier to read."),
+                _ => format!("The one to watch today is {kp}."),
+            }
+        }
+        Some(_) => "Everything on the list is already done, so the rest of the day is yours.".into(),
+        None => "Nothing is waiting on you, so the day is yours to shape.".into(),
+    });
+    parts.push(pick(&["I'll be right here if the plan changes.", "Have a good one, and shout if you need me.", "Go get started, and I'll be here when you need me."], d, 17).into());
+    parts.join(" ")
+}
+
+
 fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
     let d = c.date;
     let n = name_suffix(&c.user);
     let a = &c.assistant;
     let mut parts: Vec<String> = vec![];
     match c.kind {
-        Kind::Morning => {
-            parts.push(match d.num_days_from_ce() as usize % 4 {
-                0 => format!("Good morning{n}! It's {a} here, and I'm so glad you're up."),
-                1 => format!("Hey{n}, good morning! {a} here, ready to walk through your day with you."),
-                2 => format!("Morning{n}! It's {a}. Grab something warm to drink and let's look at today together."),
-                _ => format!("Rise and shine{n}! {a} here with your morning rundown."),
-            });
-            let wd = tasks::weekday_name(d);
-            let mo = d.format("%B").to_string();
-            parts.push(match d.num_days_from_ce() as usize % 3 {
-                0 => format!("Today is {wd}, {mo} {}.", ordinal(d.day())),
-                1 => format!("It's {wd}, the {} of {mo}.", ordinal(d.day())),
-                _ => format!("Happy {wd}! It's {mo} {} today.", ordinal(d.day())),
-            });
-            if let Some(w) = weather {
-                parts.push(weather_line(w, d));
-            }
-            let all: Vec<&Occurrence> = c.items.iter().collect();
-            if all.is_empty() {
-                parts.push("Your list is wide open today, which means you get to decide what kind of day this is. Lovely.".into());
-            } else {
-                parts.push(format!(
-                    "{} {}",
-                    pick(&["Here's how things look.", "So, what's on your plate?", "Let's run through it."], d, 7),
-                    rundown(&all, d)
-                ));
-            }
-            if let Some(p) = &c.workout {
-                let mut ws = workout_sentence(p, d);
-                if !p.rest {
-                    if let Some((g, _)) = goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]) {
-                        ws.push_str(&format!(" That one feeds straight into {}.", goals::goal_ref(g)));
-                    }
-                }
-                parts.push(ws);
-            }
-            // a goal link from today's tasks, if one is plausible (skip if the workout already made one)
-            if !c.workout.as_ref().is_some_and(|p| !p.rest && goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]).is_some()) {
-                let texts: Vec<(String, String)> = c.items.iter().filter(|o| !o.done).map(|o| (o.title.clone(), o.title.clone())).collect();
-                if let Some((g, task)) = goals::find_link(&c.goals, &texts) {
-                    parts.push(match d.num_days_from_ce() as usize % 2 {
-                        0 => format!("And {task} is a nice little nudge toward {}.", goals::goal_ref(g)),
-                        _ => format!("Worth knowing that {task} quietly helps with {}.", goals::goal_ref(g)),
-                    });
-                }
-            }
-            if let Some(dl) = near_deadline(&c.goals, d, 21) {
-                parts.push(format!("Also, keep in mind that {dl}."));
-            }
-            parts.push(match daynote::key_task(&c.items) {
-                Some(k) if !k.done => {
-                    let kp = item_phrase(k);
-                    match d.num_days_from_ce() as usize % 3 {
-                        0 => format!("If you only get one thing done today, make it {kp}."),
-                        1 => format!("Start with {kp} and the rest of the day gets easier to read."),
-                        _ => format!("The one to watch today is {kp}."),
-                    }
-                }
-                Some(_) => "Everything on the list is already done, so the rest of the day is yours.".into(),
-                None => "Nothing is waiting on you, so the day is yours to shape.".into(),
-            });
-            parts.push(pick(&["I'll be right here if the plan changes.", "Have a good one, and shout if you need me.", "Go get started, and I'll be here when you need me."], d, 17).into());
-        }
+        Kind::Morning => parts.push(morning_template(c, weather)),
         Kind::Evening => {
             parts.push(match d.num_days_from_ce() as usize % 3 {
                 0 => format!("Hey{n}, it's {a}. Let's wind the day down together."),
@@ -467,6 +650,11 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 }
                 parts.push(s);
             }
+            if let Some(h) = &c.tomorrow_info.holiday {
+                parts.push(format!("Tomorrow is a public holiday, {h}, so no work, which is something to look forward to."));
+            } else if c.tomorrow_info.day_off {
+                parts.push("Tomorrow is a day off, so no work to set an alarm for.".into());
+            }
             if let Some(dl) = near_deadline(&c.goals, d, 14) {
                 parts.push(format!("One thing on the horizon: {dl}."));
             }
@@ -480,7 +668,7 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 },
                 None => "Nothing else needs your attention tonight.".into(),
             });
-            parts.push(pick(&["Sleep well.", "Rest up, I'll see you tomorrow.", "Goodnight."], d, 23).into());
+            parts.push(format!("{} {}", pick(&["Start winding down soon so you're asleep in good time.", "Dim the lights and ease off the screens soon, so sleep comes easily.", "Maybe get ready for bed a little early, so you're properly rested."], d, 29), pick(&["Sleep well.", "Rest up, I'll see you tomorrow.", "Goodnight."], d, 23)));
         }
         Kind::Weekly => {
             let w = c.week.as_ref().unwrap();
@@ -597,11 +785,12 @@ GOALS: when active goals are given, connect specific completed or planned tasks 
 fn system_prompt(c: &Ctx) -> String {
     let words = match c.kind {
         Kind::Weekly => "between 200 and 300 words",
-        _ => "between 120 and 220 words",
+        Kind::Morning => "between 320 and 450 words (a 2 to 3 minute read-aloud; do not stop short)",
+        Kind::Evening => "between 150 and 250 words",
     };
     let focus = match c.kind {
-        Kind::Morning => "This is the MORNING briefing. Greet them, mention the weather if given, walk through the day in order (naturally mentioning times for timed tasks and the part of day for untimed ones), mention today's workout and any progression hint, tie today's tasks or workout to a relevant goal where it genuinely fits, and end with one grounded, specific closing line, such as the key task to start with. Never use generic affirmations or cliches like 'you\'ve got this'.",
-        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
+        Kind::Morning => "This is the MORNING briefing, the main daily summary, read aloud in about 2 to 3 minutes. Flow naturally through these parts, as one spoken piece with no headings: (1) a warm hello and the weather, commented on through the person's weather preferences (e.g. cool is comfortable, warn kindly when hot, sun cream when UV is high and they avoid sunburn, enjoy rain if they like it) and tied to the day's plans rather than just read out; mention a public holiday or day off warmly if it is one (no work today); (2) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (3) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; (4) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch hour only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop, and keep the evening finishing comfortably before bedtime); (5) a peek at tomorrow's notable things and appointments; (6) a grounded, specific closing line such as the key task to start with. Never use generic affirmations or cliches like 'you\'ve got this'.",
+        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, mention whether tomorrow is a work day, a public holiday or a day off, gently nudge toward winding down in time for sleep, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
         Kind::Weekly => "This is the WEEKLY overview, read on Sunday. Open warmly. Pick two or three specific highlights that were actually done (task titles, gym sessions by name, and any exercise progressions) and connect them to the goals where they plausibly relate. Gently mention anything that slid, without guilt. Look ahead to the notable things next week and to any goal deadline coming up. Close with one short grounded line. If nothing much was done, be kind and low-key, give no stats, and focus on the week ahead and the goals. Do not list every task and never quote totals. No generic affirmations or cliches.",
     };
     format!(
@@ -620,7 +809,16 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
     s.push_str(&format!("User's name: {}\n", if c.user.is_empty() { "(not set, don't use a name)" } else { &c.user }));
     s.push_str(&format!("Your name: {}\n", c.assistant));
     match weather {
-        Some(w) => s.push_str(&format!("Weather: {}, high {} C, low {} C\n", w.summary, w.temp_max, w.temp_min)),
+        Some(w) => {
+            s.push_str(&format!("Weather: {}, high {} C, low {} C", w.summary, w.temp_max, w.temp_min));
+            if let Some(p) = w.precip_prob {
+                s.push_str(&format!(", rain chance {} (never quote a percentage)", if p >= 70 { "high" } else if p >= 40 { "moderate" } else { "low" }));
+            }
+            if let Some(u) = w.uv_max {
+                s.push_str(&format!(", UV index {u}"));
+            }
+            s.push('\n');
+        }
         None => s.push_str("Weather: unavailable (do not mention it)\n"),
     }
     let list = |items: &[Occurrence]| -> String {
@@ -635,7 +833,9 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
             };
             let steps = if i.checklist.is_empty() { String::new() } else { format!("; steps: {}", i.checklist.iter().map(|x| x.text.as_str()).collect::<Vec<_>>().join(", ")) };
             let roll = if i.rolled_over_from.is_some() { "; rolled over from an earlier day" } else { "" };
-            o.push_str(&format!("  - {} ({when}; done: {}{steps}{roll})\n", i.title, if i.done { "yes" } else { "no" }));
+            let cat = i.category.as_ref().map(|c| format!("; category: {}", c.name)).unwrap_or_default();
+            let size = if is_big(i) { "; looks bigger" } else { "; looks quick" };
+            o.push_str(&format!("  - {} ({when}; done: {}{cat}{size}{steps}{roll})\n", i.title, if i.done { "yes" } else { "no" }));
         }
         o
     };
@@ -653,6 +853,14 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
             .collect();
         format!("{}: {}", p.name, ex.join("; "))
     };
+    s.push_str(&digest::context_line(&c.info, "Today's"));
+    if c.tomorrow.is_some() {
+        s.push_str(&digest::context_line(&c.tomorrow_info, "Tomorrow's"));
+    }
+    s.push_str(&memory::context_block(&c.memory));
+    if c.kind == Kind::Morning {
+        s.push_str(&format!("Yesterday's items (done flags; mention what got done by name, kindly):\n{}", list(&c.yesterday)));
+    }
     match c.kind {
         Kind::Morning | Kind::Evening => {
             s.push_str(&format!("Today's items in order (each flagged done or not; do not quote totals):\n{}", list(&c.items)));
@@ -795,6 +1003,7 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
         Some(s) => parse_date(s).ok_or_else(|| AppError::bad("date must be YYYY-MM-DD"))?,
         None => today(),
     };
+    crate::holidays::ensure(&st, &tasks::years_between(date - Duration::days(1), date + Duration::days(8))).await;
     let ctx = {
         let conn = st.db.lock().unwrap();
         build_ctx(&conn, kind, date)?
@@ -805,9 +1014,30 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
     let mut text = None;
     // `ai=false` skips Gemini (used by the home screen to fetch weather/affirmation without spending quota)
     let use_ai = q.get("ai").map(|v| v != "false" && v != "0").unwrap_or(true);
-    if let (true, Some(key)) = (use_ai, &ctx.key) {
-        match gemini_guarded(&st, key, &system_prompt(&ctx), &context_text(&ctx, &weather), 0.9, 60).await {
+    let system = system_prompt(&ctx);
+    let context = context_text(&ctx, &weather);
+    let ds = fmt_date(date);
+    let hash = digest::fnv(&format!("{system}\n{context}"));
+    let cached: Option<String> = {
+        let conn = st.db.lock().unwrap();
+        conn.query_row("SELECT text FROM briefing_cache WHERE kind=?1 AND date=?2 AND hash=?3", rusqlite::params![kind.name(), ds, hash], |r| r.get(0)).ok()
+    };
+    if let Some(t) = cached {
+        text = Some(t);
+        source = "gemini";
+    } else if let (true, Some(key)) = (use_ai, &ctx.key) {
+        let min_len = if kind == Kind::Morning { 600 } else { 60 };
+        match gemini_guarded(&st, key, &system, &context, 0.9, min_len).await {
             Ok(t) => {
+                {
+                    let conn = st.db.lock().unwrap();
+                    if let Err(e) = conn.execute(
+                        "INSERT INTO briefing_cache(kind,date,hash,text) VALUES(?1,?2,?3,?4) ON CONFLICT(kind,date,hash) DO UPDATE SET text=excluded.text",
+                        rusqlite::params![kind.name(), ds, hash, t],
+                    ) {
+                        tracing::warn!("could not cache briefing: {e}");
+                    }
+                }
                 text = Some(t);
                 source = "gemini";
             }

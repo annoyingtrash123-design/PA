@@ -13,6 +13,7 @@ pub struct Settings {
     pub location_name: String,
     pub latitude: f64,
     pub longitude: f64,
+    pub timezone: String,
     pub gemini_api_key_set: bool,
 }
 
@@ -24,6 +25,7 @@ pub struct SettingsIn {
     location_name: Option<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
+    timezone: Option<String>,
     gemini_api_key: Option<String>,
 }
 
@@ -50,9 +52,10 @@ pub fn load(conn: &Connection) -> rusqlite::Result<Settings> {
         assistant_name: get("assistant_name", "Sunny")?,
         user_name: get("user_name", "")?,
         voice: get("voice", "en-US-JennyNeural")?,
-        location_name: get("location_name", "London")?,
-        latitude: num("latitude", 51.5072)?,
-        longitude: num("longitude", -0.1276)?,
+        location_name: get("location_name", "Sydney")?,
+        latitude: num("latitude", -33.8688)?,
+        longitude: num("longitude", 151.2093)?,
+        timezone: get("timezone", db::DEFAULT_TZ)?,
         gemini_api_key_set: gemini_key(conn).is_some(),
     })
 }
@@ -74,6 +77,11 @@ pub async fn put(State(st): State<AppState>, AppJson(b): AppJson<SettingsIn>) ->
             return Err(AppError::bad("longitude must be between -180 and 180"));
         }
     }
+    if let Some(tz) = &b.timezone {
+        if tz.trim().parse::<chrono_tz::Tz>().is_err() {
+            return Err(AppError::bad("timezone must be an IANA name such as Australia/Sydney"));
+        }
+    }
     let strs = [
         ("assistant_name", &b.assistant_name),
         ("user_name", &b.user_name),
@@ -91,6 +99,10 @@ pub async fn put(State(st): State<AppState>, AppJson(b): AppJson<SettingsIn>) ->
             }
             db::set_setting(&conn, k, v.trim())?;
         }
+    }
+    if let Some(tz) = &b.timezone {
+        db::set_setting(&conn, "timezone", tz.trim())?;
+        db::set_timezone(tz.trim());
     }
     if let Some(v) = b.latitude {
         db::set_setting(&conn, "latitude", &v.to_string())?;

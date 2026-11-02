@@ -1,8 +1,22 @@
 """Shared UI building blocks."""
+from datetime import datetime
+
 import flet as ft
 
 import theme as T
 from api import ApiError
+
+
+def now_in(ctx):
+    """Current naive datetime in the user's timezone (settings.timezone), local time if unset/invalid."""
+    tz = (getattr(ctx, "settings", None) or {}).get("timezone")
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(tz)).replace(tzinfo=None)
+        except Exception:
+            pass
+    return datetime.now()
 
 
 def card(content, padding=16, bgcolor=T.CARD, on_click=None, margin=None, border_color=T.LINE, radius=20):

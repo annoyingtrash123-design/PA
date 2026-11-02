@@ -1,8 +1,34 @@
-use chrono::{Local, NaiveDate};
+use chrono::{NaiveDate, Utc};
+use chrono_tz::Tz;
+use std::sync::RwLock;
 use rusqlite::{params, Connection, OptionalExtension};
 
+pub const DEFAULT_TZ: &str = "Australia/Sydney";
+
+static TZ: RwLock<Tz> = RwLock::new(chrono_tz::Australia::Sydney);
+
+/// Set the timezone used for "today" and "now" (an IANA name). Returns false if the name is unknown.
+pub fn set_timezone(name: &str) -> bool {
+    match name.parse::<Tz>() {
+        Ok(tz) => {
+            *TZ.write().unwrap() = tz;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn now_tz() -> chrono::DateTime<Tz> {
+    Utc::now().with_timezone(&*TZ.read().unwrap())
+}
+
 pub fn today() -> NaiveDate {
-    Local::now().date_naive()
+    now_tz().date_naive()
+}
+
+/// Current local time as "HH:MM".
+pub fn now_hm() -> String {
+    now_tz().format("%H:%M").to_string()
 }
 
 pub fn open(path: &str) -> rusqlite::Result<Connection> {
@@ -11,6 +37,9 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::daynote::CREATE_TABLE)?;
     conn.execute_batch(crate::goals::CREATE_TABLE)?;
+    conn.execute_batch(crate::digest::CREATE_TABLE)?;
+    conn.execute_batch(crate::holidays::CREATE_TABLE)?;
+    conn.execute_batch(crate::briefing::CREATE_TABLE)?;
     // migrate databases created before category_auto existed
     let has_col: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name='category_auto'")?
