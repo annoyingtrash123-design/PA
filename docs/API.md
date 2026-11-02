@@ -102,7 +102,30 @@ Goal = {"id":1,"title":"Pass my driving test","horizon":"medium"|"long","deadlin
 `GET /api/goals` (all, active first) -> `[Goal]`; `POST /api/goals` body Goal without id/created -> Goal; `PUT /api/goals/{id}` -> Goal; `DELETE /api/goals/{id}`.
 Goals are context for the AI only; tasks are not linked manually. Active goals (and goals achieved in the relevant period) are included in the Gemini context for day notes, daily briefings and the weekly overview, so the assistant can connect what was done to what it is working towards. The AI must only claim a task relates to a goal when it plausibly does.
 
-## Day note (home screen "affirmation")
+## Assistant memory
+```json
+Memory = {
+  "weather": {"comfortable_max": 18, "hot_above": 22, "too_hot_above": 25, "likes_rain": true, "avoid_sunburn": true},
+  "notes": [{"id": 1, "text": "I work from an office most weekdays"}]
+}
+```
+`GET /api/memory` -> Memory; `PUT /api/memory/weather` body weather object -> Memory; `POST /api/memory/notes` `{"text"}` -> Memory; `PUT /api/memory/notes/{id}` `{"text"}` -> Memory; `DELETE /api/memory/notes/{id}` -> Memory.
+Seed defaults are the values above with one example note. Memory (weather prefs + notes) is included in all Gemini context (digest, day note, briefings).
+
+## Digest (home screen)
+`GET /api/digest?date=2026-11-02` ->
+```json
+{"date":"2026-11-02",
+ "weather": {"summary":"Light rain","temp_max":14,"temp_min":8,"precip_prob":80,"uv_max":1.5} | null,
+ "weather_comment": "A proper rainy one, 14 at most. Cosy if you're home, and nice to listen to from your desk.",
+ "overview": "...",
+ "source": "gemini" | "template"}
+```
+- `weather_comment`: 1-2 sentences, interprets the forecast against the memory weather prefs (cool is comfortable, warn kindly when hot/too hot, suggest sun cream / shade when UV >= 3 and avoid_sunburn, enjoy rain if likes_rain), and relates it to the day's plans where natural (e.g. office day vs home day, outdoor tasks, gym). Null if no weather.
+- `overview`: the assistant's digest and organisation of the day in prose, 2-4 short sentences, chatty and natural; groups the day into its shape (e.g. what the morning is about, the afternoon, the evening), names the key things, points out a breather, ties to goals where plausible. No raw counts/percentages. Never a bare list of every task. May mention the workout briefly.
+- Gemini when a key is set, cached by (date, hash of items + goals + memory + weather); template fallback otherwise. The day-note endpoint remains for the briefing's `affirmation` field.
+- Weather now also fetched with `precipitation_probability_max` and `uv_index_max` from Open-Meteo. Env `PA_FAKE_WEATHER` (e.g. `Light rain,14,8,80,1.5`) overrides the lookup for testing.
+ (home screen "affirmation")
 `GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","text":"...","source":"gemini"|"template"}`
 A short (1–2 sentences, max ~40 words), grounded, specific note about *this* day — not generic or soppy. It references the actual shape of the day (how busy, when the busy stretch is, the one thing that matters most, a breather) and offers one practical, encouraging angle. Examples of the style: "Three things land before noon, then the afternoon opens up. Get the stand-up and Sam's email done early and the rest of the day is yours." / "A light day with just two tasks, both flexible. Good day to get the dentist booked and have a proper evening."
 Gemini when a key is set; cached in the DB keyed by (date, hash of that day's items) so it is generated at most once per distinct day plan. Template fallback builds the same kind of note from the day's data. Never mentions the gym/workout.

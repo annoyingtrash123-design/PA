@@ -17,13 +17,17 @@
 
 ## Tabs
 
-### Home
-- Overview of today only (no gym on Home): grounded day note, progress + next up, timed tasks in order, untimed tasks grouped by part of day.
-- "Brief me" button: AI-written, chatty spoken briefing.
-- Evening wind-down briefing: what got done, gentle preview of tomorrow.
-- Weather included in the briefing.
-- Daily affirmation/quote.
-- Progress ring (tasks done today) and a "next up" card.
+### Home (the assistant's digest, no task list)
+- Greeting + date.
+- Weather with the assistant's comment, interpreted through your saved preferences (e.g. likes rain, cool is comfortable, dislikes heat, avoid sunburn).
+- The assistant's digest of the day: its organisation and interpretation of the day's tasks in prose, tied to goals.
+- Progress + next up.
+- "Brief me" / "Wind-down" button: AI-written, chatty spoken briefing.
+- The actual task list lives only on the Tasks tab.
+
+### Assistant memory (in Settings)
+- Weather preferences: comfortable max (18), hot above (22), too hot above (25), likes rain, avoid sunburn.
+- Free-text notes the assistant should remember about you; used as context for everything it writes.
 
 ### Tasks
 - Week page: Monday to Sunday, top to bottom, each day with its date; navigate to future (and past) weeks.
