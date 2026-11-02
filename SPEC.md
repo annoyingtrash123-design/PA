@@ -9,6 +9,7 @@
 - **Weather:** Open-Meteo (free, no key). Location set in settings.
 - **Units:** kg.
 - **No notifications/reminders:** the app is opened manually; briefings play on demand.
+- **Single user:** no accounts. A single passcode (env `APP_PASSCODE`) protects the hosted app; the phone stays signed in after entering it once.
 
 ## Assistant
 - Tone: warm best friend: chatty and natural, like a real assistant. No raw stats or percentages; specific highlights tied to goals.
