@@ -86,6 +86,9 @@ class Api:
             params["date"] = date
         return self._json("GET", "/api/briefing", params=params)
 
+    def day_note(self, date):
+        return self._json("GET", "/api/day-note", params={"date": date})
+
     def tts(self, text, voice):
         """Returns mp3 bytes. Raises ApiError (status 503 when voice is unavailable)."""
         return self._req("POST", "/api/tts", json={"text": text, "voice": voice}).content

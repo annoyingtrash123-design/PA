@@ -32,7 +32,7 @@ class Ctx:
         self.categories = self.api.categories()
 
     def snack(self, msg):
-        self.page.open(ft.SnackBar(ft.Text(msg, color="#FFFFFF"), bgcolor=T.INK, behavior=ft.SnackBarBehavior.FLOATING,
+        self.page.open(ft.SnackBar(ft.Text(msg, color=T.TEXT), bgcolor=T.RAISED, behavior=ft.SnackBarBehavior.FLOATING,
                                    shape=ft.RoundedRectangleBorder(radius=14)))
 
     def guard(self, fn, then=None, error_msg=None):
@@ -56,8 +56,8 @@ class Ctx:
 def main(page: ft.Page):
     page.title = "Sunny"
     page.theme = T.make_theme()
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.bgcolor = T.CREAM
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = T.BG
     page.padding = 0
     page.spacing = 0
 
@@ -68,8 +68,8 @@ def main(page: ft.Page):
 
     body = ft.Container(expand=True, padding=ft.padding.symmetric(horizontal=16))
     holder = ft.Row([ft.Container(body, width=640)], alignment=ft.MainAxisAlignment.CENTER, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
-    gear = ft.IconButton(ft.Icons.SETTINGS_OUTLINED, icon_color=T.INK, tooltip="Settings")
-    titlebox = ft.Text("Sunny", size=22, weight=ft.FontWeight.W_700, color=T.CORAL_DARK)
+    gear = ft.IconButton(ft.Icons.SETTINGS_OUTLINED, icon_color=T.TEXT, tooltip="Settings")
+    titlebox = ft.Text("Sunny", size=22, weight=ft.FontWeight.W_700, color=T.LAV)
 
     def sync_title():
         titlebox.value = ctx.name
@@ -78,7 +78,7 @@ def main(page: ft.Page):
     def show():
         if state["settings"]:
             v = settings_view
-            page.appbar.leading = ft.IconButton(ft.Icons.ARROW_BACK, icon_color=T.INK, on_click=lambda e: close_settings())
+            page.appbar.leading = ft.IconButton(ft.Icons.ARROW_BACK, icon_color=T.TEXT, on_click=lambda e: close_settings())
             gear.visible = False
         else:
             v = views[state["tab"]]
@@ -112,10 +112,10 @@ def main(page: ft.Page):
     ctx.on_settings_saved = lambda: (sync_title(), page.update())
     gear.on_click = open_settings
 
-    page.appbar = ft.AppBar(title=titlebox, center_title=False, bgcolor=T.CREAM, elevation=0,
+    page.appbar = ft.AppBar(title=titlebox, center_title=False, bgcolor=T.BG, elevation=0,
                             actions=[gear, ft.Container(width=4)], leading_width=48)
     nav = ft.NavigationBar(
-        selected_index=0, on_change=on_nav, bgcolor="#FFFFFF", indicator_color=T.PEACH,
+        selected_index=0, on_change=on_nav, bgcolor=T.CARD, indicator_color=T.LAV_SOFT,
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.HOME_OUTLINED, selected_icon=ft.Icons.HOME, label="Home"),
             ft.NavigationBarDestination(icon=ft.Icons.CHECK_CIRCLE_OUTLINE, selected_icon=ft.Icons.CHECK_CIRCLE, label="Tasks"),

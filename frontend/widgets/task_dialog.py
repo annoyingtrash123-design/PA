@@ -29,10 +29,10 @@ class TaskDialog:
         rec = t.get("recurrence")
         self.title = ft.TextField(label="What needs doing?", value=t["title"], autofocus=not occ, border_radius=14,
                                   capitalization=ft.TextCapitalization.SENTENCES)
-        self.use_time = ft.Switch(label="Set a time", value=bool(t.get("time")), active_color=T.CORAL, on_change=self._time_toggle)
+        self.use_time = ft.Switch(label="Set a time", value=bool(t.get("time")), active_color=T.LAV, on_change=self._time_toggle)
         self.time = ft.TextField(label="Time (HH:MM)", value=t.get("time") or "09:00", width=150, border_radius=14,
                                  visible=bool(t.get("time")), keyboard_type=ft.KeyboardType.DATETIME)
-        self.clock = ft.IconButton(ft.Icons.ACCESS_TIME, visible=bool(t.get("time")), on_click=self._pick_time, icon_color=T.CORAL)
+        self.clock = ft.IconButton(ft.Icons.ACCESS_TIME, visible=bool(t.get("time")), on_click=self._pick_time, icon_color=T.LAV)
         self.part = ft.Dropdown(label="Part of day", value=t.get("part_of_day") or "anytime", border_radius=14,
                                 options=[ft.dropdown.Option(k, v) for k, v in T.PART_LABELS.items()], visible=not t.get("time"))
         self.category = ft.Dropdown(label="Category", border_radius=14,
@@ -44,19 +44,19 @@ class TaskDialog:
                                   value=rec["kind"] if rec else "none",
                                   options=[ft.dropdown.Option(k, v) for k, v in REPEAT])
         self.days = set(rec.get("days", [])) if rec and rec["kind"] == "weekly" else set()
-        self.day_chips = [ft.Chip(label=ft.Text(n), selected=i in self.days, check_color=T.CORAL_DARK,
-                                  selected_color=T.PEACH, on_select=lambda e, i=i: self._day_sel(i, e.control.selected))
+        self.day_chips = [ft.Chip(label=ft.Text(n), selected=i in self.days, check_color=T.LAV,
+                                  selected_color=T.LAV_SOFT, on_select=lambda e, i=i: self._day_sel(i, e.control.selected))
                           for i, n in enumerate(T.WEEKDAYS)]
         self.day_row = ft.Row(self.day_chips, wrap=True, spacing=6, run_spacing=0, visible=bool(rec and rec["kind"] == "weekly"))
         self.items = [{"id": c.get("id"), "field": self._item_field(c["text"])} for c in t.get("checklist", [])]
         self.items_col = ft.Column(spacing=4)
         self._rebuild_items()
-        self.error = ft.Text("", color="#C0392B", size=13, visible=False)
+        self.error = ft.Text("", color=T.ERROR, size=13, visible=False)
 
         notes = []
         if occ and occ.get("recurring"):
-            notes.append(ft.Container(ft.Text("This is a repeating task: changes apply to the whole series.", size=12.5, color=T.INK),
-                                      bgcolor="#FFE6B8", padding=10, border_radius=12))
+            notes.append(ft.Container(ft.Text("This is a repeating task: changes apply to the whole series.", size=12.5, color=T.TEXT),
+                                      bgcolor=T.LAV_SOFT, padding=10, border_radius=12))
         if self.unknown_recurrence:
             notes.append(muted("Couldn't load this task's repeat settings, so check the Repeat option before saving.", 12))
         content = ft.Column(
@@ -68,12 +68,12 @@ class TaskDialog:
         actions = []
         if occ:
             actions.append(ft.TextButton("Delete", icon=ft.Icons.DELETE_OUTLINE, on_click=self._delete,
-                                         style=ft.ButtonStyle(color="#C0392B")))
-        actions += [ft.TextButton("Cancel", on_click=lambda e: self.close(), style=ft.ButtonStyle(color=T.INK_SOFT)),
+                                         style=ft.ButtonStyle(color=T.ERROR)))
+        actions += [ft.TextButton("Cancel", on_click=lambda e: self.close(), style=ft.ButtonStyle(color=T.MUTED)),
                     ft.FilledButton("Save", on_click=self._save, style=btn_style())]
         self.dlg = ft.AlertDialog(
-            modal=True, bgcolor=T.CREAM, shape=ft.RoundedRectangleBorder(radius=24),
-            title=ft.Text("Edit task" if occ else "New task", weight=ft.FontWeight.W_600, color=T.INK),
+            modal=True, bgcolor=T.RAISED, shape=ft.RoundedRectangleBorder(radius=24),
+            title=ft.Text("Edit task" if occ else "New task", weight=ft.FontWeight.W_600, color=T.TEXT),
             content=ft.Container(content, width=340), scrollable=True, actions=actions,
             actions_alignment=ft.MainAxisAlignment.END, inset_padding=ft.padding.symmetric(horizontal=12, vertical=16))
 
@@ -129,7 +129,7 @@ class TaskDialog:
     def _rebuild_items(self):
         rows = []
         for it in self.items:
-            rows.append(ft.Row([it["field"], ft.IconButton(ft.Icons.CLOSE, icon_size=18, icon_color=T.INK_SOFT,
+            rows.append(ft.Row([it["field"], ft.IconButton(ft.Icons.CLOSE, icon_size=18, icon_color=T.MUTED,
                                                           on_click=lambda e, it=it: self._remove_item(it))], spacing=2))
         self.items_col.controls = rows
 

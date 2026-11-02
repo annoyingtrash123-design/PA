@@ -41,12 +41,12 @@ class SettingsView(BaseView):
             card(ft.Column([heading("About you", 16), self.f_assistant, self.f_user], spacing=12)),
             card(ft.Column([heading("Voice", 16), self.f_voice,
                             ft.OutlinedButton("Preview voice", icon=ft.Icons.RECORD_VOICE_OVER, on_click=self._preview,
-                                              style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=T.CORAL_DARK)),
+                                              style=ft.ButtonStyle(shape=ft.StadiumBorder(), color=T.LAV)),
                             self.player], spacing=12)),
             card(ft.Column([heading("Weather location", 16), self.f_loc, ft.Row([self.f_lat, self.f_lon], spacing=10)], spacing=12)),
             card(ft.Column([heading("AI (Gemini)", 16), self.f_key], spacing=12)),
             card(ft.Column([heading("Categories", 16), self.cat_col,
-                            ft.Row([self.new_dot, self.new_cat, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=T.CORAL, icon_size=30,
+                            ft.Row([self.new_dot, self.new_cat, ft.IconButton(ft.Icons.ADD_CIRCLE, icon_color=T.LAV, icon_size=30,
                                                                               on_click=self._add_cat)], spacing=4)], spacing=10)),
             ft.FilledButton("Save settings", icon=ft.Icons.CHECK, on_click=self._save, height=52, style=btn_style(26)),
         ]
@@ -58,7 +58,7 @@ class SettingsView(BaseView):
             name = ft.TextField(value=c["name"], dense=True, border_radius=12, expand=True,
                                 on_blur=lambda e, c=c: self._rename(c, e.control.value), on_submit=lambda e, c=c: self._rename(c, e.control.value))
             rows.append(ft.Row([ft.Container(dot(c["color"], 26), on_click=lambda e, c=c: self._pick_color(c), padding=4), name,
-                                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=T.INK_SOFT, on_click=lambda e, c=c: self._del_cat(c))],
+                                ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_color=T.MUTED, on_click=lambda e, c=c: self._del_cat(c))],
                                spacing=4))
         self.cat_col.controls = rows
 
@@ -88,7 +88,7 @@ class SettingsView(BaseView):
                     self._reload_cats()
         swatches = [ft.Container(width=44, height=44, bgcolor=col, border_radius=22, on_click=lambda e, col=col: choose(col))
                     for col in T.PALETTE]
-        dlg = ft.AlertDialog(title=ft.Text("Pick a colour"), bgcolor=T.CREAM, shape=ft.RoundedRectangleBorder(radius=24),
+        dlg = ft.AlertDialog(title=ft.Text("Pick a colour"), bgcolor=T.RAISED, shape=ft.RoundedRectangleBorder(radius=24),
                              content=ft.Container(ft.Row(swatches, wrap=True, spacing=10, run_spacing=10), width=300))
         self.ctx.open(dlg)
 

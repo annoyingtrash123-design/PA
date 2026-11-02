@@ -10,13 +10,13 @@ from api import ApiError
 class VoicePlayer(ft.Container):
     def __init__(self, ctx):
         super().__init__(visible=False, padding=ft.padding.symmetric(horizontal=6, vertical=2),
-                         bgcolor=T.PEACH_SOFT, border_radius=24)
+                         bgcolor=T.RAISED, border_radius=24)
         self.ctx = ctx
         self.audio = None
         self.playing = False
-        self.play_btn = ft.IconButton(ft.Icons.PAUSE_CIRCLE_FILLED, icon_color=T.CORAL, icon_size=34, on_click=self._toggle_play)
-        self.stop_btn = ft.IconButton(ft.Icons.STOP_CIRCLE_OUTLINED, icon_color=T.INK_SOFT, icon_size=30, on_click=self.stop)
-        self.label = ft.Text("Playing...", size=13, color=T.INK_SOFT)
+        self.play_btn = ft.IconButton(ft.Icons.PAUSE_CIRCLE_FILLED, icon_color=T.LAV, icon_size=34, on_click=self._toggle_play)
+        self.stop_btn = ft.IconButton(ft.Icons.STOP_CIRCLE_OUTLINED, icon_color=T.MUTED, icon_size=30, on_click=self.stop)
+        self.label = ft.Text("Playing...", size=13, color=T.MUTED)
         self.content = ft.Row([self.play_btn, self.stop_btn, self.label], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def speak(self, text, voice):

@@ -289,6 +289,11 @@ class H(BaseHTTPRequestHandler):
                 return s
         if r0 == "briefing":
             return briefing(q.get("kind", "morning"), date.fromisoformat(q["date"]) if q.get("date") else TODAY)
+        if r0 == "day-note":
+            d = date.fromisoformat(q["date"]) if q.get("date") else TODAY
+            n = len(day(d)["items"])
+            return {"date": iso(d), "source": "template",
+                    "text": f"{n} things on today, with room to breathe in between. Start with the one that matters most and the rest will follow."}
         if r0 == "tts":
             if os.getenv("MOCK_TTS") == "off":
                 return 503, {"error": "tts unavailable"}

@@ -40,6 +40,10 @@ Task = {
 `PUT /api/tasks/{id}` body: full Task (checklist replaced) → `Task`
 `DELETE /api/tasks/{id}`
 
+### Auto-categorisation
+`POST /api/tasks` and `PUT /api/tasks/{id}` accept `"category_id": "auto"`. The backend then picks one category from the existing list (never creates new ones): Gemini if a key is set (prompt with the title, notes and the category names; answer must be one exact name), else keyword matching; no match → "Other". The returned Task has the chosen numeric `category_id` and `"category_auto": true`. Tasks store `category_auto` so the UI can show "Auto" as the selection on edit; choosing a category manually sets it false.
+Default categories (seeded on a fresh DB): Chores, Exercise, Study, Work, Errands, Appointments, Social, Self-care, Admin & Money, Other — muted colours that read well on a dark warm-grey background.
+
 ### Day / week views (resolved occurrences)
 `GET /api/days?start=2026-11-02&days=7` → `[Day]`
 ```json

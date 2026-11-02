@@ -57,7 +57,7 @@ class GymView(BaseView):
         self.plan = plan
         if plan.get("rest"):
             return [card(ft.Column([
-                ft.Row([ft.Icon(ft.Icons.SPA_OUTLINED, color=T.GOOD, size=28), heading("Next up: Rest day", 18)], spacing=10),
+                ft.Row([ft.Icon(ft.Icons.SPA_OUTLINED, color=T.SAGE, size=28), heading("Next up: Rest day", 18)], spacing=10),
                 muted("No lifting today. Stretch, walk, nap, whatever feels good."),
                 ft.FilledButton("Mark rest day", icon=ft.Icons.CHECK, on_click=self._rest, style=btn_style())], spacing=12))]
         out = [heading(f"Next workout: {plan['name']}", 20)]
@@ -70,11 +70,11 @@ class GymView(BaseView):
             else:
                 lines.append(muted("No history yet. Pick a weight that feels right.", 12.5))
             if ex.get("hint"):
-                lines.append(ft.Row([ft.Icon(ft.Icons.TRENDING_UP, size=16, color=T.GOOD),
-                                     ft.Text(ex["hint"], size=13, color=T.INK, expand=True)], spacing=6))
+                lines.append(ft.Row([ft.Icon(ft.Icons.TRENDING_UP, size=16, color=T.SAGE),
+                                     ft.Text(ex["hint"], size=13, color=T.TEXT, expand=True)], spacing=6))
             out.append(card(ft.Column(lines, spacing=5), padding=14))
         out.append(ft.FilledButton("Start workout", icon=ft.Icons.PLAY_ARROW, height=56, on_click=self._start,
-                                   style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.CORAL, color="#FFFFFF",
+                                   style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.LAV, color=T.ON_ACCENT,
                                                         text_style=ft.TextStyle(size=17, weight=ft.FontWeight.W_600))))
         return out
 
@@ -101,7 +101,7 @@ class GymView(BaseView):
                 by_ex[st["exercise_id"]] = []
             by_ex[st["exercise_id"]].append(st)
         self.fields = {}
-        out = [ft.Row([heading(s["name"], 20), chip("In progress", ft.Icons.TIMER_OUTLINED, bgcolor="#FFE6B8")],
+        out = [ft.Row([heading(s["name"], 20), chip("In progress", ft.Icons.TIMER_OUTLINED, bgcolor=T.LAV_SOFT)],
                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN)]
         for exid in order:
             pe = plan_ex.get(exid, {})
@@ -112,7 +112,7 @@ class GymView(BaseView):
             if pe.get("last"):
                 col.append(muted("Last: " + ", ".join(f"{fmt_w(x['weight'])}x{x['reps']}" for x in pe["last"]["sets"]), 12))
             if pe.get("hint"):
-                col.append(ft.Text(pe["hint"], size=12.5, color=T.GOOD))
+                col.append(ft.Text(pe["hint"], size=12.5, color=T.SAGE))
             for st in by_ex[exid]:
                 w = ft.TextField(value=fmt_w(st.get("weight")), suffix_text="kg", dense=True, border_radius=12, width=110,
                                  keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER, content_padding=8,
@@ -120,16 +120,16 @@ class GymView(BaseView):
                 r = ft.TextField(value=str(st.get("reps", "")), suffix_text="reps", dense=True, border_radius=12, width=110,
                                  keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER, content_padding=8,
                                  on_blur=lambda e: self._save_sets())
-                d = ft.Checkbox(value=st.get("done", False), active_color=T.GOOD, shape=ft.CircleBorder(), scale=1.3,
+                d = ft.Checkbox(value=st.get("done", False), active_color=T.SAGE, shape=ft.CircleBorder(), scale=1.3,
                                 on_change=lambda e: self._save_sets(notify=True))
                 self.fields[(exid, st["set_no"])] = (w, r, d)
                 col.append(ft.Row([muted(f"Set {st['set_no']}", 13, width=44), w, r, d], spacing=6,
                                   vertical_alignment=ft.CrossAxisAlignment.CENTER))
             out.append(card(ft.Column(col, spacing=8), padding=14))
         out.append(ft.FilledButton("Finish workout", icon=ft.Icons.FLAG, height=56, on_click=self._finish,
-                                   style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.CORAL, color="#FFFFFF",
+                                   style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.LAV, color=T.ON_ACCENT,
                                                         text_style=ft.TextStyle(size=17, weight=ft.FontWeight.W_600))))
-        out.append(ft.TextButton("Back (keeps the workout)", on_click=self._leave, style=ft.ButtonStyle(color=T.INK_SOFT)))
+        out.append(ft.TextButton("Back (keeps the workout)", on_click=self._leave, style=ft.ButtonStyle(color=T.MUTED)))
         return out
 
     def _collect(self):
@@ -169,9 +169,9 @@ class GymView(BaseView):
         name = done.get("name", "workout")
         self.session = None
         dlg = ft.AlertDialog(
-            modal=True, bgcolor=T.CREAM, shape=ft.RoundedRectangleBorder(radius=24),
-            title=ft.Row([ft.Icon(ft.Icons.CELEBRATION, color=T.CORAL), ft.Text("Workout done!")], spacing=8),
-            content=ft.Text(f"You smashed {name}: {n_done} sets logged. Go get a snack and be proud of yourself!", color=T.INK),
+            modal=True, bgcolor=T.RAISED, shape=ft.RoundedRectangleBorder(radius=24),
+            title=ft.Row([ft.Icon(ft.Icons.CELEBRATION, color=T.LAV), ft.Text("Workout done!")], spacing=8),
+            content=ft.Text(f"You smashed {name}: {n_done} sets logged. Go get a snack and be proud of yourself!", color=T.TEXT),
             actions=[ft.FilledButton("Yay", on_click=lambda ev: (self.ctx.close(dlg), self.refresh()), style=btn_style())])
         self.ctx.open(dlg)
         self.refresh()
@@ -187,15 +187,15 @@ class GymView(BaseView):
             label = "Rest" if it.get("rest") else tmpls.get(it.get("template_id"), "?")
             is_next = i == nxt
             rows.append(ft.Container(ft.Row([
-                ft.Container(ft.Text(str(i + 1), size=13, weight=ft.FontWeight.W_600, color="#FFFFFF" if is_next else T.INK),
-                             width=28, height=28, border_radius=14, bgcolor=T.CORAL if is_next else T.PEACH, alignment=ft.alignment.center),
-                ft.Column([ft.Text(label, size=16, weight=ft.FontWeight.W_500, color=T.INK),
+                ft.Container(ft.Text(str(i + 1), size=13, weight=ft.FontWeight.W_600, color=T.ON_ACCENT if is_next else T.TEXT),
+                             width=28, height=28, border_radius=14, bgcolor=T.LAV if is_next else T.LAV_SOFT, alignment=ft.alignment.center),
+                ft.Column([ft.Text(label, size=16, weight=ft.FontWeight.W_500, color=T.TEXT),
                            muted("You are here: next up", 11.5) if is_next else ft.Container(height=0)], spacing=0, expand=True),
                 ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=20, disabled=i == 0, on_click=lambda e, i=i: self._move(items, i, -1)),
                 ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=20, disabled=i == len(items) - 1, on_click=lambda e, i=i: self._move(items, i, 1)),
                 ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=20, on_click=lambda e, i=i: self._rot_del(items, i)),
             ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                bgcolor=T.PEACH_SOFT if is_next else None, border_radius=14, padding=ft.padding.symmetric(horizontal=6, vertical=2)))
+                bgcolor=T.RAISED if is_next else None, border_radius=14, padding=ft.padding.symmetric(horizontal=6, vertical=2)))
         self.rot_add = ft.Dropdown(label="Add to cycle", border_radius=14, expand=True,
                                    options=[ft.dropdown.Option(f"t{k}", v) for k, v in tmpls.items()] + [ft.dropdown.Option("rest", "Rest day")])
         return [heading("Your cycle", 20), muted("Workouts follow this order and loop around."),
@@ -244,7 +244,7 @@ class GymView(BaseView):
         picker = ft.Dropdown(label="Add exercise", border_radius=14,
                              options=[ft.dropdown.Option(str(x["id"]), x["name"]) for x in exercises] + [ft.dropdown.Option("new", "+ New exercise...")])
         new_name = ft.TextField(label="New exercise name", border_radius=14, visible=False)
-        err = ft.Text("", color="#C0392B", size=13, visible=False)
+        err = ft.Text("", color=T.ERROR, size=13, visible=False)
 
         def rebuild():
             col.controls = []
@@ -255,12 +255,12 @@ class GymView(BaseView):
                     f.on_change = lambda e, r=r, key=key: r.__setitem__(key, num(e.control.value, int, r[key]))
                     return f
                 col.controls.append(ft.Container(ft.Column([
-                    ft.Row([ft.Text(r["name"], size=14.5, weight=ft.FontWeight.W_500, color=T.INK, expand=True),
+                    ft.Row([ft.Text(r["name"], size=14.5, weight=ft.FontWeight.W_500, color=T.TEXT, expand=True),
                             ft.IconButton(ft.Icons.ARROW_UPWARD, icon_size=18, disabled=i == 0, on_click=lambda e, i=i: swap(i, -1)),
                             ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_size=18, disabled=i == len(rows) - 1, on_click=lambda e, i=i: swap(i, 1)),
                             ft.IconButton(ft.Icons.CLOSE, icon_size=18, on_click=lambda e, i=i: remove(i))], spacing=0),
                     ft.Row([mk("sets", "Sets"), mk("rep_min", "Min"), mk("rep_max", "Max")], spacing=8)], spacing=4),
-                    bgcolor=T.PEACH_SOFT, padding=10, border_radius=14))
+                    bgcolor=T.RAISED, padding=10, border_radius=14))
 
         def swap(i, d):
             rows[i], rows[i + d] = rows[i + d], rows[i]
@@ -318,13 +318,13 @@ class GymView(BaseView):
 
         rebuild()
         dlg = ft.AlertDialog(
-            modal=True, bgcolor=T.CREAM, shape=ft.RoundedRectangleBorder(radius=24),
+            modal=True, bgcolor=T.RAISED, shape=ft.RoundedRectangleBorder(radius=24),
             title=ft.Text("Edit template" if t else "New template", weight=ft.FontWeight.W_600),
             content=ft.Container(ft.Column([name, col, picker, new_name,
                                             ft.TextButton("Add", icon=ft.Icons.ADD, on_click=add_ex), err],
                                            spacing=10, tight=True), width=340), scrollable=True,
-            actions=([ft.TextButton("Delete", on_click=delete, style=ft.ButtonStyle(color="#C0392B"))] if t else []) +
-                    [ft.TextButton("Cancel", on_click=lambda e: self.ctx.close(dlg), style=ft.ButtonStyle(color=T.INK_SOFT)),
+            actions=([ft.TextButton("Delete", on_click=delete, style=ft.ButtonStyle(color=T.ERROR))] if t else []) +
+                    [ft.TextButton("Cancel", on_click=lambda e: self.ctx.close(dlg), style=ft.ButtonStyle(color=T.MUTED)),
                      ft.FilledButton("Save", on_click=save, style=btn_style())],
             inset_padding=ft.padding.symmetric(horizontal=12, vertical=16))
         self.ctx.open(dlg)
@@ -357,17 +357,17 @@ class GymView(BaseView):
         pts = [ft.LineChartDataPoint(i, h["top_weight"]) for i, h in enumerate(hist)]
         step_x = max(1, len(hist) // 4)
         chart = ft.LineChart(
-            data_series=[ft.LineChartData(data_points=pts, stroke_width=4, color=T.CORAL, curved=True, stroke_cap_round=True,
-                                          point=True, below_line_bgcolor="#33EE7B5F")],
+            data_series=[ft.LineChartData(data_points=pts, stroke_width=4, color=T.LAV, curved=True, stroke_cap_round=True,
+                                          point=True, below_line_bgcolor="#33B8A6E3")],
             min_x=-0.3, max_x=len(hist) - 0.7 if len(hist) > 1 else 0.7, min_y=y_min, max_y=y_max,
-            left_axis=ft.ChartAxis(labels_size=40, labels_interval=step, labels=[ft.ChartAxisLabel(value=v, label=ft.Text(fmt_w(v), size=10, color=T.INK_SOFT))
+            left_axis=ft.ChartAxis(labels_size=40, labels_interval=step, labels=[ft.ChartAxisLabel(value=v, label=ft.Text(fmt_w(v), size=10, color=T.MUTED))
                                                                                  for v in ticks]),
-            bottom_axis=ft.ChartAxis(labels_size=24, labels_interval=step_x, labels=[ft.ChartAxisLabel(value=i, label=ft.Text(hist[i]["date"][5:], size=10, color=T.INK_SOFT))
+            bottom_axis=ft.ChartAxis(labels_size=24, labels_interval=step_x, labels=[ft.ChartAxisLabel(value=i, label=ft.Text(hist[i]["date"][5:], size=10, color=T.MUTED))
                                                              for i in range(0, len(hist), step_x)]),
-            horizontal_grid_lines=ft.ChartGridLines(interval=step, color=T.LINE, width=1), tooltip_bgcolor=T.INK, height=200, expand=True)
+            horizontal_grid_lines=ft.ChartGridLines(interval=step, color=T.LINE, width=1), tooltip_bgcolor=T.TEXT, height=200, expand=True)
         out.append(card(ft.Column([muted("Top weight (kg)", 12), chart], spacing=8), padding=14))
-        entries = [ft.Row([ft.Text(h["date"], size=14, color=T.INK, expand=True),
-                           ft.Text(f"{fmt_w(h['top_weight'])} kg x {h.get('best_reps', '-')}", size=14, weight=ft.FontWeight.W_500, color=T.INK),
+        entries = [ft.Row([ft.Text(h["date"], size=14, color=T.TEXT, expand=True),
+                           ft.Text(f"{fmt_w(h['top_weight'])} kg x {h.get('best_reps', '-')}", size=14, weight=ft.FontWeight.W_500, color=T.TEXT),
                            muted(f"1RM ~{fmt_w(h.get('est_1rm'))}", 12)]) for h in reversed(hist)]
         out.append(card(ft.Column([heading("Entries", 15)] + entries, spacing=8), padding=14))
         return out
