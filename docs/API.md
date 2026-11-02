@@ -90,7 +90,7 @@ Rotation projection for `/api/days`: today gets the next rotation item, each fol
 Progression: if every set of an exercise last time was done with `reps >= rep_max` at the same weight W, suggest W + 2.5; otherwise suggest W. No history → null.
 
 ## Briefings
-`GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02` →
+`GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02[&ai=false]` → (`ai=false` skips Gemini; template text only)
 ```json
 {"kind":"morning","date":"2026-11-02","text":"Good morning! ...","source":"gemini"|"template",
  "weather":{"summary":"Light rain","temp_max":14,"temp_min":8} | null,

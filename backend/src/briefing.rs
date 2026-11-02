@@ -651,7 +651,9 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
 
     let mut source = "template";
     let mut text = None;
-    if let Some(key) = &ctx.key {
+    // `ai=false` skips Gemini (used by the home screen to fetch weather/affirmation without spending quota)
+    let use_ai = q.get("ai").map(|v| v != "false" && v != "0").unwrap_or(true);
+    if let (true, Some(key)) = (use_ai, &ctx.key) {
         match gemini(&st, key, &system_prompt(&ctx), &context_text(&ctx, &weather)).await {
             Ok(t) => {
                 text = Some(t);
