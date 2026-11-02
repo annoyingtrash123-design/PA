@@ -51,7 +51,7 @@ class ReviewView(BaseView):
         out.append(ft.Row(tiles, spacing=10))
         out.append(self._bars(days))
         out.append(card(ft.Column([
-            ft.Row([ft.Icon(ft.Icons.INSIGHTS, color=T.LAV, size=20), heading("Week recap", 16)], spacing=8),
+            ft.Row([ft.Icon(ft.Icons.INSIGHTS, color=T.LAV, size=20), heading("Overview of the week", 16)], spacing=8),
             ft.Text(self.text, size=15, color=T.TEXT, selectable=True),
             ft.FilledButton("Read it to me", icon=ft.Icons.VOLUME_UP, on_click=self._read,
                             style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.LAV, color=T.ON_ACCENT)),

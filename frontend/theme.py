@@ -31,7 +31,7 @@ def make_theme():
             tertiary=SAGE, on_tertiary=ON_ACCENT,
             surface=BG, on_surface=TEXT, on_surface_variant=MUTED,
             surface_tint=BG, surface_container_lowest=BG, surface_container_low=CARD, surface_container=CARD,
-            surface_container_high=RAISED, surface_container_highest=RAISED,
+            surface_container_high=RAISED,
             outline=MUTED, outline_variant=LINE, inverse_surface=TEXT, on_inverse_surface=BG, inverse_primary=LAV_SOFT,
             error=ERROR, on_error=ON_ACCENT, shadow="#000000", scrim="#000000",
         ),
