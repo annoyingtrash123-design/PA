@@ -1,11 +1,12 @@
 # Personal Assistant App — Spec
 
 ## Stack
-- **Backend:** Rust (Axum) REST API, SQLite storage.
+- **Backend:** Rust (Axum) REST API, Google Firestore storage behind a storage interface (SQLite for local development).
 - **Frontend:** Python (Flet), served as a web app; used on Android via Chrome "Add to home screen". APK later, optional.
-- **Hosting:** free/cheap cloud host, backend + frontend in one Docker deployment.
+- **Hosting:** Google Cloud Run (free tier, scales to zero). Backend and frontend each run as a container.
 - **AI:** Google Gemini API free tier, behind a swappable provider interface. Template-based fallback if the AI fails or there is no key.
-- **Voice:** edge-tts (free Microsoft neural voices, American English, e.g. "Jenny"/"Aria"), with Piper as an offline fallback.
+- **Voice:** Gemini text-to-speech (same API key, American English voice), with edge-tts as a free fallback.
+- **Backup (optional):** periodic JSON export to the user's Google Drive.
 - **Weather:** Open-Meteo (free, no key). Location set in settings.
 - **Units:** kg.
 - **No notifications/reminders:** the app is opened manually; briefings play on demand.
