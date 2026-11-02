@@ -8,6 +8,7 @@
 - **Voice:** edge-tts (free Microsoft neural voices, American English, e.g. "Jenny"/"Aria"), with Piper as an offline fallback.
 - **Weather:** Open-Meteo (free, no key). Location set in settings.
 - **Units:** kg.
+- **No notifications/reminders:** the app is opened manually; briefings play on demand.
 
 ## Assistant
 - Tone: warm best friend (chatty, upbeat, casual).
