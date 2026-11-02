@@ -89,6 +89,12 @@ Session = {"id":1,"template_id":1,"name":"Push A","date":"2026-11-02","completed
 Rotation projection for `/api/days`: today gets the next rotation item, each following day gets the following item (wrapping), unless a session was already completed today (then today shows that session, and projection continues from next).
 Progression: if every set of an exercise last time was done with `reps >= rep_max` at the same weight W, suggest W + 2.5; otherwise suggest W. No history → null.
 
+## Day note (home screen "affirmation")
+`GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","text":"...","source":"gemini"|"template"}`
+A short (1–2 sentences, max ~40 words), grounded, specific note about *this* day — not generic or soppy. It references the actual shape of the day (how busy, when the busy stretch is, the one thing that matters most, a breather) and offers one practical, encouraging angle. Examples of the style: "Three things land before noon, then the afternoon opens up. Get the stand-up and Sam's email done early and the rest of the day is yours." / "A light day with just two tasks, both flexible. Good day to get the dentist booked and have a proper evening."
+Gemini when a key is set; cached in the DB keyed by (date, hash of that day's items) so it is generated at most once per distinct day plan. Template fallback builds the same kind of note from the day's data. Never mentions the gym/workout.
+The briefing's `affirmation` field returns the same day note text.
+
 ## Briefings
 `GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02[&ai=false]` → (`ai=false` skips Gemini; template text only)
 ```json
