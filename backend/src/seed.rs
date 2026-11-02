@@ -42,31 +42,42 @@ fn seed(conn: &Connection) -> rusqlite::Result<()> {
 
     // categories
     let mut cats: HashMap<&str, i64> = HashMap::new();
-    for (n, c) in [("Health", "#4CAF50"), ("Work", "#2196F3"), ("Home", "#FF9800"), ("Personal", "#9C27B0")] {
+    for (n, c) in [
+        ("Chores", "#C9A26B"),
+        ("Exercise", "#9CB89A"),
+        ("Study", "#8FA9D6"),
+        ("Work", "#7FA7A3"),
+        ("Errands", "#D39A7E"),
+        ("Appointments", "#C98BB0"),
+        ("Social", "#E0B36A"),
+        ("Self-care", "#B8A6E3"),
+        ("Admin & Money", "#A3A38A"),
+        ("Other", "#8C847D"),
+    ] {
         conn.execute("INSERT INTO categories(name,color) VALUES(?1,?2)", params![n, c])?;
         cats.insert(n, conn.last_insert_rowid());
     }
 
     let tasks = [
-        T { title: "Morning routine", day: None, time: Some("07:30"), part: None, cat: "Health", notes: "", rec: Some(r#"{"kind":"daily"}"#), steps: &["Make bed", "Drink water", "Stretch"] },
+        T { title: "Morning routine", day: None, time: Some("07:30"), part: None, cat: "Self-care", notes: "", rec: Some(r#"{"kind":"daily"}"#), steps: &["Make bed", "Drink water", "Stretch"] },
         T { title: "Plan tomorrow", day: None, time: None, part: Some("evening"), cat: "Work", notes: "Five quiet minutes to line up the next day.", rec: Some(r#"{"kind":"weekdays"}"#), steps: &[] },
-        T { title: "Laundry", day: None, time: None, part: Some("afternoon"), cat: "Home", notes: "", rec: Some(r#"{"kind":"weekly","days":[6]}"#), steps: &["Wash", "Dry", "Fold and put away"] },
-        T { title: "Pay electricity bill", day: Some(-1), time: None, part: Some("anytime"), cat: "Home", notes: "Yesterday's leftover, it rolls over until done.", rec: None, steps: &[] },
+        T { title: "Laundry", day: None, time: None, part: Some("afternoon"), cat: "Chores", notes: "", rec: Some(r#"{"kind":"weekly","days":[6]}"#), steps: &["Wash", "Dry", "Fold and put away"] },
+        T { title: "Pay electricity bill", day: Some(-1), time: None, part: Some("anytime"), cat: "Admin & Money", notes: "Yesterday's leftover, it rolls over until done.", rec: None, steps: &[] },
         T { title: "Reply to Sam's email", day: Some(0), time: None, part: Some("morning"), cat: "Work", notes: "", rec: None, steps: &[] },
         T { title: "Team stand-up", day: Some(0), time: Some("10:00"), part: None, cat: "Work", notes: "", rec: None, steps: &[] },
-        T { title: "Call Mum", day: Some(0), time: Some("18:30"), part: None, cat: "Personal", notes: "", rec: None, steps: &[] },
-        T { title: "Book dentist appointment", day: Some(0), time: None, part: Some("anytime"), cat: "Health", notes: "", rec: None, steps: &[] },
-        T { title: "Grocery shopping", day: Some(1), time: None, part: Some("afternoon"), cat: "Home", notes: "Eggs, oats, spinach, bananas.", rec: None, steps: &[] },
+        T { title: "Call Mum", day: Some(0), time: Some("18:30"), part: None, cat: "Social", notes: "", rec: None, steps: &[] },
+        T { title: "Book dentist appointment", day: Some(0), time: None, part: Some("anytime"), cat: "Appointments", notes: "", rec: None, steps: &[] },
+        T { title: "Grocery shopping", day: Some(1), time: None, part: Some("afternoon"), cat: "Errands", notes: "Eggs, oats, spinach, bananas.", rec: None, steps: &[] },
         T { title: "Project check-in", day: Some(1), time: Some("09:30"), part: None, cat: "Work", notes: "", rec: None, steps: &[] },
-        T { title: "Coffee with Alex", day: Some(2), time: Some("15:00"), part: None, cat: "Personal", notes: "", rec: None, steps: &[] },
+        T { title: "Coffee with Alex", day: Some(2), time: Some("15:00"), part: None, cat: "Social", notes: "", rec: None, steps: &[] },
         T { title: "Submit weekly report", day: Some(3), time: None, part: Some("morning"), cat: "Work", notes: "", rec: None, steps: &[] },
-        T { title: "Fix the leaky tap", day: Some(4), time: None, part: Some("anytime"), cat: "Home", notes: "", rec: None, steps: &[] },
-        T { title: "Evening walk", day: Some(4), time: None, part: Some("evening"), cat: "Health", notes: "", rec: None, steps: &[] },
+        T { title: "Fix the leaky tap", day: Some(4), time: None, part: Some("anytime"), cat: "Chores", notes: "", rec: None, steps: &[] },
+        T { title: "Evening walk", day: Some(4), time: None, part: Some("evening"), cat: "Exercise", notes: "", rec: None, steps: &[] },
     ];
     for t in &tasks {
         let date = t.day.map(day);
         conn.execute(
-            "INSERT INTO tasks(title,date,time,part_of_day,category_id,notes,recurrence) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO tasks(title,date,time,part_of_day,category_id,notes,recurrence,category_auto) VALUES(?1,?2,?3,?4,?5,?6,?7,1)",
             params![t.title, date, t.time, t.part, cats[t.cat], t.notes, t.rec],
         )?;
         let tid = conn.last_insert_rowid();

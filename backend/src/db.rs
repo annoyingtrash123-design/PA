@@ -10,6 +10,13 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL").ok();
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::daynote::CREATE_TABLE)?;
+    // migrate databases created before category_auto existed
+    let has_col: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name='category_auto'")?
+        .exists([])?;
+    if !has_col {
+        conn.execute("ALTER TABLE tasks ADD COLUMN category_auto INTEGER NOT NULL DEFAULT 0", [])?;
+    }
     Ok(conn)
 }
 
@@ -26,7 +33,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   category_id INTEGER,
   notes TEXT NOT NULL DEFAULT '',
   recurrence TEXT,
-  rolled_from TEXT);
+  rolled_from TEXT,
+  category_auto INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS checklist_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, text TEXT NOT NULL, pos INTEGER NOT NULL DEFAULT 0);
 -- date is '' for one-off tasks

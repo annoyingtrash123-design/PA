@@ -566,12 +566,17 @@ fn clean_script(raw: &str) -> String {
 }
 
 pub async fn gemini(st: &AppState, key: &str, system: &str, user: &str) -> Result<String, String> {
+    gemini_raw(st, key, system, user, 0.9, 60).await
+}
+
+/// Like `gemini`, with a configurable temperature and minimum reply length (short answers allowed).
+pub async fn gemini_raw(st: &AppState, key: &str, system: &str, user: &str, temperature: f64, min_len: usize) -> Result<String, String> {
     let model = std::env::var("GEMINI_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "gemini-2.5-flash".into());
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
     let body = json!({
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"temperature": 0.9, "maxOutputTokens": 4096}
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 4096}
     });
     let resp = st
         .http
@@ -592,7 +597,7 @@ pub async fn gemini(st: &AppState, key: &str, system: &str, user: &str) -> Resul
         .map(|a| a.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join(" "))
         .unwrap_or_default();
     let text = clean_script(&text);
-    if text.len() < 60 {
+    if text.len() < min_len {
         return Err("gemini returned too little text".into());
     }
     Ok(text)

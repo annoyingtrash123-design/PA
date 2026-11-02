@@ -112,6 +112,7 @@ pub struct Task {
     pub time: Option<String>,
     pub part_of_day: String,
     pub category_id: Option<i64>,
+    pub category_auto: bool,
     pub notes: String,
     pub recurrence: Option<Recurrence>,
     pub checklist: Vec<ChecklistItem>,
@@ -131,7 +132,8 @@ pub struct TaskIn {
     date: Option<String>,
     time: Option<String>,
     part_of_day: Option<String>,
-    category_id: Option<i64>,
+    #[serde(default)]
+    category_id: Option<serde_json::Value>,
     #[serde(default)]
     notes: String,
     recurrence: Option<Recurrence>,
@@ -175,10 +177,11 @@ fn row_to_task(r: &rusqlite::Row) -> rusqlite::Result<Task> {
         recurrence: rec.and_then(|s| serde_json::from_str(&s).ok()),
         checklist: vec![],
         rolled_from: r.get(8)?,
+        category_auto: r.get::<_, i64>(9)? != 0,
     })
 }
 
-const TASK_COLS: &str = "id,title,date,time,part_of_day,category_id,notes,recurrence,rolled_from";
+const TASK_COLS: &str = "id,title,date,time,part_of_day,category_id,notes,recurrence,rolled_from,category_auto";
 
 fn load_checklists(conn: &Connection) -> rusqlite::Result<HashMap<i64, Vec<ChecklistItem>>> {
     let mut st = conn.prepare("SELECT id,task_id,text FROM checklist_items ORDER BY task_id,pos,id")?;
@@ -219,12 +222,11 @@ struct Clean {
     date: Option<String>,
     time: Option<String>,
     part: Option<String>,
-    category_id: Option<i64>,
     notes: String,
     recurrence: Option<Recurrence>,
 }
 
-fn clean(conn: &Connection, b: &TaskIn) -> Res<Clean> {
+fn clean(_conn: &Connection, b: &TaskIn) -> Res<Clean> {
     let title = b.title.trim().to_string();
     if title.is_empty() {
         return Err(AppError::bad("title cannot be empty"));
@@ -256,12 +258,123 @@ fn clean(conn: &Connection, b: &TaskIn) -> Res<Clean> {
         (None, None) | (None, Some("")) => return Err(AppError::bad("one-off tasks need a date (or give a recurrence)")),
         (None, Some(d)) => Some(fmt_date(parse_date(d).ok_or_else(|| AppError::bad("date must be YYYY-MM-DD"))?)),
     };
-    if let Some(cid) = b.category_id {
-        if get_category(conn, cid).is_err() {
-            return Err(AppError::bad("category_id does not exist"));
+    Ok(Clean { title, date, time, part, notes: b.notes.clone(), recurrence })
+}
+
+enum CatSpec {
+    Manual(Option<i64>),
+    Auto,
+}
+
+fn parse_cat_spec(conn: &Connection, v: &Option<serde_json::Value>) -> Res<CatSpec> {
+    use serde_json::Value;
+    match v {
+        None | Some(Value::Null) => Ok(CatSpec::Manual(None)),
+        Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => Ok(CatSpec::Auto),
+        Some(Value::Number(n)) => {
+            let cid = n.as_i64().ok_or_else(|| AppError::bad("category_id must be a number, null or \"auto\""))?;
+            if get_category(conn, cid).is_err() {
+                return Err(AppError::bad("category_id does not exist"));
+            }
+            Ok(CatSpec::Manual(Some(cid)))
+        }
+        Some(_) => Err(AppError::bad("category_id must be a number, null or \"auto\"")),
+    }
+}
+
+// ------------------------------------------------------- auto-categorisation
+
+const KEYWORDS: &[(&str, &[&str])] = &[
+    ("Chores", &["laundry", "hoover", "vacuum", "clean", "cleaning", "dishes", "dishwasher", "bins", "bin", "tidy", "iron", "ironing", "wash", "mop", "dust", "sweep", "declutter", "fix", "repair", "tap"]),
+    ("Exercise", &["gym", "run", "running", "jog", "walk", "yoga", "swim", "workout", "cycle", "cycling", "stretch", "push", "pull", "leg", "legs", "pilates", "hike", "exercise", "lift", "cardio"]),
+    ("Study", &["study", "revise", "revision", "essay", "read chapter", "chapter", "lecture", "homework", "exam", "assignment", "course", "coursework", "revising", "dissertation", "thesis"]),
+    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "email", "emails", "client", "deadline", "presentation", "shift", "project", "invoice", "sprint", "colleague", "boss"]),
+    ("Errands", &["shop", "shopping", "groceries", "grocery", "post office", "pick up", "collect", "buy", "return", "parcel", "pharmacy", "supermarket", "drop off"]),
+    ("Appointments", &["dentist", "doctor", "gp", "appointment", "haircut", "vet", "optician", "checkup", "check-up", "physio", "hospital", "dermatologist"]),
+    ("Social", &["call", "mum", "dad", "friend", "friends", "party", "dinner with", "drinks", "birthday", "visit", "coffee with", "lunch with", "date night", "catch up", "brunch"]),
+    ("Self-care", &["rest", "nap", "bath", "skincare", "meditate", "meditation", "journal", "read", "relax", "therapy", "massage", "sleep", "breathe", "morning routine"]),
+    ("Admin & Money", &["bill", "bills", "pay", "bank", "tax", "budget", "form", "renew", "insurance", "rent", "council", "mortgage", "invoice", "passport", "visa", "savings", "subscription"]),
+];
+
+fn words(s: &str) -> String {
+    let w: Vec<String> = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+    format!(" {} ", w.join(" "))
+}
+
+/// Keyword match against existing category names only. Best score wins, ties go to table order.
+fn keyword_category(text: &str, cats: &[Category]) -> Option<i64> {
+    let hay = words(text);
+    let mut best: Option<(usize, i64)> = None;
+    for (name, kws) in KEYWORDS {
+        let Some(cat) = cats.iter().find(|c| c.name.trim().eq_ignore_ascii_case(name)) else { continue };
+        let score = kws.iter().filter(|k| hay.contains(&words(k))).count();
+        if score > 0 && best.map_or(true, |(s, _)| score > s) {
+            best = Some((score, cat.id));
         }
     }
-    Ok(Clean { title, date, time, part, category_id: b.category_id, notes: b.notes.clone(), recurrence, })
+    best.map(|(_, id)| id)
+}
+
+fn other_category(conn: &Connection, cats: &[Category]) -> rusqlite::Result<i64> {
+    if let Some(c) = cats.iter().find(|c| c.name.trim().eq_ignore_ascii_case("other")) {
+        return Ok(c.id);
+    }
+    conn.execute("INSERT INTO categories(name,color) VALUES('Other','#8C847D')", [])?;
+    Ok(conn.last_insert_rowid())
+}
+
+async fn gemini_category(st: &AppState, key: &str, title: &str, notes: &str, cats: &[Category]) -> Option<i64> {
+    let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
+    let system = "You categorise to-do tasks. Reply with exactly one category name from the given list, copied exactly, and nothing else.";
+    let user = format!("Task title: {title}\nNotes: {}\nCategories: {}\nWhich one category fits best?", if notes.trim().is_empty() { "(none)" } else { notes.trim() }, names.join(", "));
+    match crate::briefing::gemini_raw(st, key, system, &user, 0.0, 1).await {
+        Ok(reply) => {
+            let r = reply.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == '.' || c == '*' || c.is_whitespace());
+            let hit = cats.iter().find(|c| c.name.trim().eq_ignore_ascii_case(r)).map(|c| c.id);
+            if hit.is_none() {
+                tracing::warn!("gemini category reply {r:?} not in list, using keywords");
+            }
+            hit
+        }
+        Err(e) => {
+            tracing::warn!("gemini categorisation failed, using keywords: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve the category for a task body. Never fails because of Gemini.
+async fn resolve_category(st: &AppState, spec: CatSpec, title: &str, notes: &str) -> Res<(Option<i64>, bool)> {
+    if let CatSpec::Manual(id) = spec {
+        return Ok((id, false));
+    }
+    let (cats, key) = {
+        let conn = st.db.lock().unwrap();
+        (load_categories(&conn)?, crate::settings::gemini_key(&conn))
+    };
+    let mut chosen = None;
+    if let Some(k) = key {
+        if !cats.is_empty() {
+            chosen = gemini_category(st, &k, title, notes, &cats).await;
+        }
+    }
+    if chosen.is_none() {
+        chosen = keyword_category(title, &cats).or_else(|| keyword_category(&format!("{title} {notes}"), &cats));
+    }
+    let id = match chosen {
+        Some(id) => id,
+        None => {
+            let conn = st.db.lock().unwrap();
+            // re-read in case categories changed while we were waiting
+            let cats = load_categories(&conn)?;
+            other_category(&conn, &cats)?
+        }
+    };
+    Ok((Some(id), true))
 }
 
 fn sync_checklist(conn: &Connection, task_id: i64, items: &[ChecklistIn]) -> rusqlite::Result<()> {
@@ -303,12 +416,16 @@ pub async fn get_task_h(State(st): State<AppState>, Path(id): Path<i64>) -> Res<
 }
 
 pub async fn create_task(State(st): State<AppState>, AppJson(b): AppJson<TaskIn>) -> Res<Json<Task>> {
+    let (c, spec) = {
+        let conn = st.db.lock().unwrap();
+        (clean(&conn, &b)?, parse_cat_spec(&conn, &b.category_id)?)
+    };
+    let (category_id, auto) = resolve_category(&st, spec, &c.title, &c.notes).await?;
     let conn = st.db.lock().unwrap();
-    let c = clean(&conn, &b)?;
     let rec = c.recurrence.as_ref().map(|r| serde_json::to_string(r).unwrap());
     conn.execute(
-        "INSERT INTO tasks(title,date,time,part_of_day,category_id,notes,recurrence) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![c.title, c.date, c.time, c.part, c.category_id, c.notes, rec],
+        "INSERT INTO tasks(title,date,time,part_of_day,category_id,notes,recurrence,category_auto) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![c.title, c.date, c.time, c.part, category_id, c.notes, rec, auto],
     )?;
     let id = conn.last_insert_rowid();
     sync_checklist(&conn, id, &b.checklist)?;
@@ -316,15 +433,22 @@ pub async fn create_task(State(st): State<AppState>, AppJson(b): AppJson<TaskIn>
 }
 
 pub async fn update_task(State(st): State<AppState>, Path(id): Path<i64>, AppJson(b): AppJson<TaskIn>) -> Res<Json<Task>> {
+    let (old, c, spec) = {
+        let conn = st.db.lock().unwrap();
+        let old = get_task(&conn, id).map_err(|_| AppError::not_found("task not found"))?;
+        (old, clean(&conn, &b)?, parse_cat_spec(&conn, &b.category_id)?)
+    };
+    let (category_id, auto) = resolve_category(&st, spec, &c.title, &c.notes).await?;
     let conn = st.db.lock().unwrap();
-    let old = get_task(&conn, id).map_err(|_| AppError::not_found("task not found"))?;
-    let c = clean(&conn, &b)?;
+    if get_task(&conn, id).is_err() {
+        return Err(AppError::not_found("task not found"));
+    }
     let rec = c.recurrence.as_ref().map(|r| serde_json::to_string(r).unwrap());
     // keep the rollover marker only while the date is unchanged
     let rolled = if c.date == old.date { old.rolled_from } else { None };
     conn.execute(
-        "UPDATE tasks SET title=?1,date=?2,time=?3,part_of_day=?4,category_id=?5,notes=?6,recurrence=?7,rolled_from=?8 WHERE id=?9",
-        params![c.title, c.date, c.time, c.part, c.category_id, c.notes, rec, rolled, id],
+        "UPDATE tasks SET title=?1,date=?2,time=?3,part_of_day=?4,category_id=?5,notes=?6,recurrence=?7,rolled_from=?8,category_auto=?9 WHERE id=?10",
+        params![c.title, c.date, c.time, c.part, category_id, c.notes, rec, rolled, auto, id],
     )?;
     // switching between one-off and recurring invalidates old done state
     if old.recurrence.is_some() != c.recurrence.is_some() {
