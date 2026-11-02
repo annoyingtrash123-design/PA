@@ -17,7 +17,7 @@
 ## Tabs
 
 ### Home
-- Overview of today: timed tasks in order, untimed tasks grouped by part of day, today's workout.
+- Overview of today only (no gym on Home): grounded day note, progress + next up, timed tasks in order, untimed tasks grouped by part of day.
 - "Brief me" button: AI-written, chatty spoken briefing.
 - Evening wind-down briefing: what got done, gentle preview of tomorrow.
 - Weather included in the briefing.
