@@ -2,6 +2,7 @@ mod briefing;
 mod daynote;
 mod db;
 mod error;
+mod goals;
 mod gym;
 mod seed;
 mod settings;
@@ -64,6 +65,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}", get(gym::session_get))
         .route("/api/sessions/{id}/sets", put(gym::session_sets))
         .route("/api/sessions/{id}/complete", post(gym::session_complete))
+        .route("/api/goals", get(goals::list).post(goals::create))
+        .route("/api/goals/{id}", put(goals::update).delete(goals::delete))
         .route("/api/briefing", get(briefing::briefing))
         .route("/api/day-note", get(daynote::day_note))
         .route("/api/tts", post(tts::speak))

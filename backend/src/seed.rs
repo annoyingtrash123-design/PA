@@ -172,5 +172,18 @@ fn seed(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
     set_setting(conn, "rest_taken_date", &day(-3))?;
+
+    // goals: context for the assistant
+    let goals: [(&str, &str, Option<i64>, &str); 3] = [
+        ("Get stronger: bench 80 kg by spring", "medium", Some(120), "Bench has sat around 60 kg for a while and I want to feel properly strong again."),
+        ("Stay on top of work admin", "medium", Some(75), "Replies and weekly reports done on time, so Fridays feel light instead of a scramble."),
+        ("Build a calmer, more organised routine", "long", None, "Fewer loose ends and more headspace for the people I care about."),
+    ];
+    for (title, horizon, dl, why) in goals {
+        conn.execute(
+            "INSERT INTO goals(title,horizon,deadline,why,status,created) VALUES(?1,?2,?3,?4,'active',?5)",
+            params![title, horizon, dl.map(day), why, day(0)],
+        )?;
+    }
     Ok(())
 }

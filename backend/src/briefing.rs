@@ -1,6 +1,7 @@
 use crate::daynote;
 use crate::db::{fmt_date, parse_date, today};
 use crate::error::{AppError, Res};
+use crate::goals::{self, Goal};
 use crate::gym::{self, WorkoutPlan};
 use crate::tasks::{self, Occurrence};
 use crate::weather::{self, Weather};
@@ -33,10 +34,16 @@ impl Kind {
 struct Week {
     total: usize,
     done: usize,
-    days: Vec<(String, usize, usize)>,
+    /// titles done this week (deduped, one-offs before recurring routines)
+    done_titles: Vec<String>,
+    /// planned one-off tasks that were not done
+    slid_titles: Vec<String>,
+    /// completed gym sessions (template names, in order)
     sessions: Vec<String>,
+    /// exercises whose top weight rose: (name, now, was)
     prs: Vec<(String, f64, f64)>,
-    next_total: usize,
+    /// notable things next week: (weekday, title)
+    next_items: Vec<(String, String)>,
     next_workouts: Vec<String>,
 }
 
@@ -53,6 +60,8 @@ struct Ctx {
     gym_done: Option<String>,
     tomorrow: Option<(String, Vec<Occurrence>, Option<WorkoutPlan>)>,
     week: Option<Week>,
+    goals: Vec<Goal>,
+    goals_achieved: Vec<Goal>,
 }
 
 fn count_done(items: &[Occurrence]) -> usize {
@@ -74,6 +83,8 @@ fn build_ctx(conn: &rusqlite::Connection, kind: Kind, date: NaiveDate) -> Res<Ct
         gym_done: None,
         tomorrow: None,
         week: None,
+        goals: goals::list_active(conn)?,
+        goals_achieved: vec![],
     };
     match kind {
         Kind::Morning | Kind::Evening => {
@@ -94,23 +105,43 @@ fn build_ctx(conn: &rusqlite::Connection, kind: Kind, date: NaiveDate) -> Res<Ct
             let monday = date - Duration::days(date.weekday().num_days_from_monday() as i64);
             let days = tasks::build_days(conn, monday, 14)?;
             let (this, next) = days.split_at(7);
-            let mut w = Week { total: 0, done: 0, days: vec![], sessions: vec![], prs: vec![], next_total: 0, next_workouts: vec![] };
+            let mut w = Week { total: 0, done: 0, done_titles: vec![], slid_titles: vec![], sessions: vec![], prs: vec![], next_items: vec![], next_workouts: vec![] };
+            let mut routine_done: Vec<String> = vec![];
             for d in this {
-                let (t, dn) = (d.items.len(), count_done(&d.items));
-                w.total += t;
-                w.done += dn;
-                w.days.push((d.weekday.clone(), t, dn));
+                w.total += d.items.len();
+                w.done += count_done(&d.items);
+                for o in &d.items {
+                    let list = if o.done {
+                        if o.recurring { &mut routine_done } else { &mut w.done_titles }
+                    } else if !o.recurring && parse_date(&o.date).is_some_and(|x| x < today()) {
+                        &mut w.slid_titles
+                    } else {
+                        continue;
+                    };
+                    if !list.contains(&o.title) {
+                        list.push(o.title.clone());
+                    }
+                }
+            }
+            w.slid_titles.retain(|t| !w.done_titles.contains(t));
+            for t in routine_done {
+                if !w.done_titles.contains(&t) {
+                    w.done_titles.push(t);
+                }
             }
             w.sessions = gym::sessions_between(conn, monday, monday + Duration::days(6))?.into_iter().map(|(_, n)| n).collect();
             w.prs = gym::weekly_prs(conn, monday, monday + Duration::days(6))?;
             for d in next {
-                w.next_total += d.items.len();
+                for o in d.items.iter().filter(|o| !o.recurring) {
+                    w.next_items.push((d.weekday.clone(), item_phrase(o)));
+                }
                 if let Some(p) = &d.workout {
-                    if !p.rest {
+                    if !p.rest && !w.next_workouts.contains(&p.name) {
                         w.next_workouts.push(p.name.clone());
                     }
                 }
             }
+            ctx.goals_achieved = goals::achieved_between(conn, monday, monday + Duration::days(6))?;
             ctx.week = Some(w);
         }
     }
@@ -144,8 +175,12 @@ fn limited(v: Vec<String>, max: usize) -> String {
     if v.len() <= max {
         join(&v)
     } else {
-        let extra = v.len() - max;
-        format!("{}, plus {} more", v[..max].join(", "), extra)
+        let extra = match v.len() - max {
+            1 => "one more",
+            2 => "a couple more",
+            _ => "a few more",
+        };
+        format!("{}, plus {extra}", v[..max].join(", "))
     }
 }
 
@@ -273,21 +308,25 @@ fn next_up(items: &[Occurrence], date: NaiveDate) -> Option<Occurrence> {
     undone.first().map(|o| (*o).clone())
 }
 
-/// Short grounded line about the week, used as the weekly "affirmation".
+/// Short grounded line about the week, used as the weekly "affirmation" (no numbers).
 fn week_line(w: &Week) -> String {
-    let mut s = if w.total == 0 {
-        "No tasks were planned this week".to_string()
+    let tasks: Vec<String> = w.done_titles.iter().take(2).cloned().collect();
+    if tasks.is_empty() && w.sessions.is_empty() {
+        "A quiet week, and next week is a fresh page.".into()
+    } else if !tasks.is_empty() {
+        format!("A week with {} in it, and some good momentum to carry forward.", join(&tasks))
     } else {
-        format!("{} of {} tasks done this week", w.done, w.total)
-    };
-    if let Some((wd, _, dn)) = w.days.iter().filter(|(_, _, dn)| *dn > 0).max_by_key(|(_, _, dn)| *dn) {
-        s.push_str(&format!(", with {wd} the strongest at {dn}"));
+        format!("A week with {} at the gym, and that counts for a lot.", join(&w.sessions))
     }
-    if w.next_total > 0 {
-        s.push_str(&format!(". Next week has {} on the list", w.next_total));
-    }
-    s.push('.');
-    s
+}
+
+/// The nearest active goal deadline within `days`, as a sentence fragment.
+fn near_deadline(goals: &[Goal], date: NaiveDate, days: i64) -> Option<String> {
+    goals
+        .iter()
+        .filter_map(|g| goals::days_to(g, date).filter(|n| (0..=days).contains(n)).map(|n| (n, g)))
+        .min_by_key(|(n, _)| *n)
+        .map(|(n, g)| format!("your goal, {}, is {}", goals::short_title(g), goals::away_phrase(n)))
 }
 
 // ---------------------------------------------------------------- template
@@ -326,7 +365,26 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 ));
             }
             if let Some(p) = &c.workout {
-                parts.push(workout_sentence(p, d));
+                let mut ws = workout_sentence(p, d);
+                if !p.rest {
+                    if let Some((g, _)) = goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]) {
+                        ws.push_str(&format!(" That one feeds straight into {}.", goals::goal_ref(g)));
+                    }
+                }
+                parts.push(ws);
+            }
+            // a goal link from today's tasks, if one is plausible (skip if the workout already made one)
+            if !c.workout.as_ref().is_some_and(|p| !p.rest && goals::find_link(&c.goals, &[(p.name.clone(), format!("gym workout {}", p.name))]).is_some()) {
+                let texts: Vec<(String, String)> = c.items.iter().filter(|o| !o.done).map(|o| (o.title.clone(), o.title.clone())).collect();
+                if let Some((g, task)) = goals::find_link(&c.goals, &texts) {
+                    parts.push(match d.num_days_from_ce() as usize % 2 {
+                        0 => format!("And {task} is a nice little nudge toward {}.", goals::goal_ref(g)),
+                        _ => format!("Worth knowing that {task} quietly helps with {}.", goals::goal_ref(g)),
+                    });
+                }
+            }
+            if let Some(dl) = near_deadline(&c.goals, d, 21) {
+                parts.push(format!("Also, keep in mind that {dl}."));
             }
             parts.push(match daynote::key_task(&c.items) {
                 Some(k) if !k.done => {
@@ -354,27 +412,44 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             parts.push(if total == 0 {
                 "There was nothing on your list today, so there's no pressure at all.".into()
             } else if done == total {
-                format!("You finished everything on your list today, all {total} of them. I'm honestly so proud of you.")
+                format!("You wrapped up everything on your list today, {} included. I'm honestly so proud of you.", limited(done_titles.clone(), 3))
             } else if done == 0 {
-                "The task list didn't quite happen today, and honestly, that's okay. Some days are just like that.".into()
+                match d.num_days_from_ce() as usize % 2 {
+                    0 => "The task list didn't quite happen today, and honestly, that's okay. Some days are just like that.".into(),
+                    _ => "Today was more of a slow one on the task front, and that's completely fine. Tomorrow is a fresh start.".into(),
+                }
             } else {
-                format!("You got {done} of {total} things done today, including {}. That's real progress.", limited(done_titles, 3))
+                match d.num_days_from_ce() as usize % 2 {
+                    0 => format!("You got {} sorted today. That's real progress.", limited(done_titles.clone(), 3)),
+                    _ => format!("Nice work today, with {} now off your plate.", limited(done_titles.clone(), 3)),
+                }
             });
             let left: Vec<String> = c.items.iter().filter(|o| !o.done).map(|o| o.title.clone()).collect();
             if !left.is_empty() {
                 parts.push(format!(
-                    "Still waiting on {}. Any one-off tasks will roll over to tomorrow on their own, so there's nothing to stress about.",
+                    "{} still waiting, but any one-off tasks will roll over to tomorrow on their own, so there's nothing to stress about.",
                     limited(left, 3)
                 ));
             }
+            let mut link_texts: Vec<(String, String)> = Vec::new();
             if let Some(g) = &c.gym_done {
                 parts.push(format!("And you got your {g} session in, which is fantastic."));
+                link_texts.push((format!("that {g} session"), format!("gym session {g}")));
             } else if let Some(p) = &c.workout {
                 if p.rest {
                     parts.push("Your rest day did its job too.".into());
                 } else {
                     parts.push(format!("The gym didn't happen today, and that's fine. {} will be waiting for you.", p.name));
                 }
+            }
+            link_texts.extend(done_titles.iter().map(|t| (t.clone(), t.clone())));
+            if let Some((g, what)) = goals::find_link(&c.goals, &link_texts) {
+                let gr = goals::goal_ref(g);
+                parts.push(match d.num_days_from_ce() as usize % 3 {
+                    0 => format!("{what} counts toward {gr}, by the way."),
+                    1 => format!("Quietly, {what} moved {gr} forward."),
+                    _ => format!("That's one more step toward {gr}, thanks to {what}."),
+                });
             }
             if let Some((wd, items, w)) = &c.tomorrow {
                 let mut s = if items.is_empty() {
@@ -392,6 +467,9 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 }
                 parts.push(s);
             }
+            if let Some(dl) = near_deadline(&c.goals, d, 14) {
+                parts.push(format!("One thing on the horizon: {dl}."));
+            }
             if let Some(w) = weather {
                 parts.push(format!("It ended up as {} today.", w.summary.to_lowercase()));
             }
@@ -407,50 +485,103 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
         Kind::Weekly => {
             let w = c.week.as_ref().unwrap();
             parts.push(match d.num_days_from_ce() as usize % 3 {
-                0 => format!("Hey{n}, it's {a}! It's time for our weekly look back, so settle in."),
-                1 => format!("Hi there{n}, {a} here. Let's take a moment to look at the week you just had."),
+                0 => format!("Hey{n}, it's {a}! Time for our weekly catch-up, so settle in."),
+                1 => format!("Hi there{n}, {a} here. Let's take a moment to look back at your week."),
                 _ => format!("Hi again{n}! It's {a}, and I've got your week in review."),
             });
-            if w.total == 0 {
-                parts.push("You didn't have any tasks planned this week, so it was a lighter one on the list side.".into());
+            let quiet = w.done_titles.is_empty() && w.sessions.is_empty();
+            // goal connection: first goal that relates to something done or trained
+            let mut texts: Vec<(String, String)> = Vec::new();
+            for (nm, _, _) in w.prs.iter() {
+                texts.push((format!("the progress on {nm}"), format!("{nm} gym lift")));
+            }
+            for sn in w.sessions.iter() {
+                texts.push((format!("the {sn} session"), format!("gym session {sn}")));
+            }
+            texts.extend(w.done_titles.iter().map(|t| (t.clone(), t.clone())));
+            let linked = goals::find_link(&c.goals, &texts);
+            if quiet {
+                parts.push(
+                    pick(
+                        &[
+                            "It was a quiet one this week, and that's completely okay. Some weeks are for getting through, and you got through it.",
+                            "Not much got ticked off this week, and I'm not going to make anything of that. Weeks like this happen to everyone.",
+                        ],
+                        d,
+                        37,
+                    )
+                    .into(),
+                );
             } else {
-                let pct = w.done * 100 / w.total;
-                let react = if pct >= 80 {
-                    "That's a seriously strong week."
-                } else if pct >= 50 {
-                    "That's a solid week, and you should feel good about it."
-                } else {
-                    "It was a lighter week, and that's totally fine. Not every week has to look the same."
-                };
-                parts.push(format!("This week you completed {} of {} tasks, which is {pct} percent. {react}", w.done, w.total));
-                if let Some((wd, t, dn)) = w.days.iter().filter(|(_, _, dn)| *dn > 0).max_by_key(|(_, _, dn)| *dn) {
-                    parts.push(format!("{wd} was your best day, with {dn} of {t} checked off."));
+                // 2-3 highlights, goal-linked ones first
+                let mut titles: Vec<String> = w.done_titles.clone();
+                if let Some((_, t)) = &linked {
+                    if let Some(i) = titles.iter().position(|x| x == t) {
+                        let x = titles.remove(i);
+                        titles.insert(0, x);
+                    }
+                }
+                let mut hl: Vec<String> = vec![];
+                if !titles.is_empty() {
+                    let take: Vec<String> = titles.iter().take(if w.sessions.is_empty() { 3 } else { 2 }).cloned().collect();
+                    hl.push(format!("got {} done", join(&take)));
+                }
+                if !w.sessions.is_empty() {
+                    let mut names: Vec<String> = vec![];
+                    for x in &w.sessions {
+                        if !names.contains(x) {
+                            names.push(x.clone());
+                        }
+                    }
+                    hl.push(format!("made it to the gym for {}", join(&names)));
+                }
+                if let Some((nm, now, was)) = w.prs.first() {
+                    hl.push(format!("moved {nm} up from {} to {} kilos", gym::fmt_w(*was), gym::fmt_w(*now)));
+                }
+                hl.truncate(3);
+                let lead = pick(&["The bits that stood out: you", "Looking back, you", "A few things I loved: you"], d, 41);
+                parts.push(format!("{lead} {}. That's a good week's work.", join(&hl)));
+                if let Some((g, what)) = &linked {
+                    let gr = goals::goal_ref(g);
+                    parts.push(match d.num_days_from_ce() as usize % 2 {
+                        0 => format!("And it all counts, because {what} ties right into {gr}."),
+                        _ => format!("That's real movement on {gr}, with {what} leading the way."),
+                    });
                 }
             }
-            let ns = w.sessions.len();
-            if ns == 0 {
-                parts.push("There were no gym sessions this week, and that's okay. A fresh start is always just one workout away.".into());
-            } else {
+            for g in &c.goals_achieved {
+                parts.push(format!("And you actually hit a goal this week: {}. That deserves a proper moment.", goals::short_title(g)));
+            }
+            if !w.slid_titles.is_empty() {
+                let v: Vec<String> = w.slid_titles.iter().take(2).cloned().collect();
                 parts.push(format!(
-                    "In the gym, you got {ns} session{} in: {}. {}",
-                    if ns == 1 { "" } else { "s" },
-                    join(&w.sessions),
-                    if ns >= 3 { "That's real consistency." } else { "Every session counts." }
+                    "{} slid a little, and that's absolutely fine. Those can simply carry into next week, no guilt.",
+                    join(&v)
                 ));
             }
-            if !w.prs.is_empty() {
-                let v: Vec<String> =
-                    w.prs.iter().take(3).map(|(n, now, was)| format!("{n} went from {} to {} kilos", gym::fmt_w(*was), gym::fmt_w(*now))).collect();
-                parts.push(format!("And for progress, {}. Look at you go.", join(&v)));
+            // next week
+            let mut ahead: Vec<String> = vec![];
+            if !w.next_items.is_empty() {
+                let v: Vec<String> = w.next_items.iter().take(3).map(|(wd, t)| format!("{t} on {wd}")).collect();
+                ahead.push(format!("Looking ahead to next week, you've got {}.", limited(v, 3)));
+            } else {
+                ahead.push("Next week is looking pleasantly open so far.".into());
             }
-            let mut ahead = format!("Looking ahead to next week, you've got {} task{} on the books", w.next_total, if w.next_total == 1 { "" } else { "s" });
-            if !w.next_workouts.is_empty() {
-                ahead.push_str(&format!(", and workouts coming up: {}", limited(w.next_workouts.clone(), 4)));
+            if let Some(first) = w.next_workouts.first() {
+                ahead.push(format!("In the gym, {first} is first up."));
             }
-            ahead.push('.');
-            parts.push(ahead);
-            parts.push(week_line(w));
-            parts.push(pick(&["Enjoy the rest of your weekend.", "I'm right here whenever you need me."], d, 31).into());
+            parts.push(ahead.join(" "));
+            if let Some(dl) = near_deadline(&c.goals, d, 60) {
+                parts.push(format!("Worth a thought: {dl}, so keep it gently on your radar."));
+            } else if linked.is_none() {
+                if let Some(g) = c.goals.first() {
+                    parts.push(format!("And I'm keeping {}, in the back of my mind for you.", goals::goal_ref(g)));
+                }
+            }
+            parts.push(match w.next_items.first() {
+                Some((wd, t)) if !quiet => format!("{} The first thing to watch for is {t} on {wd}.", pick(&["Enjoy what's left of your weekend.", "Rest up before the week begins."], d, 31)),
+                _ => pick(&["Enjoy the rest of your weekend. I'm right here whenever you need me.", "Take it easy, and I'll see you at the start of the week."], d, 31).into(),
+            });
         }
     }
     parts.join(" ")
@@ -458,21 +589,26 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
 
 // ------------------------------------------------------------------ gemini
 
+const TONE: &str = "TONE: you are a warm, chatty best friend who is also a really good personal assistant and genuinely knows this person. Sound natural and human, with contractions and a bit of personality, never like a report. \
+NEVER read out raw counts, fractions, percentages or tallies: no '0 of 24 tasks', no 'six tasks', no '50 percent', no lists of numbers. Small natural quantities like 'a couple of things' or 'a few' are fine, but prefer naming the specific things (task titles, workout names, exercises) that were done or are coming up. \
+Be kind and low-key about quiet days or weeks: no guilt, no stats, no pressure. \
+GOALS: when active goals are given, connect specific completed or planned tasks and gym sessions to a goal, but ONLY where they plausibly relate (never force a link, and it is fine to mention no goal at all). Mention an approaching goal deadline naturally when it is relevant and fairly close, saying it like a person would ('that's a few weeks away now'), not as a date dump.";
+
 fn system_prompt(c: &Ctx) -> String {
     let words = match c.kind {
         Kind::Weekly => "between 200 and 300 words",
         _ => "between 120 and 220 words",
     };
     let focus = match c.kind {
-        Kind::Morning => "This is the MORNING briefing. Greet them, mention the weather if given, walk through the day in order (naturally mentioning times for timed tasks and the part of day for untimed ones), mention today's workout and any progression hint, and end with one grounded, specific closing line, such as the key task to start with. Never use generic affirmations or cliches like 'you\'ve got this'.",
-        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, give a gentle look at tomorrow, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
-        Kind::Weekly => "This is the WEEKLY review, read on Sunday. Summarise tasks completed over the Monday to Sunday week, the gym sessions, any progress highlights, then look ahead to next week, and end with one short grounded line about the week. No generic affirmations or cliches.",
+        Kind::Morning => "This is the MORNING briefing. Greet them, mention the weather if given, walk through the day in order (naturally mentioning times for timed tasks and the part of day for untimed ones), mention today's workout and any progression hint, tie today's tasks or workout to a relevant goal where it genuinely fits, and end with one grounded, specific closing line, such as the key task to start with. Never use generic affirmations or cliches like 'you\'ve got this'.",
+        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
+        Kind::Weekly => "This is the WEEKLY overview, read on Sunday. Open warmly. Pick two or three specific highlights that were actually done (task titles, gym sessions by name, and any exercise progressions) and connect them to the goals where they plausibly relate. Gently mention anything that slid, without guilt. Look ahead to the notable things next week and to any goal deadline coming up. Close with one short grounded line. If nothing much was done, be kind and low-key, give no stats, and focus on the week ahead and the goals. Do not list every task and never quote totals. No generic affirmations or cliches.",
     };
     format!(
-        "You are {a}, the user's warm, upbeat best friend and personal assistant. You are writing a script that will be read aloud by a text-to-speech voice, so write exactly how a chatty, caring friend would talk.\n\
+        "You are {a}, the user's personal assistant and friend. You are writing a script that will be read aloud by a text-to-speech voice, so write exactly how a chatty, caring friend would talk.\n\
          Rules: plain spoken sentences only. No markdown, no asterisks, no headings, no bullet points, no numbered lists, no emojis, no stage directions, no quotation marks around the whole text. \
          Say times naturally, like 'at seven thirty in the morning' or 'at 3 PM'. Say 'kilos' instead of 'kg'. Weather temperatures are in Celsius and should be said as degrees. \
-         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{focus}",
+         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{TONE}\n{focus}",
         a = c.assistant
     )
 }
@@ -519,7 +655,7 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
     };
     match c.kind {
         Kind::Morning | Kind::Evening => {
-            s.push_str(&format!("Today's items in order (done {} of {}):\n{}", count_done(&c.items), c.items.len(), list(&c.items)));
+            s.push_str(&format!("Today's items in order (each flagged done or not; do not quote totals):\n{}", list(&c.items)));
             match (&c.workout, &c.gym_done) {
                 (_, Some(g)) => s.push_str(&format!("Workout: completed {g} today\n")),
                 (Some(p), None) => s.push_str(&format!("Workout today: {}\n", plan(p))),
@@ -534,17 +670,19 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
         }
         Kind::Weekly => {
             let w = c.week.as_ref().unwrap();
-            s.push_str(&format!("Tasks this week (Mon-Sun): {} done out of {}\n", w.done, w.total));
-            for (wd, t, d) in &w.days {
-                s.push_str(&format!("  - {wd}: {d} of {t}\n"));
-            }
-            s.push_str(&format!("Gym sessions completed: {}{}\n", w.sessions.len(), if w.sessions.is_empty() { String::new() } else { format!(" ({})", w.sessions.join(", ")) }));
+            let vl = |v: &[String]| if v.is_empty() { "nothing notable".to_string() } else { v.join("; ") };
+            s.push_str(&format!("Things done this week (Mon-Sun): {}\n", vl(&w.done_titles)));
+            s.push_str(&format!("Planned but slid, not done (mention gently, no guilt): {}\n", vl(&w.slid_titles)));
+            s.push_str(&format!("Gym sessions completed this week: {}\n", vl(&w.sessions)));
             for (n, now, was) in &w.prs {
-                s.push_str(&format!("Progress: {n} top weight up from {} to {} kilos\n", gym::fmt_w(*was), gym::fmt_w(*now)));
+                s.push_str(&format!("Progression: {n} top weight went up from {} to {} kilos\n", gym::fmt_w(*was), gym::fmt_w(*now)));
             }
-            s.push_str(&format!("Next week: {} tasks scheduled; workouts: {}\n", w.next_total, if w.next_workouts.is_empty() { "none planned".into() } else { w.next_workouts.join(", ") }));
+            let next: Vec<String> = w.next_items.iter().map(|(wd, t)| format!("{t} on {wd}")).collect();
+            s.push_str(&format!("Next week's notable things: {}\n", vl(&next)));
+            s.push_str(&format!("Next week's workouts: {}\n", if w.next_workouts.is_empty() { "none planned".into() } else { w.next_workouts.join(", ") }));
         }
     }
+    s.push_str(&goals::context_block(&c.goals, &c.goals_achieved, c.date));
     s
 }
 
@@ -565,11 +703,7 @@ fn clean_script(raw: &str) -> String {
     lines.join(" ")
 }
 
-pub async fn gemini(st: &AppState, key: &str, system: &str, user: &str) -> Result<String, String> {
-    gemini_raw(st, key, system, user, 0.9, 60).await
-}
-
-/// Like `gemini`, with a configurable temperature and minimum reply length (short answers allowed).
+/// Raw Gemini call with a configurable temperature and minimum reply length.
 pub async fn gemini_raw(st: &AppState, key: &str, system: &str, user: &str, temperature: f64, min_len: usize) -> Result<String, String> {
     let model = std::env::var("GEMINI_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "gemini-2.5-flash".into());
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
@@ -601,6 +735,33 @@ pub async fn gemini_raw(st: &AppState, key: &str, system: &str, user: &str, temp
         return Err("gemini returned too little text".into());
     }
     Ok(text)
+}
+
+/// True when the text reads out a count, fraction or percentage ("3 of 5", "7 out of 10", "percent", "%").
+pub fn has_stats(t: &str) -> bool {
+    if t.contains('%') || t.to_lowercase().contains("percent") {
+        return true;
+    }
+    let w: Vec<String> = t.split_whitespace().map(|x| x.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).collect();
+    let num = |x: &str| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit());
+    (0..w.len()).any(|i| {
+        num(&w[i]) && ((w.get(i + 1).is_some_and(|x| x == "of") && w.get(i + 2).is_some_and(|x| num(x)))
+            || (w.get(i + 1).is_some_and(|x| x == "out") && w.get(i + 2).is_some_and(|x| x == "of") && w.get(i + 3).is_some_and(|x| num(x))))
+    })
+}
+
+/// Gemini call with the no-stats guard: retries once with a stricter reminder, then errors (caller uses the template).
+pub async fn gemini_guarded(st: &AppState, key: &str, system: &str, user: &str, temperature: f64, min_len: usize) -> Result<String, String> {
+    let t = gemini_raw(st, key, system, user, temperature, min_len).await?;
+    if !has_stats(&t) {
+        return Ok(t);
+    }
+    tracing::warn!("gemini output contained counts/percentages, retrying once");
+    let strict = format!(
+        "{system}\nSTRICT REMINDER: your previous draft read out a count, fraction or percentage. Do NOT write anything like '3 of 5', '2 out of 7', 'percent' or a percent sign. Instead name the specific things (task titles, workouts) and use words like 'a couple' or 'a few'."
+    );
+    let t2 = gemini_raw(st, key, &strict, user, temperature, min_len).await?;
+    if has_stats(&t2) { Err("gemini still produced counts or percentages".into()) } else { Ok(t2) }
 }
 
 // ----------------------------------------------------------------- handler
@@ -645,7 +806,7 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
     // `ai=false` skips Gemini (used by the home screen to fetch weather/affirmation without spending quota)
     let use_ai = q.get("ai").map(|v| v != "false" && v != "0").unwrap_or(true);
     if let (true, Some(key)) = (use_ai, &ctx.key) {
-        match gemini(&st, key, &system_prompt(&ctx), &context_text(&ctx, &weather)).await {
+        match gemini_guarded(&st, key, &system_prompt(&ctx), &context_text(&ctx, &weather), 0.9, 60).await {
             Ok(t) => {
                 text = Some(t);
                 source = "gemini";
@@ -664,4 +825,18 @@ pub async fn briefing(State(st): State<AppState>, Query(q): Query<HashMap<String
         None => Stats { total: ctx.items.len(), done: count_done(&ctx.items), next_up: next_up(&ctx.items, date) },
     };
     Ok(Json(BriefingOut { kind: kind.name(), date: fmt_date(date), text, source, weather, affirmation, stats }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_stats;
+    #[test]
+    fn stats_guard() {
+        assert!(has_stats("You did 3 of 5 things."));
+        assert!(has_stats("That is 7 out of 10, nice."));
+        assert!(has_stats("About 50 percent done"));
+        assert!(has_stats("80% there"));
+        assert!(!has_stats("You lifted 62.5 kilos and did a couple of things."));
+        assert!(!has_stats("Bench went from 60 to 62.5 kilos, one of the best."));
+    }
 }

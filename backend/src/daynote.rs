@@ -3,6 +3,7 @@
 use crate::briefing;
 use crate::db::{fmt_date, parse_date, today};
 use crate::error::{AppError, Res};
+use crate::goals::{self, Goal};
 use crate::tasks::{self, Occurrence};
 use crate::{settings, AppState};
 use axum::extract::{Query, State};
@@ -59,9 +60,16 @@ fn part_idx(o: &Occurrence) -> Option<usize> {
     PARTS.iter().position(|p| *p == o.part_of_day)
 }
 
-fn num(n: usize) -> String {
-    const W: [&str; 13] = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-    W.get(n).map(|s| s.to_string()).unwrap_or_else(|| n.to_string())
+/// Vague, human quantity: never a raw count.
+fn qty(n: usize) -> &'static str {
+    match n {
+        0 => "nothing",
+        1 => "one thing",
+        2 => "a couple of things",
+        3..=4 => "a few things",
+        5..=6 => "quite a few things",
+        _ => "a lot of things",
+    }
 }
 
 fn cap(s: &str) -> String {
@@ -116,7 +124,23 @@ fn idx(d: NaiveDate, salt: u64, len: usize) -> usize {
     ((h >> 33) as usize) % len
 }
 
-pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
+pub fn template_note(items: &[Occurrence], d: NaiveDate, goals: &[Goal]) -> String {
+    let mut t = template_core(items, d);
+    // tie the day to a goal only when a pending task plausibly relates
+    let texts: Vec<(String, String)> = items.iter().filter(|o| !o.done).map(|o| (o.title.clone(), o.title.clone())).collect();
+    if let Some((g, task)) = goals::find_link(goals, &texts) {
+        let gr = goals::goal_ref(g);
+        let tail = match idx(d, 41, 3) {
+            0 => format!(" {task} is a small step toward {gr}."),
+            1 => format!(" Handy, since {task} feeds into {gr}."),
+            _ => format!(" {task} counts toward {gr}."),
+        };
+        t.push_str(&tail);
+    }
+    t
+}
+
+fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
     let total = items.len();
     let done = items.iter().filter(|o| o.done).count();
     let v = |opts: Vec<String>| -> String { opts[idx(d, total as u64 + 3, opts.len())].clone() };
@@ -130,10 +154,9 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
     }
     let key = key_task(items).unwrap();
     if done == total {
-        let n = if total == 1 { "the one thing on the list is".to_string() } else { format!("all {} things are", num(total)) };
         return v(vec![
-            format!("Everything is already done: {n} ticked off, {} included. The rest of the day is yours.", key.title),
-            format!("The list is clear, with {n} done, including {}. Anything else today is a bonus.", key.title),
+            format!("Everything on the list is already ticked off, {} included. The rest of the day is yours.", key.title),
+            format!("The list is clear, {} and all. Anything else today is a bonus.", key.title),
         ]);
     }
 
@@ -148,7 +171,6 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
     let kp = phrase(key);
     let second = second_task(items, key);
     let then_second = second.map(|s| format!(" Then {}.", phrase(s))).unwrap_or_default();
-    let n = num(total);
     // the first part of the day with nothing in it, for a breather
     let gap = PARTS.iter().enumerate().find(|(i, _)| parts[*i] == 0).map(|(_, p)| *p);
     let (busiest, bmax) = parts.iter().enumerate().max_by_key(|(i, c)| (**c, std::cmp::Reverse(*i))).map(|(i, c)| (i, *c)).unwrap();
@@ -156,31 +178,32 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
     if total >= 6 {
         let where_ = if anytime > bmax { "most of it has no set time".to_string() } else { format!("the {} carries the most", PARTS[busiest]) };
         return v(vec![
-            format!("A packed day: {n} things, and {where_}. Start with {kp}, and take a proper break between stretches rather than pushing straight through."),
-            format!("{} things on the list today, and {where_}. Begin with {kp}, then pace it: a real break halfway beats a rushed finish.", cap(&n)),
+            format!("A full day, and {where_}. The one to watch is {kp}. Take a proper break between stretches rather than pushing straight through."),
+            format!("There's quite a bit on today, and {where_}. Begin with {kp}, then pace it: a real break halfway beats a rushed finish."),
         ]);
     }
     if total <= 2 {
         return if total == 1 {
             v(vec![
                 format!("A light day with just one thing: {kp}. Get it out of the way early and the rest of the day is yours."),
-                format!("Only one thing on the list today, {kp}. Do it when it suits you and spend the spare time on something you chose."),
+                format!("Only {kp} on the list today. Do it when it suits you and spend the spare time on something you chose."),
             ])
         } else {
             let s = second.map(|s| s.title.clone()).unwrap_or_default();
             v(vec![
-                format!("A light day with two things, {} and {s}. Plenty of slack, so leave room for a proper break.", key.title),
-                format!("Just two things today: {kp}, then {s}. That leaves most of the day free, so use it deliberately."),
+                format!("A light day, with {} and {s}. Plenty of slack, so leave room for a proper break.", key.title),
+                format!("Just {kp}, then {s}. That leaves most of the day free, so use it deliberately."),
             ])
         };
     }
     if bmax >= 3 && bmax * 2 >= total {
+        let q = qty(bmax);
         return match busiest {
             0 => {
                 let tail = if parts[1] + parts[2] + anytime == 0 { "after that the day is clear" } else { "after that it eases off" };
                 v(vec![
-                    format!("{} things land in the morning, and {tail}. Start with {kp} and the rest of the day gets lighter.", cap(&num(bmax))),
-                    format!("The morning is the busy stretch, with {} things in it; {tail}. Begin with {kp} and keep the afternoon for yourself.", num(bmax)),
+                    format!("{} land in the morning, and {tail}. Start with {kp} and the rest of the day gets lighter.", cap(q)),
+                    format!("The morning is the busy stretch; {tail}. Begin with {kp} and keep the afternoon for yourself."),
                 ])
             }
             1 => {
@@ -191,13 +214,13 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
                     format!("Get {} done in the morning so the afternoon only has to be the afternoon.", m.title)
                 };
                 v(vec![
-                    format!("The afternoon is where the day gets busy, with {} things including {kp}. {lead}", num(bmax)),
-                    format!("{} things stack up in the afternoon, {kp} among them. {lead}", cap(&num(bmax))),
+                    format!("The afternoon is where the day gets busy, {kp} among it. {lead}"),
+                    format!("{} stack up in the afternoon, {kp} among them. {lead}", cap(q)),
                 ])
             }
             _ => v(vec![
-                format!("The evening carries the load, with {} things including {kp}. The daytime is lighter, so move anything flexible earlier.", num(bmax)),
-                format!("{} things wait until the evening, {kp} among them. Do what you can earlier in the day so tonight isn't a scramble.", cap(&num(bmax))),
+                format!("The evening carries the load, {kp} included. The daytime is lighter, so move anything flexible earlier."),
+                format!("{} wait until the evening, {kp} among them. Do what you can earlier so tonight isn't a scramble.", cap(q)),
             ]),
         };
     }
@@ -207,8 +230,8 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
         None => "Leave a gap between items for a breather.".into(),
     };
     v(vec![
-        format!("{} things today, spread across the day. Start with {kp}.{then_second} {breather}", cap(&n)),
-        format!("A steady day of {n} things, nothing crowded. {kp} is the anchor, so begin there. {breather}"),
+        format!("A steady day, spread out nicely. Start with {kp}.{then_second} {breather}"),
+        format!("Nothing crowded today. {kp} is the anchor, so begin there. {breather}"),
     ])
 }
 
@@ -216,13 +239,14 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate) -> String {
 
 const SYSTEM: &str = "You write a single short note shown on the home screen of a personal planner app, about ONE specific day. \
 Output 1 to 2 sentences, at most 40 words, plain text. No markdown, no emojis, no quotation marks, no lists. \
-Be grounded, specific and practical, warm but not soppy. It must reflect the real shape of the day using only the facts given: \
-how many things there are, when the busy stretch is, the key task (name it), and where there is a breather or slack. Offer one practical angle, such as what to do first. \
+Sound like a chatty, warm friend who knows the person, not a report. Be grounded and specific: name the key task, say roughly where the busy stretch is, and where there is a breather or slack. \
+NEVER state raw counts, fractions or percentages (no '5 tasks', 'three things', '0 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few' are fine, but naming the actual tasks is better. \
+If one of the goals given plausibly relates to a task today, you may tie them together in a few words; never force a link, and mention a goal deadline only if it is close and relevant. \
 Never use clichés or generic affirmations like 'you've got this', 'believe in yourself', 'one step at a time' or 'you are enough'. \
 Do not mention the gym or workouts. Do not invent tasks, times or numbers. Output only the note.";
 
-fn gemini_context(items: &[Occurrence], d: NaiveDate) -> String {
-    let mut s = format!("Date: {}, {}\nNumber of items: {}\nItems in order:\n", tasks::weekday_name(d), d.format("%B %-d"), items.len());
+fn gemini_context(items: &[Occurrence], d: NaiveDate, goals: &[Goal]) -> String {
+    let mut s = format!("Date: {}, {}\nItems in order:\n", tasks::weekday_name(d), d.format("%B %-d"));
     let mut parts = [0usize; 3];
     for o in items {
         let when = match &o.time {
@@ -234,10 +258,15 @@ fn gemini_context(items: &[Occurrence], d: NaiveDate) -> String {
         }
         s.push_str(&format!("  - {} ({when})\n", o.title));
     }
-    s.push_str(&format!("Items per part of day: morning {}, afternoon {}, evening {}\n", parts[0], parts[1], parts[2]));
+    let busiest = (0..3).max_by_key(|i| (parts[*i], std::cmp::Reverse(*i))).unwrap();
+    s.push_str(&format!("Busiest part of the day: {} (do not quote numbers)\n", PARTS[busiest]));
+    if let Some(g) = PARTS.iter().enumerate().find(|(i, _)| parts[*i] == 0) {
+        s.push_str(&format!("Quiet part of the day: {}\n", g.1));
+    }
     if let Some(k) = key_task(items) {
         s.push_str(&format!("Suggested key task to name: {}\n", phrase(k)));
     }
+    s.push_str(&goals::context_block(goals, &[], d));
     s
 }
 
@@ -251,16 +280,16 @@ fn acceptable(t: &str) -> bool {
 /// The day note for `date`. `use_ai=false` never calls Gemini (a cached Gemini note is still used).
 pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(String, &'static str)> {
     let ds = fmt_date(date);
-    let (items, key) = {
+    let (items, key, goals) = {
         let conn = st.db.lock().unwrap();
         let mut days = tasks::build_days(&conn, date, 1)?;
-        (days.remove(0).items, settings::gemini_key(&conn))
+        (days.remove(0).items, settings::gemini_key(&conn), goals::list_active(&conn)?)
     };
     let all_done = !items.is_empty() && items.iter().all(|o| o.done);
     if items.is_empty() || all_done {
-        return Ok((template_note(&items, date), "template"));
+        return Ok((template_note(&items, date, &goals), "template"));
     }
-    let hash = plan_hash(&items);
+    let hash = format!("{}{:08x}", plan_hash(&items), goals::fingerprint(&goals, date).bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)));
     {
         let conn = st.db.lock().unwrap();
         if let Some(t) = cache_get(&conn, &ds, &hash) {
@@ -268,7 +297,7 @@ pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(Stri
         }
     }
     if let (true, Some(key)) = (use_ai, key) {
-        match briefing::gemini(st, &key, SYSTEM, &gemini_context(&items, date)).await {
+        match briefing::gemini_guarded(st, &key, SYSTEM, &gemini_context(&items, date, &goals), 0.9, 60).await {
             Ok(t) if acceptable(&t) => {
                 let conn = st.db.lock().unwrap();
                 cache_put(&conn, &ds, &hash, &t);
@@ -278,7 +307,7 @@ pub async fn note_for(st: &AppState, date: NaiveDate, use_ai: bool) -> Res<(Stri
             Err(e) => tracing::warn!("gemini day note failed, using template: {e}"),
         }
     }
-    Ok((template_note(&items, date), "template"))
+    Ok((template_note(&items, date, &goals), "template"))
 }
 
 #[derive(Serialize)]

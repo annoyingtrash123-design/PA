@@ -10,6 +10,7 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL").ok();
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::daynote::CREATE_TABLE)?;
+    conn.execute_batch(crate::goals::CREATE_TABLE)?;
     // migrate databases created before category_auto existed
     let has_col: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('tasks') WHERE name='category_auto'")?
