@@ -42,20 +42,21 @@ class ReviewView(BaseView):
             out.append(ft.Row([ft.OutlinedButton("This week", icon=ft.Icons.TODAY, on_click=lambda e: self.go(reset=True),
                                                  style=ft.ButtonStyle(color=T.LAV, shape=ft.StadiumBorder()))],
                               alignment=ft.MainAxisAlignment.CENTER))
-        total = sum(len(d["items"]) for d in days)
-        done = sum(1 for d in days for o in d["items"] if o["done"])
-        stats = b.get("stats") or {}
-        tiles = [self._tile("Tasks done", f"{done}/{total}", ft.Icons.CHECK_CIRCLE_OUTLINE)]
-        if "gym_sessions" in stats:
-            tiles.append(self._tile("Gym sessions", str(stats["gym_sessions"]), ft.Icons.FITNESS_CENTER))
-        out.append(ft.Row(tiles, spacing=10))
-        out.append(self._bars(days))
         out.append(card(ft.Column([
             ft.Row([ft.Icon(ft.Icons.INSIGHTS, color=T.LAV, size=20), heading("Overview of the week", 16)], spacing=8),
             ft.Text(self.text, size=15, color=T.TEXT, selectable=True),
             ft.FilledButton("Read it to me", icon=ft.Icons.VOLUME_UP, on_click=self._read,
                             style=ft.ButtonStyle(shape=ft.StadiumBorder(), bgcolor=T.LAV, color=T.ON_ACCENT)),
             self.player], spacing=12)))
+        total = sum(len(d["items"]) for d in days)
+        done = sum(1 for d in days for o in d["items"] if o["done"])
+        stats = b.get("stats") or {}
+        tiles = [self._tile("Tasks done", f"{done}/{total}", ft.Icons.CHECK_CIRCLE_OUTLINE)]
+        if "gym_sessions" in stats:
+            tiles.append(self._tile("Gym sessions", str(stats["gym_sessions"]), ft.Icons.FITNESS_CENTER))
+        out.append(muted("At a glance", 12))
+        out.append(ft.Row(tiles, spacing=10))
+        out.append(self._bars(days))
         return out
 
     def _tile(self, label, value, icon):

@@ -18,25 +18,43 @@ S = {
                  "location_name": "London", "latitude": 51.5072, "longitude": -0.1276,
                  "gemini_api_key_set": False},
     "categories": [
-        {"id": 1, "name": "Health", "color": "#4CAF50"},
-        {"id": 2, "name": "Home", "color": "#F59E0B"},
-        {"id": 3, "name": "Work", "color": "#5C6BC0"},
-        {"id": 4, "name": "Personal", "color": "#EC6A5C"},
+        {"id": 1, "name": "Chores", "color": "#A1887F"},
+        {"id": 2, "name": "Exercise", "color": "#6BAA75"},
+        {"id": 3, "name": "Study", "color": "#9575CD"},
+        {"id": 4, "name": "Work", "color": "#5C6BC0"},
+        {"id": 5, "name": "Errands", "color": "#E8B931"},
+        {"id": 6, "name": "Appointments", "color": "#4FA3D1"},
+        {"id": 7, "name": "Social", "color": "#D5679B"},
+        {"id": 8, "name": "Self-care", "color": "#26A69A"},
+        {"id": 9, "name": "Admin & Money", "color": "#78909C"},
+        {"id": 10, "name": "Other", "color": "#B5ABA3"},
     ],
     "tasks": [
         {"id": 1, "title": "Morning routine", "date": None, "time": "07:30", "part_of_day": "morning",
-         "category_id": 1, "notes": "", "recurrence": {"kind": "daily"},
+         "category_id": 8, "notes": "", "recurrence": {"kind": "daily"},
          "checklist": [{"id": 5, "text": "Make bed"}, {"id": 6, "text": "Stretch 5 min"}, {"id": 7, "text": "Vitamins"}]},
         {"id": 2, "title": "Team stand-up", "date": None, "time": "10:00", "part_of_day": "morning",
-         "category_id": 3, "notes": "", "recurrence": {"kind": "weekdays"}, "checklist": []},
+         "category_id": 4, "notes": "", "recurrence": {"kind": "weekdays"}, "checklist": []},
         {"id": 3, "title": "Call mum", "date": iso(TODAY), "time": None, "part_of_day": "evening",
-         "category_id": 4, "notes": "Ask about the trip", "recurrence": None, "checklist": []},
+         "category_id": 7, "notes": "Ask about the trip", "recurrence": None, "checklist": []},
         {"id": 4, "title": "Water the plants", "date": iso(TODAY - timedelta(days=1)), "time": None,
-         "part_of_day": "anytime", "category_id": 2, "notes": "", "recurrence": None, "checklist": []},
+         "part_of_day": "anytime", "category_id": 1, "notes": "", "recurrence": None, "checklist": []},
         {"id": 8, "title": "Buy groceries", "date": iso(TODAY), "time": "17:30", "part_of_day": "evening",
-         "category_id": 2, "notes": "", "recurrence": None, "checklist": []},
+         "category_id": 5, "notes": "", "recurrence": None, "checklist": []},
         {"id": 9, "title": "Laundry", "date": None, "time": None, "part_of_day": "afternoon",
-         "category_id": 2, "notes": "", "recurrence": {"kind": "weekly", "days": [5]}, "checklist": []},
+         "category_id": 1, "notes": "", "recurrence": {"kind": "weekly", "days": [5]}, "checklist": []},
+    ],
+    "goals": [
+        {"id": 31, "title": "Pass my driving test", "horizon": "medium", "deadline": iso(date(2027, 3, 1)),
+         "why": "Freedom to visit family without relying on lifts", "status": "active", "achieved_on": None, "created": iso(TODAY)},
+        {"id": 32, "title": "Run a half marathon", "horizon": "medium", "deadline": None,
+         "why": "", "status": "active", "achieved_on": None, "created": iso(TODAY)},
+        {"id": 33, "title": "Build a year of savings", "horizon": "long", "deadline": iso(date(2029, 6, 30)),
+         "why": "Feeling safe and able to say yes to the things I care about", "status": "active", "achieved_on": None, "created": iso(TODAY)},
+        {"id": 34, "title": "Finish the online course", "horizon": "medium", "deadline": "2026-09-15",
+         "why": "Proof to myself I can stick with something", "status": "achieved", "achieved_on": "2026-09-10", "created": "2026-05-01"},
+        {"id": 35, "title": "Learn to knit", "horizon": "long", "deadline": None, "why": "", "status": "archived",
+         "achieved_on": None, "created": "2026-04-01"},
     ],
     "done": {},  # (task_id, date) -> bool
     "ck_done": {},  # (task_id, date, item_id) -> bool
@@ -59,6 +77,19 @@ S = {
 }
 # history: (exercise_id) -> list of {date, sets}
 HIST = {1: [(iso(TODAY - timedelta(days=d)), w) for d, w in [(28, 52.5), (21, 55), (14, 57.5), (7, 60), (3, 60)]]}
+
+
+KEYWORDS = [("Exercise", ["gym", "run", "workout", "walk", "yoga", "swim"]), ("Study", ["study", "revise", "course", "homework", "read"]),
+            ("Work", ["meeting", "email", "stand-up", "report", "work", "client"]), ("Errands", ["buy", "groceries", "shop", "post", "collect"]),
+            ("Appointments", ["dentist", "doctor", "appointment", "haircut"]), ("Social", ["call", "friend", "dinner", "party", "mum", "dad"]),
+            ("Self-care", ["meditate", "bath", "sleep", "skincare", "journal"]), ("Admin & Money", ["bill", "tax", "budget", "invoice", "bank", "insurance"]),
+            ("Chores", ["laundry", "clean", "dishes", "tidy", "vacuum", "plants", "bins", "wash"])]
+
+
+def auto_category(t):
+    text = f"{t.get('title', '')} {t.get('notes', '')}".lower()
+    name = next((n for n, kws in KEYWORDS if any(k in text for k in kws)), "Other")
+    return next(c["id"] for c in S["categories"] if c["name"] == name)
 
 
 def nid():
@@ -233,7 +264,19 @@ class H(BaseHTTPRequestHandler):
                 t.setdefault("date", None); t.setdefault("time", None); t.setdefault("recurrence", None)
                 t["checklist"] = [{"id": c.get("id") or nid(), "text": c["text"]} for c in t.get("checklist", [])]
                 t.setdefault("notes", ""); t.setdefault("category_id", None); t.setdefault("part_of_day", "anytime")
+                if t["category_id"] == "auto":
+                    t["category_id"] = auto_category(t); t["category_auto"] = True
+                else:
+                    t["category_auto"] = False
             return self.crud("tasks", m, parts, b, build)
+        if r0 == "goals":
+            def gbuild(g):
+                g.setdefault("deadline", None); g.setdefault("why", ""); g.setdefault("status", "active")
+                g.setdefault("created", iso(TODAY)); g.setdefault("achieved_on", None)
+            res = self.crud("goals", m, parts, b, gbuild)
+            if m == "GET" and len(parts) == 1:
+                res = sorted(res, key=lambda g: g["status"] != "active")
+            return res
         if r0 == "days":
             start = date.fromisoformat(q["start"]); n = int(q.get("days", 7))
             return [day(start + timedelta(days=i)) for i in range(n)]

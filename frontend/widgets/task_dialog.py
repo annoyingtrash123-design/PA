@@ -35,9 +35,9 @@ class TaskDialog:
         self.clock = ft.IconButton(ft.Icons.ACCESS_TIME, visible=bool(t.get("time")), on_click=self._pick_time, icon_color=T.LAV)
         self.part = ft.Dropdown(label="Part of day", value=t.get("part_of_day") or "anytime", border_radius=14,
                                 options=[ft.dropdown.Option(k, v) for k, v in T.PART_LABELS.items()], visible=not t.get("time"))
-        self.category = ft.Dropdown(label="Category", border_radius=14,
-                                    value=str(t["category_id"]) if t.get("category_id") else "none",
-                                    options=[ft.dropdown.Option("none", "No category")] +
+        self.category = ft.Dropdown(label="Category", border_radius=14, width=340,
+                                    value=self._category_value(t, bool(occ)),
+                                    options=[ft.dropdown.Option("auto", "Auto (let the assistant pick)")] +
                                             [ft.dropdown.Option(str(c["id"]), c["name"]) for c in ctx.categories])
         self.notes = ft.TextField(label="Notes", value=t.get("notes") or "", multiline=True, min_lines=1, max_lines=3, border_radius=14)
         self.repeat = ft.Dropdown(label="Repeat", border_radius=14, on_change=self._repeat_change,
@@ -82,6 +82,12 @@ class TaskDialog:
 
     def close(self):
         self.ctx.close(self.dlg)
+
+    @staticmethod
+    def _category_value(t, editing):
+        if not editing or t.get("category_auto"):
+            return "auto"
+        return str(t["category_id"]) if t.get("category_id") else None
 
     # --- loading
     def _load_task(self, occ):
@@ -175,20 +181,26 @@ class TaskDialog:
         task = {
             "title": title, "date": the_date, "time": time,
             "part_of_day": derive_part(time) if time else (self.part.value or "anytime"),
-            "category_id": None if self.category.value in (None, "none") else int(self.category.value),
+            "category_id": (None if self.category.value in (None, "none") else
+                            "auto" if self.category.value == "auto" else int(self.category.value)),
             "notes": self.notes.value or "", "recurrence": rec,
             "checklist": [({"id": it["id"], "text": it["field"].value.strip()} if it["id"] else {"text": it["field"].value.strip()})
                           for it in self.items if (it["field"].value or "").strip()],
         }
         try:
             if self.occ:
-                self.ctx.api.update_task(self.occ["task_id"], task)
+                saved = self.ctx.api.update_task(self.occ["task_id"], task)
             else:
-                self.ctx.api.add_task(task)
+                saved = self.ctx.api.add_task(task)
         except ApiError as err:
             return self._fail(err.message)
         self.close()
-        self.ctx.snack("Saved")
+        msg = "Saved"
+        if task["category_id"] == "auto" and isinstance(saved, dict):
+            name = next((c["name"] for c in self.ctx.categories if c["id"] == saved.get("category_id")), None)
+            if name:
+                msg = f"Filed under {name}"
+        self.ctx.snack(msg)
         if self.on_saved:
             self.on_saved()
 

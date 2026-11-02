@@ -61,6 +61,12 @@ class Api:
     def toggle_check(self, task_id, date, item_id, done):
         return self._json("POST", "/api/occurrences/checklist", json={"task_id": task_id, "date": date, "item_id": item_id, "done": done})
 
+    # goals
+    def goals(self): return self._json("GET", "/api/goals")
+    def add_goal(self, g): return self._json("POST", "/api/goals", json=g)
+    def update_goal(self, gid, g): return self._json("PUT", f"/api/goals/{gid}", json=g)
+    def delete_goal(self, gid): return self._json("DELETE", f"/api/goals/{gid}")
+
     # gym
     def exercises(self): return self._json("GET", "/api/exercises")
     def add_exercise(self, name): return self._json("POST", "/api/exercises", json={"name": name})

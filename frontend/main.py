@@ -5,6 +5,7 @@ import flet as ft
 
 import theme as T
 from api import Api, ApiError, BACKEND_URL
+from views.goals import GoalsView
 from views.gym import GymView
 from views.home import HomeView
 from views.review import ReviewView
@@ -62,7 +63,7 @@ def main(page: ft.Page):
     page.spacing = 0
 
     ctx = Ctx(page)
-    views = [HomeView(ctx), TasksView(ctx), GymView(ctx), ReviewView(ctx)]
+    views = [HomeView(ctx), TasksView(ctx), GoalsView(ctx), GymView(ctx), ReviewView(ctx)]
     settings_view = SettingsView(ctx)
     state = {"tab": 0, "settings": False}
 
@@ -119,6 +120,7 @@ def main(page: ft.Page):
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.HOME_OUTLINED, selected_icon=ft.Icons.HOME, label="Home"),
             ft.NavigationBarDestination(icon=ft.Icons.CHECK_CIRCLE_OUTLINE, selected_icon=ft.Icons.CHECK_CIRCLE, label="Tasks"),
+            ft.NavigationBarDestination(icon=ft.Icons.FLAG_OUTLINED, selected_icon=ft.Icons.FLAG, label="Goals"),
             ft.NavigationBarDestination(icon=ft.Icons.FITNESS_CENTER_OUTLINED, selected_icon=ft.Icons.FITNESS_CENTER, label="Gym"),
             ft.NavigationBarDestination(icon=ft.Icons.AUTO_STORIES_OUTLINED, selected_icon=ft.Icons.AUTO_STORIES, label="Review"),
         ])
