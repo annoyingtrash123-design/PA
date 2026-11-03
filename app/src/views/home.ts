@@ -1,12 +1,10 @@
-import { api, assistantName, getState, now, today } from "../core";
+import { assistantName, getState, now, today } from "../core";
 import { getBriefing, getDigest, type Digest } from "../services/ai-text";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
 import { card, chip, clear, h, readAloud, segmented } from "../ui";
 import { greeting, longDay } from "../util/dates";
-import { pickNextUp, PART_LABELS } from "../util/nextup";
 import { paragraphs } from "../util/text";
-import type { Day } from "../types";
 
 type Kind = "morning" | "evening";
 let kind: Kind | null = null;
@@ -18,28 +16,10 @@ export function renderHome(root: HTMLElement): () => void {
   const user = getState().settings.user_name;
   const hello = user ? `${greeting(clock.now)}, ${user}` : greeting(clock.now);
 
-  const day = api<Day[]>("GET", `/api/days?start=${today()}&days=1`)[0];
-  const items = day.items;
-  const done = items.filter((o) => o.done).length;
-  const next = pickNextUp(items, clock.now);
-
   const weatherHolder = h("div", { hidden: true });
   const dayHolder = h("div");
   let token = 0;
   let digest: Digest | null = null;
-
-  const progress = () => {
-    const total = items.length;
-    const R = 26, C = 2 * Math.PI * R;
-    const ring = h("div", { class: "ring-wrap" });
-    ring.innerHTML = `<svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="${R}" fill="none" stroke="var(--lav-soft)" stroke-width="7"/><circle cx="32" cy="32" r="${R}" fill="none" stroke="var(--lav)" stroke-width="7" stroke-linecap="round" stroke-dasharray="${total ? (done / total) * C : 0} ${C}" transform="rotate(-90 32 32)"/></svg>`;
-    ring.appendChild(h("div", { class: "ring-text" }, `${done}/${total}`));
-    let nextCol: HTMLElement;
-    if (total === 0) nextCol = h("div", null, h("h3", { class: "title-sm" }, "Nothing planned"), h("p", { class: "muted" }, "A blank canvas. Add something in Tasks."));
-    else if (!next) nextCol = h("div", null, h("h3", { class: "title-sm" }, "All done!"), h("p", { class: "muted" }, "Beautiful work today. Time to relax."));
-    else nextCol = h("div", { class: "stack", style: { gap: "3px" } }, h("span", { class: "label-caps" }, "Next up"), h("div", { class: "next-title" }, next.title), h("span", { class: "muted" }, next.time ?? PART_LABELS[next.part_of_day || "anytime"]));
-    return card("compact", h("div", { class: "row", style: { gap: "16px" } }, ring, h("div", { class: "grow" }, nextCol)));
-  };
 
   const drawWeather = () => {
     const w = digest?.weather;
@@ -95,7 +75,6 @@ export function renderHome(root: HTMLElement): () => void {
     root,
     h("div", null, h("h2", { class: "title-lg" }, hello), h("p", { class: "muted", style: { marginTop: "2px", fontSize: "14px" } }, longDay(clock.today))),
     weatherHolder,
-    progress(),
     segHolder,
     dayHolder,
   );
