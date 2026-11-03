@@ -6,7 +6,7 @@ const path = require("path");
 
 const svg = fs.readFileSync(path.join(__dirname, "icon.svg"), "utf8");
 const out = path.join(__dirname, "..", "public");
-const BG = "#2A2725";
+const BG = "#B8A6E3"; // lavender, matches the icon background so maskable padding blends in
 
 async function render(browser, size, scale, file) {
   const page = await browser.newPage({ viewport: { width: size, height: size } });
