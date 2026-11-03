@@ -104,7 +104,7 @@ export function renderHome(root: HTMLElement): () => void {
     script = b.script;
     sections = b.sections;
     const update = b.outdated ? () => void regenerate(date) : null;
-    drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy), update, b, date);
+    drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy, b.reviewed), update, b, date);
   };
   const regenerate = async (date: string) => {
     const my = ++token;

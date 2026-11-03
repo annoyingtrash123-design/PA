@@ -1578,9 +1578,8 @@ fn news_morning_is_balanced_and_deduplicated() {
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
     let n = &b["news"];
     let items = n["items"].as_array().unwrap();
-    assert!((3..=5).contains(&items.len()), "{} stories", items.len());
+    assert_eq!(items.len(), 2, "two stories, each told in full");
     assert!(items[0]["topics"].as_array().unwrap().iter().any(|t| t == "australia"), "Australia leads: {}", items[0]);
-    assert!(items.iter().any(|i| i["topics"].as_array().unwrap().iter().any(|t| t == "world")), "a world story");
     // the same story from two outlets is never both picked
     let got = ids(&n["items"]);
     assert!(!(got.contains(&"w1".to_string()) && got.contains(&"w2".to_string())), "{got:?}");
@@ -1674,7 +1673,7 @@ fn news_evening_only_has_stories_after_the_morning_cutoff_and_never_repeats_the_
     a.news_at = "2026-11-02T05:45:00Z".into();
     let e = a.get(&format!("/api/briefing?kind=evening&date={TODAY}"));
     let ev = ids(&e["news"]["items"]);
-    assert!((3..=4).contains(&ev.len()), "{ev:?}");
+    assert_eq!(ev.len(), 2, "{ev:?}");
     for id in &ev {
         assert!(id.starts_with('n'), "old story {id} in the evening: {ev:?}");
     }
@@ -1753,8 +1752,8 @@ fn news_selection_is_varied_with_life_most_days_and_industry_tech_sometimes() {
             industry += 1;
         }
     }
-    assert!(life >= 12, "life story on {life}/{days} days");
-    assert!(industry >= 4 && industry < days, "industry-tech on {industry}/{days} days (a good chance, not guaranteed)");
+    assert!(life >= 5, "life story on {life}/{days} days");
+    assert!(industry >= 2 && industry < days, "industry-tech on {industry}/{days} days (a good chance, not guaranteed)");
 }
 
 #[test]
@@ -2162,4 +2161,28 @@ fn every_summary_prompt_carries_the_knowledge_picks() {
         assert!(b["system_prompt"].as_str().unwrap().contains("LITTLE THINGS TO DRAW ON"), "{kind}");
         assert!(b.to_string().contains("Little things you could draw on today"), "{kind}");
     }
+}
+
+#[test]
+fn news_template_tells_more_of_the_story_without_cutting_sentences() {
+    use crate::news::lead_sentences;
+    let lead = "Crews contained the fire on Monday afternoon. No homes were lost. Residents can return from Tuesday. The cause is being investigated…";
+    let t = lead_sentences(lead, 90);
+    assert_eq!(t, "Crews contained the fire on Monday afternoon. No homes were lost. Residents can return from Tuesday.");
+    assert_eq!(lead_sentences("One. Two two. Three three three.", 3), "One. Two two.");
+    assert_eq!(lead_sentences("", 90), "");
+}
+
+#[test]
+fn briefings_carry_the_editor_brief_the_persona_and_full_story_news() {
+    let mut a = news_app(TODAY);
+    for kind in ["morning", "evening", "weekly"] {
+        let b = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"));
+        let r = b["review_prompt"].as_str().unwrap();
+        assert!(r.contains("same keys") && r.contains("recent summaries") && r.contains("word for word"), "{kind}");
+        assert!(b["system_prompt"].as_str().unwrap().contains("KNOWING THEM AND YOURSELF"), "{kind}");
+    }
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert!(b["system_prompt"].as_str().unwrap().contains("Cover BOTH stories"));
+    assert!(b["user_prompt"].as_str().unwrap().contains("Article: "));
 }

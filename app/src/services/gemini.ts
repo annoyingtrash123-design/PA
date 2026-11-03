@@ -165,6 +165,26 @@ export interface GenerateOptions {
   signal?: AbortSignal;
   /** Test key: not blocked by the daily budget (still counted, and still blocked while paused). */
   bypassBudget?: boolean;
+  /** let the model read web pages linked in the prompt (Gemini's URL context tool), when the model allows it */
+  readLinks?: boolean;
+}
+
+const NO_URL_TOOL = "pa-no-url-context";
+/** True once a model has refused the URL context tool (remembered, so we don't spend a request on it again). */
+export function urlToolRefused(model: string): boolean {
+  try {
+    return (localStorage.getItem(NO_URL_TOOL) || "").split(",").includes(model);
+  } catch {
+    return false;
+  }
+}
+function rememberUrlToolRefused(model: string) {
+  try {
+    const v = (localStorage.getItem(NO_URL_TOOL) || "").split(",").filter(Boolean);
+    if (!v.includes(model)) localStorage.setItem(NO_URL_TOOL, [...v, model].join(","));
+  } catch {
+    // fine: we'll just try again next time
+  }
 }
 
 export class GeminiError extends Error {
@@ -219,16 +239,19 @@ function blocked(msg: string, pausedUntil?: number): GeminiError {
 /** One counted HTTP round trip to a model (with the thinking-setting retry). Throws GeminiError. */
 async function callModel(o: GenerateOptions, model: string, key: string): Promise<string> {
   const generationConfig: Record<string, unknown> = { temperature: 0.8, maxOutputTokens: o.maxTokens ?? 4096 };
-  if (o.json) generationConfig.responseMimeType = "application/json";
+  const useTool = !!o.readLinks && !urlToolRefused(model);
+  // JSON mode and tools don't always mix: with the tool on, the reply is parsed leniently instead
+  if (o.json && !useTool) generationConfig.responseMimeType = "application/json";
   const thinking = thinkingFor(model);
   if (thinking) generationConfig.thinkingConfig = thinking;
-  const body = {
+  const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: o.system }] },
     contents: [{ role: "user", parts: [{ text: o.user }] }],
     generationConfig,
   };
+  if (useTool) body.tools = [{ url_context: {} }];
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), GEMINI_TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), useTool ? GEMINI_TIMEOUT_MS + 30_000 : GEMINI_TIMEOUT_MS);
   o.signal?.addEventListener("abort", () => ctl.abort());
   let res: Response;
   try {
@@ -239,6 +262,17 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
       const msg = await errorMessage(res.clone());
       if (/thinking/i.test(msg)) {
         delete generationConfig.thinkingConfig;
+        recordUse(budgetDate());
+        res = await post(model, key, body, ctl.signal);
+      }
+    }
+    // a model that doesn't offer the URL tool: remember it and ask once more without it
+    if (!res.ok && res.status === 400 && useTool) {
+      const msg = await errorMessage(res.clone());
+      if (/url|tool/i.test(msg)) {
+        rememberUrlToolRefused(model);
+        delete body.tools;
+        if (o.json) generationConfig.responseMimeType = "application/json";
         recordUse(budgetDate());
         res = await post(model, key, body, ctl.signal);
       }

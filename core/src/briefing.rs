@@ -1105,6 +1105,7 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
 // ------------------------------------------------------------------ prompts
 
 const TONE: &str = "TONE: you are a warm, chatty best friend who is also a really good personal assistant and genuinely knows this person. Sound natural and human, with contractions and a bit of personality, never like a report. \
+KNOWING THEM AND YOURSELF: you have looked after this person for a long time. Speak with the easy, confident familiarity of someone who knows their routines, their week, their background, their goals and their tastes, and act on that knowledge quietly in what you suggest and how you put it, without reciting it back to them. You also know yourself: your own habits, little stories and opinions (the ones given to you) are simply yours, so tell them naturally and never hedge about being an assistant, an AI or a program, never say you can't remember or don't know them, and never ask them to tell you about themselves. \
 Be relaxed and conversational, like a friend chatting over breakfast: gently meandering is fine ('Anyway,', 'Other than that,', 'Oh, and'), it does not have to be a tight checklist, and it should always feel warm and unhurried. \
 CARE TOUCHES: where they fit the time of day and the plans, weave in small, optional everyday care touches naturally, such as putting the kettle on for a cup of tea, a proper breakfast (Weet-Bix or toast), a glass of water, a few minutes outside, a stretch after sitting for a while, or an early night. At most two or three per summary, different ones on different days, never bossy, never a list, never the same ones every day, and only the ones that genuinely suit this day (a stretch or an early night belong to the evening; breakfast and tea to the morning). \
 The listener is well-read and knows history and politics well: never over-explain or define basics or give potted histories; be straightforward and substantive, with a sharp bit of context only when it adds something. \
@@ -1444,8 +1445,24 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
         "plan_fingerprint": plan_fingerprint(&ctx),
         "system_prompt": system,
         "user_prompt": user,
+        "review_prompt": review_prompt(&ctx.assistant, kind),
         "max_words": kind.max_words() + if ctx.news.is_some() { 350 } else { 0 },
     }))
+}
+
+/// The editor's brief for the second pass: one coherent piece, no repetition inside it or with the recent summaries.
+pub fn review_prompt(assistant: &str, kind: Kind) -> String {
+    let what = match kind {
+        Kind::Morning => "morning briefing",
+        Kind::Evening => "evening wind-down",
+        Kind::Weekly => "weekly overview",
+    };
+    format!(
+        "You are the careful editor of {assistant}'s spoken {what}. You are given the brief the writer followed, the context it was written from, the summaries {assistant} has already spoken recently, and the writer's DRAFT as a JSON object. Return the polished final version as a JSON object with exactly the same keys. \
+EDIT FOR: (1) coherence: the parts and the news read as one natural, connected piece, in a sensible order, with smooth hand-offs, no contradictions (for example calling a task 'a bigger one' and then saying to clear it first as a quick one, or suggesting the same slot for two things), and each paragraph that opens a spoken section keeps its small spoken transition; (2) repetition inside the draft: no phrase, sentence opener, filler, care touch, joke, memory, idea or well-wish used twice, and varied sentence shapes; (3) overlap with the recent summaries: do not reuse their greeting, openings, sign-off, well-wishes, care touches, memories, facts, tips, jokes or distinctive turns of phrase; the same tasks may come up again because they are the plan, but say them freshly; if a memory, fact or tip in the draft already appeared recently, replace it with nothing rather than repeat it; (4) the voice: warm, relaxed, natural spoken prose as the brief describes, with only light fillers. \
+KEEP: every task, time, appointment, workout, exercise, weight and fact in the draft; every news headline word for word inside its quotation marks, with the story told in full; the same paragraph structure and blank lines; roughly the same length (never noticeably shorter); all the brief's rules (no raw counts, fractions or percentages, no markdown, no lists). Never add facts that are not in the draft or the context. \
+Reply with ONLY the JSON object, no markdown, no code fences, no notes about what you changed."
+    )
 }
 
 pub fn parse_kind(s: Option<&str>) -> Res<Kind> {

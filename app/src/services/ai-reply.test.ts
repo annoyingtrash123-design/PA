@@ -45,6 +45,7 @@ describe("fallback reasons and the source label", () => {
     expect(sourceLabel("template", whyBudget())).toBe("Built-in summary — today's AI allowance is used up");
     expect(sourceLabel("template", whyPaused(Date.UTC(2026, 10, 3, 19, 0), "UTC"))).toBe("Built-in summary — Google's limit is resting until 7:00 pm");
     expect(sourceLabel("template", null)).toBe("Built-in summary");
+    expect(sourceLabel("gemini", null, "Miranda", null, true)).toBe("Written by Miranda's AI and checked by her AI editor");
     expect(sourceLabel("gemini", null, "Miranda", "the AI reworded the headlines")).toContain("news part is the built-in version");
   });
 });

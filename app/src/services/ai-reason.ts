@@ -41,8 +41,11 @@ export function whyFromError(e: unknown, tz?: string): Why {
 }
 
 /** "Written by Miranda's AI" or "Built-in summary — <reason>". `newsWhy` adds a note when only the news segment is built in. */
-export function sourceLabel(source: "gemini" | "template", why: Why | null | undefined, name = "Miranda", newsWhy?: string | null): string {
-  if (source === "gemini") return newsWhy ? `Written by ${name}'s AI · the news part is the built-in version (${newsWhy})` : `Written by ${name}'s AI`;
+export function sourceLabel(source: "gemini" | "template", why: Why | null | undefined, name = "Miranda", newsWhy?: string | null, reviewed?: boolean): string {
+  if (source === "gemini") {
+    const who = reviewed ? `Written by ${name}'s AI and checked by her AI editor` : `Written by ${name}'s AI`;
+    return newsWhy ? `${who} · the news part is the built-in version (${newsWhy})` : who;
+  }
   return why?.text ? `Built-in summary — ${why.text}` : "Built-in summary";
 }
 

@@ -8,6 +8,7 @@ import { shouldAutoGenerate, showUpdateButton, showWriteButton, storeKey, type S
 import { mondayOf } from "../util/dates";
 import { generate, GeminiError, parseNewsJson, setDateProvider } from "./gemini";
 import { judgeReply } from "./ai-reply";
+import { previousSlots, recentBlock, reviewDraft } from "./ai-review";
 import { recallNewsWhy, recallWhy, rememberNewsWhy, rememberWhy, whyBudget, whyFromError, whyHeadlines, whyNoKey, whyPaused, whyParse, type Why } from "./ai-reason";
 import { hasNewerNews, loadNews, newsIsFaithful, newsSettled, updatedLabel } from "./news";
 import { weatherSettled } from "./weather";
@@ -57,6 +58,8 @@ export interface Briefing {
   why?: Why | null;
   /** AI text but the news part is the built-in one: the short reason */
   newsWhy?: string | null;
+  /** the AI editor pass checked this text */
+  reviewed?: boolean;
 }
 
 /** The news segment as the Home card shows it. */
@@ -99,7 +102,29 @@ interface StoredEntry {
   weather_comment: string | null;
   affirmation?: string | null;
   fingerprint?: string;
+  /** the AI editor pass checked it */
+  reviewed?: boolean;
 }
+
+// ---------------------------------------------------------------- recent summaries (kept so new ones don't overlap)
+/** The recent summaries' full spoken text (stored AI texts only; built-in ones aren't kept). */
+async function recentTexts(kind: Kind, date: string): Promise<{ label: string; text: string }[]> {
+  const out: { label: string; text: string }[] = [];
+  for (const s of previousSlots(kind, date)) {
+    try {
+      const key = storeKey(s.kind, s.date, mondayOf(s.date));
+      const e = readEntry(await kvGet<unknown>(DB, key));
+      if (!e) continue;
+      const n = await readNews(key);
+      const text = [e.greeting, e.affirmation, e.briefing, n?.text].filter(Boolean).join("\n\n").trim();
+      if (text) out.push({ label: `${s.kind} of ${s.date}`, text });
+    } catch {
+      // a missing or unreadable entry is simply skipped
+    }
+  }
+  return out;
+}
+
 interface StoredFull extends StoredText {
   ai: AiParts;
 }
@@ -109,6 +134,7 @@ const templateParts = (prep: BriefingPrep): MorningParts | undefined => (prep.te
 /** Build the result for a kind: morning merges the four parts (template for whatever the AI did not give). */
 function result(kind: Kind, prep: BriefingPrep, source: "gemini" | "template", ai: AiParts | null, extra: Partial<BriefingResult> & { storedNews?: StoredNews | null } = {}): BriefingResult {
   const r = build(kind, prep, source, ai, extra);
+  if (source === "gemini" && ai?.reviewed) r.reviewed = true;
   if (r.parts) r.sections = morningSections(r.parts, r.news?.text, r.news?.position ?? 2);
   else if (kind === "evening" && !(prep.news && !prep.template_body && !ai?.briefing)) r.sections = eveningSections(r.text, r.news?.text);
   return r;
@@ -259,21 +285,32 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
       const jsonMode = morning || (kind === "evening" && hasNews);
       const note = morning ? MORNING_JSON_NOTE + (hasNews ? NEWS_FIELD_NOTE : "") : kind === "evening" && hasNews ? EVENING_JSON_NOTE : "";
       const system = prep.system_prompt + note;
+      const recent = await recentTexts(kind, date);
       const ask = async (extra: string) => {
-        // a briefing is five parts of JSON (about 750 words): ask for plenty of room, with thinking kept low
-        const raw = await generate({ system, user: prep.user_prompt + extra, json: jsonMode, maxTokens: BRIEFING_MAX_TOKENS });
+        // a briefing is five parts of JSON (about 750 words): ask for plenty of room, with thinking kept low.
+        // With news, the model may read the linked articles so each story is told in full.
+        const raw = await generate({ system, user: prep.user_prompt + recentBlock(recent) + extra, json: jsonMode, maxTokens: BRIEFING_MAX_TOKENS, readLinks: hasNews });
         return judgeReply(raw, jsonMode, hasStats);
       };
       let j = await ask("");
       // one retry (parse failure or stats guard), only while the budget is comfortable
       if (!j.r && remaining(d) > LOW_BUDGET) j = await ask(j.why?.code === "stats" ? RETRY_NOTE : RETRY_FORMAT_NOTE);
       why = j.why;
-      const r = j.r;
+      let r = j.r;
+      // the editor pass (one more request), while the allowance is comfortable; any problem keeps the draft
+      if (r && r.briefing && remaining(d) > LOW_BUDGET - 1) {
+        try {
+          const reviewed = await reviewDraft({ prep, draft: r, recent, jsonMode, generateFn: generate, hasStats });
+          if (reviewed) r = reviewed;
+        } catch {
+          // keep the draft
+        }
+      }
       if (r && r.briefing) {
         // non-morning texts have no parts: only morning entries carry the new keys (their absence marks an old entry)
         const entry: StoredEntry = morning
-          ? { briefing: r.briefing, greeting: r.greeting ?? null, weather_comment: r.weather_comment ?? null, affirmation: r.affirmation ?? null, fingerprint: prep.plan_fingerprint }
-          : { briefing: r.briefing, weather_comment: null, fingerprint: prep.plan_fingerprint };
+          ? { briefing: r.briefing, greeting: r.greeting ?? null, weather_comment: r.weather_comment ?? null, affirmation: r.affirmation ?? null, fingerprint: prep.plan_fingerprint, reviewed: !!r.reviewed }
+          : { briefing: r.briefing, weather_comment: null, fingerprint: prep.plan_fingerprint, reviewed: !!r.reviewed };
         await kvSet(DB, skey, entry);
         rememberWhy(skey, null);
         // the news is kept apart from the plan text; it counts only if it quotes the headlines (normalised) as given
@@ -313,7 +350,7 @@ export async function refreshNews(kind: "morning" | "evening", date: string): Pr
   const sel = api<NewsPrep | null>("POST", "/api/news/select", { kind, date, refresh: true });
   if (!sel || !sel.items.length) return { done: false, notice: "No new stories since the last ones." };
   try {
-    const raw = await generate({ system: sel.system_prompt, user: sel.user_prompt, json: true });
+    const raw = await generate({ system: sel.system_prompt, user: sel.user_prompt, json: true, readLinks: true });
     const text = parseNewsJson(raw);
     if (!text || !newsIsFaithful(text, sel.items.map((i) => i.title))) return { done: false, notice: "Couldn't write the news up just now. Try again later." };
     await kvSet(DB, newsKey(skey), { text, at: sel.generated_at, sources: sel.sources, position: sel.position } satisfies StoredNews);

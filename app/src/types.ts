@@ -264,6 +264,8 @@ export interface BriefingPrep {
   plan_fingerprint?: string;
   system_prompt: string;
   user_prompt: string;
+  /** the editor's brief for the second (review) pass */
+  review_prompt?: string;
   max_words?: number;
 }
 
