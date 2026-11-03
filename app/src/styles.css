@@ -99,7 +99,14 @@ body.kb #tabs { display: none; }
 .icon-btn:disabled { opacity: 0.3; }
 .round { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; border: 2px solid var(--muted); background: transparent; color: var(--muted); cursor: pointer; }
 .round.primary { background: var(--lav); border-color: var(--lav); color: var(--on-accent); }
-.player { display: flex; align-items: center; gap: 12px; padding: 6px 4px; }
+.player { display: flex; align-items: center; gap: 12px; padding: 6px 4px; flex-wrap: wrap; }
+.scrub-wrap { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.scrub { width: 100%; accent-color: var(--lav); margin: 0; }
+.time { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.voice-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+.voice-row { display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 12px; border: 1px solid var(--line); border-radius: 14px; }
+.voice-row.on { border-color: var(--lav); background: var(--lav-soft); }
+.voice-row .pick { flex: 1; text-align: left; background: none; border: 0; color: var(--text); font-size: 14.5px; padding: 10px 0; cursor: pointer; }
 
 .seg { display: flex; border: 1px solid var(--line); border-radius: 22px; overflow: hidden; align-self: center; max-width: 100%; }
 .seg button { flex: 1; padding: 9px 14px; background: transparent; border: 0; border-left: 1px solid var(--line); font-size: 13.5px; color: var(--text); cursor: pointer; white-space: nowrap; }

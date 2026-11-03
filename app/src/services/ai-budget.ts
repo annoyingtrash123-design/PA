@@ -30,6 +30,7 @@ export const LOW_BUDGET = 3;
 export const USAGE_KEY = "pa-ai-usage";
 export const PAUSED_KEY = "pa-ai-paused-until";
 export const MAIN_PAUSED_KEY = "pa-ai-main-paused-until";
+export const TTS_PAUSED_KEY = "pa-tts-paused-until";
 export const REGEN_MS = 3 * 60 * 60 * 1000;
 
 // ---- daily budget (counter per local date)
@@ -80,6 +81,15 @@ export const isPaused = (nowMs: number, store: Store = lsStore) => getPausedUnti
 export const getMainPausedUntil = (store: Store = lsStore) => getMs(MAIN_PAUSED_KEY, store);
 export const setMainPausedUntil = (ms: number, store: Store = lsStore) => store.set(MAIN_PAUSED_KEY, String(Math.round(ms)));
 export const isMainPaused = (nowMs: number, store: Store = lsStore) => getMainPausedUntil(store) > nowMs;
+
+/** The natural-voice (TTS) models alone are out of quota; text writing may still work. */
+export const getTtsPausedUntil = (store: Store = lsStore) => getMs(TTS_PAUSED_KEY, store);
+export const setTtsPausedUntil = (ms: number, store: Store = lsStore) => store.set(TTS_PAUSED_KEY, String(Math.round(ms)));
+/** When the natural voice may be used again (0 = now): the later of the global and the TTS-only pause. */
+export const ttsBlockedUntil = (nowMs: number, store: Store = lsStore) => {
+  const u = Math.max(getPausedUntil(store), getTtsPausedUntil(store));
+  return u > nowMs ? u : 0;
+};
 
 export function formatDuration(ms: number): string {
   const mins = Math.max(1, Math.ceil(ms / 60000));

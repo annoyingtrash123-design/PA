@@ -1,6 +1,9 @@
 // Small DOM helpers and shared widgets (modal sheet, toast, confirm, chips, read-aloud button).
 import { icon } from "./icons";
-import { onSpeechState, pause, resume, speak, speechState, speechSupported, stop } from "./services/speech";
+import { assistantName } from "./core";
+import { formatClock, isNatural, onPlayState, onProgress, pauseAny, playAloud, playState, progress, resumeAny, seek, setNotifier, stopAll } from "./services/readaloud";
+import { speechSupported } from "./services/speech";
+import { getVoiceType } from "./services/voice-prefs";
 
 type Child = Node | string | number | null | undefined | false | Child[];
 type Attrs = Record<string, unknown>;
@@ -142,34 +145,65 @@ export function confirmDialog(title: string, text: string, confirmLabel: string,
 
 // ---------- Read-aloud button + controls ----------
 
-/** Big "Read it to me" button; while speaking shows pause/resume and stop. */
-export function readAloud(getText: () => string, getVoice: () => string, label = "Read it to me", disabled = false, big = true): HTMLElement {
+/** Big "Read it to me" button; while generating shows a spinner, while playing pause/resume, stop and (natural voice) a progress bar. */
+export function readAloud(getText: () => string, getVoice: () => string, label = "Read it to me", disabled = false, big = true, opts: { forcePhone?: boolean } = {}): HTMLElement {
   const wrap = h("div", { class: "read-aloud" });
-  if (!speechSupported()) {
+  const natural = !opts.forcePhone && getVoiceType() === "gemini";
+  if (!speechSupported() && !natural) {
     wrap.appendChild(h("p", { class: "muted small" }, "Reading aloud isn't available in this browser."));
     return wrap;
   }
+  let offProgress = () => {};
   const draw = () => {
-    const st = speechState();
+    offProgress();
+    offProgress = () => {};
+    const st = playState();
     if (st === "idle") {
-      clear(wrap, button(label, () => void speak(getText(), getVoice()).catch((e) => toast(String(e.message ?? e))), big ? { big: true, icon: "play", disabled, cls: "btn-wide" } : { kind: "outline", icon: "volume", disabled }));
+      clear(wrap, button(label, () => void playAloud(getText(), getVoice(), opts).catch((e) => toast(String(e.message ?? e))), big ? { big: true, icon: "play", disabled, cls: "btn-wide" } : { kind: "outline", icon: "volume", disabled }));
+    } else if (st === "loading") {
+      clear(wrap, h("div", { class: "player" }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${assistantName()} is warming up her voice…`), h("button", { type: "button", class: "round", "aria-label": "Cancel", onclick: stopAll }, icon("stop", 22))));
     } else {
-      clear(
-        wrap,
-        h(
-          "div",
-          { class: "player" },
-          h("button", { type: "button", class: "round primary", "aria-label": st === "playing" ? "Pause" : "Resume", onclick: () => (st === "playing" ? pause() : resume()) }, icon(st === "playing" ? "pause" : "play", 22)),
-          h("button", { type: "button", class: "round", "aria-label": "Stop", onclick: stop }, icon("stop", 22)),
-          h("span", { class: "muted" }, st === "playing" ? "Playing..." : "Paused"),
-        ),
+      const playing = st === "playing";
+      const controls = h(
+        "div",
+        { class: "player" },
+        h("button", { type: "button", class: "round primary", "aria-label": playing ? "Pause" : "Resume", onclick: () => (playing ? pauseAny() : resumeAny()) }, icon(playing ? "pause" : "play", 22)),
+        h("button", { type: "button", class: "round", "aria-label": "Stop", onclick: stopAll }, icon("stop", 22)),
       );
+      if (isNatural()) {
+        const bar = h("input", { type: "range", class: "scrub", min: "0", max: "1", step: "any", value: "0", "aria-label": "Playback position" });
+        const time = h("span", { class: "muted time" }, "0:00 / 0:00");
+        const upd = () => {
+          const p = progress();
+          if (document.activeElement !== bar) {
+            bar.max = String(p.dur || 1);
+            bar.value = String(p.cur);
+          }
+          time.textContent = `${formatClock(p.cur)} / ${formatClock(p.dur)}`;
+        };
+        bar.addEventListener("input", () => seek(Number(bar.value)));
+        controls.append(h("div", { class: "scrub-wrap" }, bar, time));
+        upd();
+        offProgress = onProgress(upd);
+      } else controls.append(h("span", { class: "muted" }, playing ? "Playing..." : "Paused"));
+      clear(wrap, controls);
     }
   };
   draw();
-  const off = onSpeechState(() => (wrap.isConnected ? draw() : off()));
+  let last = playState();
+  const off = onPlayState((s) => {
+    if (!wrap.isConnected) {
+      off();
+      offProgress();
+      return;
+    }
+    if (s !== last || s === "idle") draw();
+    last = s;
+  });
   return wrap;
 }
+
+setNotifier((m) => toast(m, 5000));
 
 export function relativeScrollKeep(fn: () => void) {
   const y = window.scrollY;

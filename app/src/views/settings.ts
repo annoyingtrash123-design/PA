@@ -5,7 +5,10 @@ import { refreshHolidays } from "../services/holidays";
 import { kvClear } from "../services/idb";
 import { listVoices } from "../services/speech";
 import { resetWeather } from "../services/weather";
-import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, select, textInput, toast, toggle } from "../ui";
+import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, segmented, select, textInput, toast, toggle } from "../ui";
+import { stopAll, previewNatural } from "../services/readaloud";
+import { STYLES, VOICES } from "../services/gemini-tts";
+import { getGeminiVoice, getStyle, getVoiceType, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
 import { isValidTimezone, WEEKDAY_SHORT } from "../util/dates";
@@ -173,7 +176,7 @@ function build(redraw: () => void): HTMLElement[] {
   return [
     h("h2", { class: "title-lg", style: { fontSize: "22px" } }, "Settings"),
     card("stack", h("h3", { class: "title-sm" }, "About you"), field("Assistant name", fAssistant), field("Your name", fUser)),
-    card("stack", h("h3", { class: "title-sm" }, "Voice"), field("Voice", fVoice, "Voices come from your device, so the list differs between phones and browsers."), readAloud(() => `Hi! I'm ${fAssistant.value.trim() || "Miranda"}. This is how I'll sound when I brief you.`, () => fVoice.value, "Preview voice", false, false)),
+    voiceCard(fVoice, fAssistant),
     card("stack", h("h3", { class: "title-sm" }, "Weather location"), field("Location name", fLoc), h("div", { class: "pair" }, field("Latitude", fLat), field("Longitude", fLon)), button("Use my location", useLocation, { kind: "outline", icon: "place" }), geoStatus, field("Timezone", fTz, "Decides what \"today\" means, e.g. Australia/Sydney")),
     card("stack", h("h3", { class: "title-sm" }, "AI (Gemini)"),
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
@@ -299,3 +302,73 @@ function categoriesCard(): HTMLElement {
   return card("stack", h("h3", { class: "title-sm" }, "Categories"), col, h("div", { class: "cat-row" }, newDot, h("div", { class: "grow" }, newName), iconBtn("add-circle", "Add category", add, "lav", 32)));
 }
 
+
+// ---------------- voice (natural Gemini voice or the phone voice) ----------------
+function voiceCard(fVoice: HTMLSelectElement, fAssistant: HTMLInputElement): HTMLElement {
+  const type = getVoiceType();
+  const style = getStyle();
+  let voice = getGeminiVoice();
+  const rows = new Map<string, HTMLElement>();
+  const fStyle = select(STYLES.map((x) => [x.id, x.label] as [string, string]), style);
+  fStyle.addEventListener("change", () => savePrefs({ style: fStyle.value }));
+
+  const previewBtn = (name: string) => {
+    const b = h("button", { type: "button", class: "btn btn-outline", "aria-label": `Preview ${name}`, style: { minHeight: "36px", padding: "6px 12px" } }, "▶ Preview");
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = "…";
+      try {
+        await previewNatural(name, fStyle.value);
+      } catch (e) {
+        toast(`Couldn't make the preview: ${(e as Error).message}`);
+      } finally {
+        b.disabled = false;
+        b.textContent = "▶ Preview";
+      }
+    };
+    return b;
+  };
+  const list = h("div", { class: "voice-list", role: "radiogroup", "aria-label": "Natural voice" });
+  for (const v of VOICES) {
+    const row = h(
+      "div",
+      { class: `voice-row ${v.name === voice ? "on" : ""}` },
+      h("button", { type: "button", class: "pick", role: "radio", "aria-checked": String(v.name === voice), onclick: () => {
+        voice = v.name;
+        savePrefs({ voice });
+        rows.forEach((r, n) => {
+          r.classList.toggle("on", n === voice);
+          r.querySelector(".pick")?.setAttribute("aria-checked", String(n === voice));
+        });
+      } }, `${v.name} — ${v.trait}`),
+      previewBtn(v.name),
+    );
+    rows.set(v.name, row);
+    list.appendChild(row);
+  }
+  const naturalBox = h(
+    "div",
+    { class: "stack", hidden: type !== "gemini" },
+    list,
+    field("Speaking style", fStyle),
+    muted("Uses your free Gemini allowance; each summary's audio is made once and saved.", "small"),
+  );
+  const phoneBox = h(
+    "div",
+    { class: "stack", hidden: type !== "phone" },
+    field("Voice", fVoice, "Voices come from your device, so the list differs between phones and browsers."),
+    readAloud(() => `Hi! I'm ${fAssistant.value.trim() || "Miranda"}. This is how I'll sound when I brief you.`, () => fVoice.value, "Preview voice", false, false, { forcePhone: true }),
+  );
+  const seg = segmented<VoiceType>([["gemini", "Natural (Gemini)"], ["phone", "Phone voice"]], type, (v) => {
+    stopAll();
+    savePrefs({ type: v });
+    naturalBox.hidden = v !== "gemini";
+    phoneBox.hidden = v !== "phone";
+    seg.querySelectorAll("button").forEach((b, i) => {
+      const on = (i === 0) === (v === "gemini");
+      b.className = on ? "on" : "";
+      b.setAttribute("aria-selected", String(on));
+    });
+  });
+  return card("stack", h("h3", { class: "title-sm" }, "Voice"), seg, naturalBox, phoneBox);
+}

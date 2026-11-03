@@ -83,7 +83,7 @@ The core cannot call the network, so these return everything the UI needs to do 
   done states; evening/weekly texts are reused for 3 hours per date.
 - Holidays: UI fetches `https://date.nager.at/api/v3/PublicHolidays/{year}/AU` (country from the region prefix),
   then `POST /api/holidays/filter {"region":"AU-NSW","raw":[...]}` → `[{"date","name"}]`; caches per year+region; passes in ctx.
-- TTS: entirely UI (Web Speech API).
+- TTS: UI only. Phone voice = Web Speech API; Natural voice = Gemini TTS (see "Natural voice" below).
 
 ### Extra endpoints
 - `POST /api/sample-data` → loads the old seed's demo tasks/goals/sessions into the state (for trying the app).
@@ -107,3 +107,31 @@ templates; otherwise they are kept with the exercises they reference). Any other
 v5 adds `gym.next_since` (date the current next rotation item became next); the migration sets it to today. After the
 migration, every call (except the date-free ones) runs `gym::roll_missed_days`: a rest item that has been next for a passed day
 counts as taken and the rotation advances (state returned); workouts never advance on their own. See API.md (`/api/gym/skip-rest`, `/api/gym/skip`).
+
+## Natural voice (Gemini TTS)
+UI only (`services/gemini-tts.ts`, `readaloud.ts`, `voice-prefs.ts`); no core changes. Core settings have a fixed field set, so prefs live in
+localStorage `pa-voice-prefs` `{type:"gemini"|"phone", voice, style}` (default type: Natural if a key is saved, else Phone).
+
+**Research caveat:** `ai.google.dev` was unreachable from the build sandbox, so this comes from search snippets/mirrors of the docs
+and prior knowledge. Re-verify against https://ai.google.dev/gemini-api/docs/speech-generation before relying on it.
+- Models: `gemini-3.1-flash-tts-preview` (newest flash TTS; model page: 8,192-token input, 16,384 output) and
+  `gemini-2.5-flash-preview-tts` (older; 32k context). `gemini-2.5-pro-preview-tts` exists but is not free-tier. All are previews.
+  `TTS_MODELS` in `gemini-tts.ts` is the ordered list; a 404/410/"not found" moves to the next model.
+- Request: `POST /v1beta/models/{model}:generateContent`, `contents:[{parts:[{text}]}]`,
+  `generationConfig:{responseModalities:["AUDIO"], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName}}}}`. Text input only.
+- Response: `candidates[0].content.parts[0].inlineData{mimeType:"audio/L16;codec=pcm;rate=24000", data:<base64>}` = raw 16-bit
+  mono little-endian PCM at 24 kHz. We read the rate from the mimeType (default 24000) and wrap it in a WAV header.
+- Voices (30): Zephyr Bright, Puck Upbeat, Charon Informative, Kore Firm, Fenrir Excitable, Leda Youthful, Orus Firm, Aoede Breezy,
+  Callirrhoe Easy-going, Autonoe Bright, Enceladus Breathy, Iapetus Clear, Umbriel Easy-going, Algieba Smooth, Despina Smooth,
+  Erinome Clear, Algenib Gravelly, Rasalgethi Informative, Laomedeia Upbeat, Achernar Soft, Alnilam Firm, Schedar Even,
+  Gacrux Mature, Pulcherrima Forward, Achird Friendly, Zubenelgenubi Casual, Vindemiatrix Gentle, Sadachbia Lively,
+  Sadaltager Knowledgeable, Sulafat Warm. Default for Miranda: **Sulafat** (Warm).
+- Style: natural-language instruction in the text, e.g. `Say warmly and chattily: <text>` (presets: Warm & chatty, Calm & soothing,
+  Upbeat, Matter-of-fact). One request per script (a 2-3 minute script is ~700 tokens, far under the limit); text over 12,000 chars is cut at a paragraph/sentence.
+- Free tier: TTS preview models have small per-minute/per-day request limits (not confirmed here; historically ~3 RPM / ~10 RPD for 2.5 flash TTS).
+  So each request counts toward the 12/day app budget (`recordUse`), a 429 stores `pa-tts-paused-until` (TTS only; text keeps working
+  unless the global pause is set), the timeout is 90 s, and results are cached.
+- Cache: IndexedDB `pa-tts-cache`, key = hash(first model id + voice + style + text); newest 10 clips kept, clips older than 3 days pruned;
+  voice previews (fixed sentence) are kept forever. Replays are instant and free.
+- Playback: `HTMLAudioElement` (a silent clip is played inside the tap to unlock iOS audio). Any failure (no key, paused, over budget,
+  error, autoplay refusal) falls back to the phone voice with a toast.

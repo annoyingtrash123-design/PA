@@ -56,3 +56,17 @@ export async function kvClear(name: string): Promise<void> {
     // ignore
   }
 }
+
+export async function kvDelete(name: string, key: string): Promise<void> {
+  try {
+    const d = await db(name);
+    await new Promise<void>((resolve, reject) => {
+      const tx = d.transaction("kv", "readwrite");
+      tx.objectStore("kv").delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // ignore
+  }
+}
