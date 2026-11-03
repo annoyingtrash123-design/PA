@@ -132,16 +132,30 @@ Goal = {"id":1,"title":"Pass my driving test","horizon":"medium"|"long","deadlin
 `GET /api/goals` (all, active first) -> `[Goal]`; `POST /api/goals` body Goal without id/created -> Goal; `PUT /api/goals/{id}` -> Goal; `DELETE /api/goals/{id}`.
 Goals are context for the AI only; tasks are not linked manually. Active goals (and goals achieved in the relevant period) are included in the Gemini context for day notes, daily briefings and the weekly overview, so the assistant can connect what was done to what it is working towards. The AI must only claim a task relates to a goal when it plausibly does.
 
+## Leisure
+```json
+Leisure = {"id":1,"kind":"watch"|"read"|"listen"|"play"|"try","title":"Piranesi","note":"On chapter twelve",
+           "status":"someday"|"current"|"finished","created":"2026-11-02","finished_on":null|"2026-11-20",
+           "last_suggested":null|"2026-11-07","blurb":""}
+```
+`GET /api/leisure` (current, someday, then finished) -> `[Leisure]`; `POST /api/leisure` body `{kind,title,note?,status?,blurb?}` -> Leisure;
+`PUT /api/leisure/{id}` (a missing `blurb` keeps the stored one; `last_suggested` is never taken from the body; `finished_on` is set to today when the status becomes finished); `DELETE /api/leisure/{id}`.
+Validation: kind in the five values, title required (max 120), note max 300, blurb max 700, status one of the three.
+`GET /api/leisure/{id}/blurb-prompt` -> `{id,title,system_prompt,user_prompt}` for ONE text request: 2-3 spoken sentences, spoiler-free (what it is, then why this person might enjoy it, using their interests silently); the model must reply exactly `UNKNOWN` when it does not know the work, and the UI then stores the blurb "I don't know much about this one yet." (blurbs are written only when an item is added or the person taps Refresh).
+
+When Miranda may suggest something (morning and evening briefings only, never the weekly one): only with genuinely free room - an empty day, a day off / holiday, a weekend day with few items (at most one timed), or for the evening nothing timed from 18:00 and at most two items left. Then ONE item: a `current` one (phrased as carrying on: "another episode of X", "a few more chapters of Y"), else a `someday` one not suggested in the last 5 days; interests that share words with the title/note/blurb raise priority, ties rotate by date; rainy, cold or wet days avoid "try" items and evenings never suggest them. `last_suggested` is set (state returned) when the briefing for TODAY is prepared; repeated calls the same day keep the same pick. The template adds one gentle optional sentence (plus the first sentence of the blurb for something new) and the AI context lists the leisure items (current first, finished never), the computed suggestion and whether there is room, with the rule: at most one, only with free time, softly, never as a goal. Finished items appear only as a light highlight in the weekly overview.
+
 ## Assistant memory
 ```json
 Memory = {
   "weather": {"comfortable_max": 18, "hot_above": 22, "too_hot_above": 25, "likes_rain": true, "avoid_sunburn": true},
   "work": {"enabled": true, "days": [0,1,2,3,4], "start": "10:00", "end": "17:00", "holiday_region": "AU-NSW", "lunch_minutes": 60},
   "rhythm": {"wake_from": "06:00", "wake_to": "07:00", "sleep_from": "23:00", "sleep_to": "00:00"},
-  "notes": [{"id": 1, "text": "I work from an office most weekdays"}]
+  "notes": [{"id": 1, "text": "I work from an office most weekdays"}],
+  "interests": "History and politics, ..."   // free text; default set by init_state and the v8 migration
 }
 ```
-`GET /api/memory` -> Memory; `PUT /api/memory/weather` body weather object (partial allowed; thresholds must satisfy comfortable_max <= hot_above <= too_hot_above, each -30..60) -> Memory; `PUT /api/memory/work` body partial work object (`days` are 0=Monday..6=Sunday; `start` < `end`, HH:MM; `lunch_minutes` 0..240; empty `holiday_region` = no holidays) -> Memory; `PUT /api/memory/rhythm` body partial rhythm object (HH:MM) -> Memory; `POST /api/memory/notes` `{"text"}` -> Memory; `PUT /api/memory/notes/{id}` `{"text"}` -> Memory; `DELETE /api/memory/notes/{id}` -> Memory (404 for unknown id; note text 1..500 chars).
+`GET /api/memory` -> Memory; `PUT /api/memory/weather` body weather object (partial allowed; thresholds must satisfy comfortable_max <= hot_above <= too_hot_above, each -30..60) -> Memory; `PUT /api/memory/work` body partial work object (`days` are 0=Monday..6=Sunday; `start` < `end`, HH:MM; `lunch_minutes` 0..240; empty `holiday_region` = no holidays) -> Memory; `PUT /api/memory/interests` body `{"text"}` (free text, max 1000 chars; silent AI context and it steers which leisure item is suggested; empty is allowed). `PUT /api/memory/rhythm` body partial rhythm object (HH:MM) -> Memory; `POST /api/memory/notes` `{"text"}` -> Memory; `PUT /api/memory/notes/{id}` `{"text"}` -> Memory; `DELETE /api/memory/notes/{id}` -> Memory (404 for unknown id; note text 1..500 chars).
 Seed defaults are the values above with one example note (also returned for existing databases that have no stored memory). Memory is included in all Gemini context (digest, day note, briefings).
 
 Work is a time block, not a task. Lunch is a flexible-time break of `lunch_minutes` (good for a quick call, bill, booking or shop). "Before work" means the window between waking and `work.start`; evening suggestions finish comfortably before `rhythm.sleep_from`.

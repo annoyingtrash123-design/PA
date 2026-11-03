@@ -25,15 +25,15 @@ const TPL: [string, number[]][] = [
 
 export function init_state(today: string): string {
   const s: Any = {
-    version: 7, next_id: 100,
+    version: 8, next_id: 100,
     settings: { assistant_name: "Miranda", user_name: "", voice: "", location_name: "Sydney", latitude: -33.8688, longitude: 151.2093, timezone: "Australia/Sydney" },
     categories: CATS.map(([name, color], i) => ({ id: i + 1, name, color })),
-    tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, missed: {}, days_off: [], goals: [],
+    tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, missed: {}, days_off: [], goals: [], leisure: [],
     memory: {
       weather: { comfortable_max: 18, hot_above: 22, too_hot_above: 25, likes_rain: true, avoid_sunburn: true },
       work: { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60, lunch_window_start: "12:00", lunch_window_end: "14:00" },
       rhythm: { wake_from: "06:00", wake_to: "07:00", sleep_from: "23:00", sleep_to: "00:00" },
-      notes: [],
+      notes: [], interests: "History and politics, especially Western European and East Asian history. Particularly the 18th and 19th centuries, and keen to learn more about the 13th to 17th centuries.",
     },
     gym: {
       exercises: EX.map((name, i) => ({ id: i + 1, name, assisted: false })),
@@ -80,6 +80,13 @@ function sampleData(s: Any, today: string) {
     { id: id(), title: "Run a half marathon", horizon: "long", deadline: null, why: "", status: "active", achieved_on: null, created: today },
     { id: id(), title: "Learn to cook five dinners", horizon: "medium", deadline: addDays(today, -20), why: "Eat better and save money", status: "achieved", achieved_on: addDays(today, -20), created: addDays(today, -90) },
     { id: id(), title: "Tidy the garage", horizon: "medium", deadline: null, why: "", status: "archived", achieved_on: null, created: addDays(today, -60) },
+  );
+  s.leisure.push(
+    { id: id(), kind: "read", title: "Piranesi", note: "On chapter twelve", status: "current", created: today, finished_on: null, last_suggested: null, blurb: "It's a quiet, dreamlike novel about a man who lives alone in an endless house of statues and tides." },
+    { id: id(), kind: "watch", title: "Slow Horses", note: "", status: "someday", created: today, finished_on: null, last_suggested: null, blurb: "It's a sharp, funny spy series about a team of disgraced agents shunted off to a shabby office." },
+    { id: id(), kind: "try", title: "The new cafe on Crown Street", note: "Someone said the flat white is great", status: "someday", created: today, finished_on: null, last_suggested: null, blurb: "It's a small neighbourhood cafe that's meant to be good for a slow coffee and a pastry." },
+    { id: id(), kind: "play", title: "Stardew Valley", note: "", status: "someday", created: today, finished_on: null, last_suggested: null, blurb: "It's a cosy farming game where you take over a run-down farm and slowly build a life in a village." },
+    { id: id(), kind: "watch", title: "Wolf Hall", note: "", status: "finished", created: addDays(today, -30), finished_on: addDays(today, -4), last_suggested: null, blurb: "" },
   );
   const sets = (w: number, reps: number) => [1, 2, 3].map((n) => ({ exercise_id: 1, set_no: n, weight: w, reps, done: true }));
   s.gym.sessions.push({ id: id(), template_id: 1, name: "Push A", date: addDays(today, -14), completed: true, sets: sets(55, 8) });
@@ -266,6 +273,30 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
     if (is("PUT")) { s.goals[i] = { ...s.goals[i], ...body, id: s.goals[i].id }; return mut(s.goals[i]); }
     if (is("DELETE")) { s.goals.splice(i, 1); return mut({}); }
   }
+  // leisure
+  if (p === "/api/leisure") {
+    if (is("GET")) return ro([...s.leisure].sort((a: Any, b: Any) => ["current", "someday", "finished"].indexOf(a.status) - ["current", "someday", "finished"].indexOf(b.status)));
+    if (is("POST")) {
+      if (!body.title?.trim()) throw bad("title is required");
+      const l = { id: id(), note: "", status: "someday", created: ctx.today, finished_on: null, last_suggested: null, blurb: "", ...body, title: body.title.trim() };
+      if (l.status === "finished") l.finished_on = ctx.today;
+      s.leisure.push(l); return mut(l);
+    }
+  }
+  if (M(/^\/api\/leisure\/(\d+)\/blurb-prompt$/)) {
+    const l = s.leisure.find((x: Any) => x.id === +m![1]); if (!l) throw nf();
+    return ro({ id: l.id, title: l.title, system_prompt: "Write a spoiler-free blurb, or UNKNOWN.", user_prompt: `Title: ${l.title}\nWhat it is: ${l.kind}` });
+  }
+  if (M(/^\/api\/leisure\/(\d+)$/)) {
+    const i = s.leisure.findIndex((x: Any) => x.id === +m![1]); if (i < 0) throw nf();
+    if (is("PUT")) {
+      const next = { ...s.leisure[i], ...body, id: s.leisure[i].id };
+      next.finished_on = next.status === "finished" ? (s.leisure[i].finished_on ?? ctx.today) : null;
+      s.leisure[i] = next; return mut(next);
+    }
+    if (is("DELETE")) { s.leisure.splice(i, 1); return mut({}); }
+  }
+  if (is("PUT") && p === "/api/memory/interests") { s.memory.interests = String(body.text ?? "").trim(); return mut(s.memory); }
   // memory
   if (is("GET") && p === "/api/memory") return ro(s.memory);
   if (M(/^\/api\/memory\/(weather|work|rhythm)$/) && is("PUT")) {
@@ -320,7 +351,7 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
   }
   if (M(/^\/api\/sessions\/(\d+)\/sets$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.sets = body.sets; return mut(x); }
   if (M(/^\/api\/sessions\/(\d+)\/cardio$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.cardio = { activity: body.activity, minutes: body.minutes }; return mut(x); }
-  if (is("GET") && p === "/api/state/migrate") return ro({ version: 7 });
+  if (is("GET") && p === "/api/state/migrate") return ro({ version: 8 });
   if (M(/^\/api\/sessions\/(\d+)\/complete$/) && is("POST")) {
     const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.completed = true;
     const r = s.gym.rotation; const n = r.items.length;

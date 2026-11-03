@@ -255,6 +255,9 @@ function memoryCard(name: string): HTMLElement {
   };
   newNote.onkeydown = (e) => { if (e.key === "Enter") addNote(); };
 
+  const interests = h("textarea", { class: "input", rows: 4, maxlength: 1000, placeholder: "e.g. Cooking, birdwatching, modern Japanese fiction" }, mem.interests ?? "") as HTMLTextAreaElement;
+  const saveInterests = () => { try { api("PUT", "/api/memory/interests", { text: interests.value }); toast("Interests saved"); } catch (e) { toast((e as Error).message); } };
+
   return card("stack",
     h("h3", { class: "title-sm" }, `What ${name} knows about you`),
     muted(`${name} uses this to write your daily digest and briefings.`),
@@ -263,6 +266,8 @@ function memoryCard(name: string): HTMLElement {
     sub("Work hours"), on.el, dayRow, h("div", { class: "pair" }, field("Start", start), field("End", end)), field("Lunch break", withSuffix(lunch, "min")), h("div", { class: "pair" }, field("Lunch usually between", lunchFrom), field("and", lunchTo)), field("Holiday region", region, "Public holidays are shown for this region, e.g. AU-NSW. Leave empty for none."), outlineBtn("Save work hours", saveWork),
     h("hr", { class: "divider" }),
     sub("Daily rhythm"), h("span", null, "Usually wake"), h("div", { class: "pair" }, wf, wt), h("span", null, "Usually asleep by"), h("div", { class: "pair" }, sf, st), outlineBtn("Save daily rhythm", saveRhythm),
+    h("hr", { class: "divider" }),
+    sub("Interests"), field("Interests", interests, "Things you love or want to learn about"), outlineBtn("Save interests", saveInterests),
     h("hr", { class: "divider" }),
     sub("Notes"), notesCol, h("div", { class: "row" }, h("div", { class: "grow" }, newNote), iconBtn("add-circle", "Add note", addNote, "lav", 32)),
     h("p", { class: "field-hint" }, "e.g. I work from the office Tue to Thu"),

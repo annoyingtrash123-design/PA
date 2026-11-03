@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 7;
+pub const STATE_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -173,6 +173,34 @@ pub struct Memory {
     pub work: WorkPrefs,
     pub rhythm: Rhythm,
     pub notes: Vec<Note>,
+    /// Free text: things the person loves or wants to learn about (silent AI context, shapes leisure picks).
+    pub interests: String,
+}
+
+/// Something for free time: watch / read / listen / play / try.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Leisure {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub note: String,
+    /// "someday" | "current" | "finished"
+    #[serde(default = "someday")]
+    pub status: String,
+    #[serde(default)]
+    pub created: String,
+    #[serde(default)]
+    pub finished_on: Option<String>,
+    #[serde(default)]
+    pub last_suggested: Option<String>,
+    /// Short spoiler-free description (written once by the AI from the UI, or by hand).
+    #[serde(default)]
+    pub blurb: String,
+}
+
+fn someday() -> String {
+    "someday".into()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -304,6 +332,7 @@ pub struct State {
     pub missed: BTreeMap<String, String>,
     pub days_off: Vec<String>,
     pub goals: Vec<Goal>,
+    pub leisure: Vec<Leisure>,
     pub memory: Memory,
     pub gym: Gym,
 }
@@ -322,6 +351,7 @@ impl Default for State {
             missed: BTreeMap::new(),
             days_off: vec![],
             goals: vec![],
+            leisure: vec![],
             memory: Memory::default(),
             gym: Gym::default(),
         }
@@ -345,6 +375,7 @@ impl State {
             t.checklist.iter().for_each(|c| up(c.id));
         });
         self.goals.iter().for_each(|g| up(g.id));
+        self.leisure.iter().for_each(|l| up(l.id));
         self.memory.notes.iter().for_each(|n| up(n.id));
         self.gym.exercises.iter().for_each(|e| up(e.id));
         self.gym.templates.iter().for_each(|t| up(t.id));

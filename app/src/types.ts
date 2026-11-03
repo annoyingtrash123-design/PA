@@ -100,11 +100,28 @@ export interface Goal {
   created: string;
 }
 
+export type LeisureKind = "watch" | "read" | "listen" | "play" | "try";
+export type LeisureStatus = "someday" | "current" | "finished";
+
+export interface Leisure {
+  id: number;
+  kind: LeisureKind;
+  title: string;
+  note: string;
+  status: LeisureStatus;
+  created: string;
+  finished_on: string | null;
+  last_suggested: string | null;
+  /** short spoiler-free description (AI or hand written); may be empty */
+  blurb: string;
+}
+
 export interface Memory {
   weather: { comfortable_max: number; hot_above: number; too_hot_above: number; likes_rain: boolean; avoid_sunburn: boolean };
   work: { enabled: boolean; days: number[]; start: string; end: string; holiday_region: string; lunch_minutes: number; lunch_window_start: string; lunch_window_end: string };
   rhythm: { wake_from: string; wake_to: string; sleep_from: string; sleep_to: string };
   notes: { id: number; text: string }[];
+  interests: string;
 }
 
 export type TemplateKind = "strength" | "cardio";
@@ -188,6 +205,7 @@ export interface State {
   missed?: Record<string, string>;
   days_off: string[];
   goals: Goal[];
+  leisure: Leisure[];
   memory: Memory;
   gym: { exercises: Exercise[]; templates: Template[]; rotation: Rotation; sessions: Session[]; next_since?: string | null };
 }

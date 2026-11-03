@@ -7,6 +7,7 @@ use crate::error::{ApiErr, Res};
 use crate::goals;
 use crate::gym;
 use crate::holidays;
+use crate::leisure;
 use crate::memory;
 use crate::model::*;
 use crate::seed;
@@ -189,10 +190,17 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         ("POST", ["goals"]) => ok(goals::create(env, parse(body)?)?),
         ("PUT", ["goals", id]) => ok(goals::update(env, id_of(id)?, parse(body)?)?),
         ("DELETE", ["goals", id]) => goals::delete(env, id_of(id)?),
+        // leisure
+        ("GET", ["leisure"]) => Ok(leisure::list(env)),
+        ("POST", ["leisure"]) => ok(leisure::create(env, parse(body)?)?),
+        ("PUT", ["leisure", id]) => ok(leisure::update(env, id_of(id)?, parse(body)?)?),
+        ("DELETE", ["leisure", id]) => leisure::delete(env, id_of(id)?),
+        ("GET", ["leisure", id, "blurb-prompt"]) => leisure::blurb_prompt(env, id_of(id)?),
         // memory
         ("GET", ["memory"]) => ok(&env.st.memory),
         ("PUT", ["memory", "weather"]) => ok(memory::put_weather(env, parse(body)?)?),
         ("PUT", ["memory", "work"]) => ok(memory::put_work(env, parse(body)?)?),
+        ("PUT", ["memory", "interests"]) => ok(memory::put_interests(env, parse(body)?)?),
         ("PUT", ["memory", "rhythm"]) => ok(memory::put_rhythm(env, parse(body)?)?),
         ("POST", ["memory", "notes"]) => ok(memory::add_note(env, parse(body)?)?),
         ("PUT", ["memory", "notes", id]) => ok(memory::update_note(env, id_of(id)?, parse(body)?)?),

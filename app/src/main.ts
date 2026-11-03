@@ -10,7 +10,6 @@ import { setupUpdates } from "./updates";
 import { renderGoals } from "./views/goals";
 import { renderGym } from "./views/gym";
 import { renderHome } from "./views/home";
-import { renderReview } from "./views/review";
 import { renderSettings } from "./views/settings";
 import { renderTasks } from "./views/tasks";
 
@@ -23,15 +22,13 @@ const routes: [string, View, string][] = [
   ["/tasks", renderTasks, "tasks"],
   ["/goals", renderGoals, "goals"],
   ["/gym", renderGym, "gym"],
-  ["/review", renderReview, "review"],
   ["/settings", renderSettings, "settings"],
 ];
 const TABS = [
   { id: "home", hash: "#/", icon: "home", label: "Home" },
   { id: "tasks", hash: "#/tasks", icon: "tasks", label: "Tasks" },
-  { id: "goals", hash: "#/goals", icon: "flag", label: "Goals" },
+  { id: "goals", hash: "#/goals", icon: "compass", label: "Plans" },
   { id: "gym", hash: "#/gym", icon: "gym", label: "Gym" },
-  { id: "review", hash: "#/review", icon: "book", label: "Review" },
   { id: "settings", hash: "#/settings", icon: "settings", label: "Settings" },
 ];
 
@@ -62,6 +59,7 @@ function route() {
   const path = location.hash.replace(/^#/, "").split("?")[0] || "/";
   const entry = routes.find(([p]) => p === path);
   if (!entry) {
+    // old bookmarks: the Review tab now lives on Home
     location.hash = "#/";
     return;
   }

@@ -6,8 +6,9 @@ use crate::env::Env;
 use crate::error::{ApiErr, Res};
 use crate::goals;
 use crate::gym::{self, WorkoutPlan};
+use crate::leisure;
 use crate::memory;
-use crate::model::{Goal, Memory, Weather};
+use crate::model::{Goal, Leisure, Memory, Weather};
 use crate::tasks::{self, DayInfo, Occurrence};
 use crate::util::*;
 use chrono::{Datelike, Duration, NaiveDate};
@@ -74,6 +75,14 @@ struct Ctx {
     week: Option<Week>,
     goals: Vec<Goal>,
     goals_achieved: Vec<Goal>,
+    /// open leisure items, current first (morning/evening)
+    leisure: Vec<Leisure>,
+    /// the one item that may be suggested today, and whether the day has free room
+    leisure_pick: Option<Leisure>,
+    leisure_room: bool,
+    leisure_open_day: bool,
+    /// finished this week (weekly only)
+    leisure_finished: Vec<Leisure>,
     memory: Memory,
     yesterday: Vec<Occurrence>,
     info: DayInfo,
@@ -103,6 +112,11 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
         week: None,
         goals: goals::list_active(&env.st.goals),
         goals_achieved: vec![],
+        leisure: vec![],
+        leisure_pick: None,
+        leisure_room: false,
+        leisure_open_day: false,
+        leisure_finished: vec![],
         memory: env.st.memory.clone(),
         yesterday: vec![],
         info: DayInfo::default(),
@@ -129,6 +143,12 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
                 ctx.gym_done = gym::completed_session_on(env.st, date).map(|(_, _, name)| name);
                 ctx.cardio_done = gym::cardio_done_on(env.st, date).map(|c| gym::cardio_phrase(&c));
             }
+            let evening = kind == Kind::Evening;
+            ctx.leisure = leisure::list_all(&env.st.leisure).into_iter().filter(|l| l.status != "finished").collect();
+            ctx.leisure_room = leisure::free_room(&ctx.items, &ctx.info, date, evening);
+            ctx.leisure_open_day = leisure::free_room(&ctx.items, &ctx.info, date, false);
+            let wx = env.ctx.weather.get(&fmt_date(date)).cloned();
+            ctx.leisure_pick = leisure::suggest(&env.st.leisure, &env.st.memory.interests, date, &wx, ctx.leisure_room, evening);
             if !days.is_empty() {
                 let t = days.remove(0);
                 let d = parse_date(&t.date).unwrap_or(date + Duration::days(1));
@@ -191,6 +211,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
                 }
             }
             ctx.goals_achieved = goals::achieved_between(&env.st.goals, monday, monday + Duration::days(6));
+            ctx.leisure_finished = leisure::finished_between(&env.st.leisure, monday, monday + Duration::days(6));
             ctx.week = Some(w);
         }
     }
@@ -660,6 +681,11 @@ fn morning_template(c: &Ctx) -> String {
         add(&mut v, "If something keeps rolling over day after day, that's a sign to either shrink it or give it a time, so let me know if you want to reshuffle.".into(), PK::Extra(6));
     }
 
+    // gentle, optional leisure idea (only with genuinely free room)
+    if let Some(l) = &c.leisure_pick {
+        must(&mut v, leisure::morning_sentence(l, d, c.leisure_open_day));
+    }
+
     // 6. grounded close
     must(&mut v, match daynote::key_task(&c.items) {
         Some(k) if !k.done => {
@@ -771,6 +797,9 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             if let Some(w) = weather {
                 parts.push(format!("It was {} today.", w.summary.to_lowercase()));
             }
+            if let Some(l) = &c.leisure_pick {
+                parts.push(leisure::evening_sentence(l, d));
+            }
             parts.push(match &c.tomorrow {
                 Some((wd, items, _)) => match daynote::key_task(items) {
                     Some(k) => format!("The first thing to think about for {wd} is {}, so nothing else needs your attention tonight.", item_phrase(k)),
@@ -860,6 +889,9 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             }
             for g in &c.goals_achieved {
                 parts.push(format!("And you actually hit a goal this week, which was {}. That's worth a proper moment of celebration.", goals::short_title(g)));
+            }
+            if let Some(l) = c.leisure_finished.first() {
+                parts.push(format!("On the lighter side, you also finished {} this week, which is a lovely thing to have done just for fun.", l.title));
             }
             if !w.slid_titles.is_empty() {
                 let v: Vec<String> = w.slid_titles.iter().take(2).cloned().collect();
@@ -1024,6 +1056,11 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
         }
     }
     s.push_str(&goals::context_block(&c.goals, &c.goals_achieved, c.date));
+    if c.kind != Kind::Weekly {
+        s.push_str(&leisure::context_block(&c.leisure, &c.leisure_pick, c.leisure_room));
+    } else {
+        s.push_str(&leisure::finished_context(&c.leisure_finished));
+    }
     s
 }
 
@@ -1093,6 +1130,12 @@ fn plan_fingerprint(ctx: &Ctx) -> String {
 /// `GET /api/briefing?kind=&date=`
 pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     let ctx = build_ctx(env, kind, date);
+    // the suggestion counts as "made" once today's summary is prepared: remember it for the 5-day rotation
+    if kind != Kind::Weekly && date == env.today {
+        if let Some(l) = &ctx.leisure_pick {
+            leisure::stamp(env, l.id, date);
+        }
+    }
     let ds = fmt_date(date);
     let weather = if kind == Kind::Weekly { None } else { env.ctx.weather.get(&ds).cloned() };
     let system = system_prompt(&ctx);

@@ -3,6 +3,7 @@ import { icon } from "../icons";
 import { button, card, chip, clear, confirmDialog, field, h, iconBtn, muted, openModal, segmented, textInput, toast, toggle } from "../ui";
 import { prettyDate, relativeDate } from "../util/dates";
 import type { Goal } from "../types";
+import { leisureSection } from "./leisure";
 
 const HORIZONS: ["medium" | "long", string][] = [["medium", "Medium-term"], ["long", "Long-term"]];
 const open: Record<string, boolean> = { achieved: false, archived: false };
@@ -15,7 +16,7 @@ export function renderGoals(root: HTMLElement): void {
     const goals = api<Goal[]>("GET", "/api/goals");
     const by = (st: Goal["status"], hz?: string) => goals.filter((g) => g.status === st && (!hz || g.horizon === hz));
     const out: (HTMLElement | null)[] = [
-      h("div", { class: "row", style: { alignItems: "flex-start" } }, h("div", { class: "grow stack", style: { gap: "2px" } }, h("h2", { class: "title-md" }, "Goals"), muted("Your assistant uses these to see how your days add up.")), iconBtn("add-circle", "Add goal", () => editGoal(null, draw), "lav", 34)),
+      h("div", { class: "row", style: { alignItems: "flex-start" } }, h("div", { class: "grow stack", style: { gap: "2px" } }, h("h2", { class: "title-md" }, "Plans"), muted("Goals your assistant uses to see how your days add up, and things for your free time.")), iconBtn("add-circle", "Add goal", () => editGoal(null, draw), "lav", 34)),
     ];
     if (!by("active").length) out.push(card("stack", muted("No active goals yet."), button("Add your first goal", () => editGoal(null, draw), { kind: "text", icon: "flag" })));
     for (const [hz, label] of HORIZONS) {
@@ -30,6 +31,7 @@ export function renderGoals(root: HTMLElement): void {
       out.push(h("button", { type: "button", class: "collapse-head", "aria-expanded": String(isOpen), onclick: () => { open[key] = !isOpen; draw(); } }, h("span", { style: { color: key === "achieved" ? "var(--sage)" : "var(--muted)", display: "flex" } }, icon(ic, 18)), h("span", { class: "grow", style: { textAlign: "left" } }, `${label} (${items.length})`), h("span", { style: { color: "var(--muted)", display: "flex" } }, icon(isOpen ? "expand-less" : "expand-more", 22))));
       if (isOpen) out.push(...items.map((g) => goalCard(g, true, draw)));
     }
+    out.push(leisureSection());
     clear(root, ...out);
     window.scrollTo(0, y);
   };

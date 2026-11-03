@@ -17,6 +17,6 @@ BASE_PATH=/PA/ npm run build:web   # as GitHub Pages serves it
 
 ## Layout
 - `src/core.ts` wasm bridge + persistence; `src/services/` weather (Open-Meteo), holidays (Nager.Date), Gemini, AI text orchestration (`pa-ai-cache`), speech.
-- `src/views/` Home, Tasks, Goals, Gym, Review, Settings; `src/util/` pure helpers (tested).
+- `src/views/` Home (incl. the weekly overview), Tasks, Plans (goals + leisure list), Gym, Settings; `src/util/` pure helpers (tested).
 - The Gemini key lives in localStorage `pa-gemini-key` (never in State or backups).
 - `scripts/gen-icons.cjs` renders `scripts/icon.svg` to the PNG icons; `scripts/screenshots.cjs` takes the review screenshots.

@@ -18,6 +18,7 @@ pub mod error;
 pub mod goals;
 pub mod gym;
 pub mod holidays;
+pub mod leisure;
 pub mod memory;
 pub mod model;
 pub mod router;

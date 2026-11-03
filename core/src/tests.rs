@@ -57,7 +57,7 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 7);
+    assert_eq!(st.version, 8);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
@@ -472,7 +472,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 7);
+        assert_eq!(r["state"]["version"], 8);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
@@ -488,7 +488,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 7);
+        assert_eq!(m["version"], 8);
     }
 }
 
@@ -498,14 +498,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 7);
+    assert_eq!(r["body"]["version"], 8);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 7);
+    assert_eq!(r["state"]["version"], 8);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -518,7 +518,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 7);
+    assert_eq!(imp["version"], 8);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -801,7 +801,7 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v2.gym.rotation.items = old8.clone();
     v2.gym.rotation.next_index = 2;
     assert!(crate::seed::migrate(&mut v2, TODAY));
-    assert_eq!(v2.version, 7);
+    assert_eq!(v2.version, 8);
     assert_eq!(names(&v2), ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"]);
     assert_eq!(v2.gym.rotation.next_index, 4, "still Legs + Abs 1 next");
     // v3 (8 + rest), next = the rest day
@@ -999,7 +999,7 @@ fn missed_untimed_rolls_timed_and_appointments_are_missed() {
     let day = a.get("/api/days?start=2026-11-02&days=1");
     let titles: Vec<&str> = day[0]["items"].as_array().unwrap().iter().map(|o| o["title"].as_str().unwrap()).collect();
     assert_eq!(titles, vec!["Stretch", "Pay rent"]);
-    assert_eq!(a.st().version, 7);
+    assert_eq!(a.st().version, 8);
     assert_eq!(a.st().missed.len(), 2);
 }
 
@@ -1129,6 +1129,9 @@ fn all_template_parts_are_complete_spoken_sentences() {
             a.holidays = json!([{"date": "2026-11-04", "name": "Test Holiday"}]);
             a.post("/api/days-off", json!({"date": "2026-11-05"}));
             if fresh {
+                for (k, t, st, bl) in [("read", "A History of Venice", "current", ""), ("watch", "Wolf Hall", "someday", "It's a drama about Thomas Cromwell at the court of Henry the Eighth. It's slow and rich."), ("try", "The old tea house", "someday", "I don't know much about this one yet.")] {
+                    a.post("/api/leisure", json!({"kind": k, "title": t, "status": st, "blurb": bl}));
+                }
                 // a missed item and a quiet week
                 let appt = cat_id(&mut a, "Appointments");
                 a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "category_id": appt}));
@@ -1195,4 +1198,156 @@ fn lunch_window_defaults_validates_and_saves() {
     assert_eq!(b["work"]["lunch_window_start"], "11:30");
     let up = a.get("/api/briefing?kind=morning")["user_prompt"].as_str().unwrap().to_string();
     assert!(up.contains("between 11:30 and 1:30"), "{up}");
+}
+
+// ------------------------------------------------------------ leisure
+
+fn leisure_line(b: &Value) -> String {
+    b["user_prompt"].as_str().unwrap().lines().find(|l| l.starts_with("Computed leisure suggestion")).unwrap_or("").to_string()
+}
+
+fn add_leisure(a: &mut App, kind: &str, title: &str, status: &str) -> Value {
+    a.post("/api/leisure", json!({"kind": kind, "title": title, "status": status}))
+}
+
+#[test]
+fn leisure_crud_and_validation() {
+    let mut a = App::new(TODAY);
+    assert_eq!(a.req("POST", "/api/leisure", json!({"kind": "dance", "title": "x"})).0, 400);
+    assert_eq!(a.req("POST", "/api/leisure", json!({"kind": "read", "title": "  "})).0, 400);
+    assert_eq!(a.req("POST", "/api/leisure", json!({"kind": "read", "title": "x", "status": "done"})).0, 400);
+    let l = add_leisure(&mut a, "read", "Book A", "someday");
+    assert_eq!(l["status"], "someday");
+    assert_eq!(l["blurb"], "");
+    let id = l["id"].as_i64().unwrap();
+    let (s, u) = a.req("PUT", &format!("/api/leisure/{id}"), json!({"kind": "read", "title": "Book A", "status": "finished", "blurb": "It's a book."}));
+    assert_eq!((s, u["finished_on"].as_str(), u["blurb"].as_str()), (200, Some(TODAY), Some("It's a book.")));
+    // a PUT without blurb keeps it
+    let (_, u) = a.req("PUT", &format!("/api/leisure/{id}"), json!({"kind": "read", "title": "Book A", "status": "current"}));
+    assert_eq!((u["finished_on"].clone(), u["blurb"].as_str()), (Value::Null, Some("It's a book.")));
+    add_leisure(&mut a, "watch", "Show", "someday");
+    let list = a.get("/api/leisure");
+    assert_eq!(list[0]["title"], "Book A");
+    assert_eq!(a.req("DELETE", &format!("/api/leisure/{id}"), json!({})).0, 200);
+    assert_eq!(a.req("DELETE", &format!("/api/leisure/{id}"), json!({})).0, 404);
+    assert_eq!(a.get("/api/leisure").as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn leisure_state_v8_interests_and_sample_data() {
+    let a = App::new(TODAY);
+    assert!(a.st().memory.interests.starts_with("History and politics"));
+    let mut st = a.st();
+    st.version = 7;
+    st.memory.interests = String::new();
+    assert!(crate::seed::migrate(&mut st, TODAY));
+    assert_eq!((st.version, st.memory.interests.starts_with("History and politics")), (8, true));
+    let mut b = App::new(TODAY);
+    let (s, m) = b.req("PUT", "/api/memory/interests", json!({"text": " Birds and maps "}));
+    assert_eq!((s, m["interests"].as_str()), (200, Some("Birds and maps")));
+    assert!(b.get("/api/briefing?kind=morning")["user_prompt"].as_str().unwrap().contains("Interests"));
+    let c = App::with_sample(TODAY);
+    let l = c.st().leisure;
+    assert_eq!(l.len(), 4);
+    assert!(l.iter().all(|x| !x.blurb.is_empty()));
+}
+
+#[test]
+fn leisure_suggested_only_with_free_room() {
+    // a packed work day: no suggestion in the morning or the evening
+    let mut a = App::with_sample(TODAY);
+    for kind in ["morning", "evening"] {
+        let b = a.get(&format!("/api/briefing?kind={kind}"));
+        assert!(leisure_line(&b).ends_with("none today"), "{kind}: {}", leisure_line(&b));
+        for t in ["Piranesi", "Slow Horses", "Stardew", "Crown Street"] {
+            assert!(!b["template_text"].as_str().unwrap().contains(t), "{kind} {t}");
+        }
+    }
+    assert!(a.st().leisure.iter().all(|l| l.last_suggested.is_none()));
+    // a free Saturday gets exactly one
+    let mut f = App::new("2026-11-07");
+    add_leisure(&mut f, "read", "Book A", "someday");
+    let b = f.get("/api/briefing?kind=morning");
+    assert!(leisure_line(&b).contains("Book A"), "{}", leisure_line(&b));
+    assert!(b["template_text"].as_str().unwrap().contains("Book A"));
+    assert!(b["user_prompt"].as_str().unwrap().contains("Free room for leisure today: yes"));
+    // a day off / holiday on a work day is free; a timed evening commitment is not
+    let mut e = App::new("2026-11-03");
+    add_leisure(&mut e, "watch", "Show", "someday");
+    let appt = cat_id(&mut e, "Social");
+    e.post("/api/tasks", json!({"title": "Dinner out", "date": "2026-11-03", "time": "19:00", "category_id": appt}));
+    assert!(leisure_line(&e.get("/api/briefing?kind=evening")).ends_with("none today"));
+    e.post("/api/days-off", json!({"date": "2026-11-04"}));
+    e.today = "2026-11-04".into();
+    assert!(leisure_line(&e.get("/api/briefing?kind=morning&date=2026-11-04")).contains("Show"));
+}
+
+#[test]
+fn leisure_prefers_current_and_phrases_it_as_carrying_on() {
+    let mut a = App::new("2026-11-07");
+    add_leisure(&mut a, "watch", "Some Film", "someday");
+    add_leisure(&mut a, "read", "Big Novel", "current");
+    let m = a.get("/api/briefing?kind=morning")["template_text"].as_str().unwrap().to_string();
+    assert!(m.contains("a few more chapters of Big Novel"), "{m}");
+    assert!(!m.contains("Some Film"));
+    let e = a.get("/api/briefing?kind=evening")["template_text"].as_str().unwrap().to_string();
+    assert!(e.contains("curl up and read a few more chapters of Big Novel"), "{e}");
+    // stable on repeat and recorded once
+    let again = a.get("/api/briefing?kind=morning")["template_text"].as_str().unwrap().to_string();
+    assert_eq!(m, again);
+    assert_eq!(a.st().leisure.iter().filter(|l| l.last_suggested.as_deref() == Some("2026-11-07")).count(), 1);
+}
+
+#[test]
+fn leisure_rotation_skips_items_suggested_in_the_last_five_days() {
+    let mut a = App::new("2026-11-07");
+    for t in ["Alpha", "Beta", "Gamma"] {
+        add_leisure(&mut a, "read", t, "someday");
+    }
+    let mut seen: Vec<String> = vec![];
+    for day in ["2026-11-07", "2026-11-08", "2026-11-09"] {
+        a.today = day.into();
+        let line = leisure_line(&a.get(&format!("/api/briefing?kind=morning&date={day}")));
+        let t = ["Alpha", "Beta", "Gamma"].iter().find(|t| line.contains(**t)).unwrap_or_else(|| panic!("{day}: {line}"));
+        assert!(!seen.contains(&t.to_string()), "{t} repeated: {seen:?}");
+        seen.push(t.to_string());
+    }
+    // all three are recent now: nothing for a few days, then they come back
+    a.today = "2026-11-10".into();
+    assert!(leisure_line(&a.get("/api/briefing?kind=morning&date=2026-11-10")).ends_with("none today"));
+    a.today = "2026-11-13".into();
+    assert!(!leisure_line(&a.get("/api/briefing?kind=morning&date=2026-11-13")).ends_with("none today"));
+}
+
+#[test]
+fn leisure_weather_interests_and_finished() {
+    let mut a = App::new("2026-11-07");
+    a.weather = json!({"2026-11-07": {"summary": "Light rain", "temp_max": 14, "temp_min": 9, "precip_prob": 80, "uv_max": 2.0}});
+    add_leisure(&mut a, "try", "The tea house", "someday");
+    add_leisure(&mut a, "watch", "A Film", "someday");
+    assert!(leisure_line(&a.get("/api/briefing?kind=morning")).contains("A Film"));
+    // interests raise priority
+    let mut b = App::new("2026-11-07");
+    b.post("/api/leisure", json!({"kind": "read", "title": "Cooking for one", "status": "someday"}));
+    b.post("/api/leisure", json!({"kind": "read", "title": "The Meiji restoration", "status": "someday", "blurb": "It's a history of Japan in the nineteenth century."}));
+    assert!(leisure_line(&b.get("/api/briefing?kind=morning")).contains("Meiji"));
+    // finished items are never suggested, only a light weekly highlight
+    let mut c = App::new("2026-11-08");
+    let l = add_leisure(&mut c, "watch", "Done Show", "someday");
+    c.req("PUT", &format!("/api/leisure/{}", l["id"]), json!({"kind": "watch", "title": "Done Show", "status": "finished"}));
+    assert_eq!(leisure_line(&c.get("/api/briefing?kind=morning")), "");
+    let w = c.get("/api/briefing?kind=weekly");
+    assert!(w["template_text"].as_str().unwrap().contains("you also finished Done Show this week"));
+}
+
+#[test]
+fn blurb_prompt_endpoint() {
+    let mut a = App::new(TODAY);
+    let l = a.post("/api/leisure", json!({"kind": "read", "title": "The Count of Monte Cristo", "note": "from Sam"}));
+    let b = a.get(&format!("/api/leisure/{}/blurb-prompt", l["id"]));
+    let sys = b["system_prompt"].as_str().unwrap();
+    assert!(sys.contains("UNKNOWN") && sys.contains("spoilers") && sys.contains("silent"), "{sys}");
+    let usr = b["user_prompt"].as_str().unwrap();
+    assert!(usr.contains("The Count of Monte Cristo") && usr.contains("from Sam") && usr.contains("History and politics"), "{usr}");
+    assert_eq!(a.req("GET", "/api/leisure/9999/blurb-prompt", json!({})).0, 404);
 }

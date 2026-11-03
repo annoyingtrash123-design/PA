@@ -183,8 +183,12 @@ pub fn init_state(today: &str) -> State {
     });
     st.next_id = st.next_id.max(n + 1);
     st.gym.next_since = Some(today.to_string());
+    st.memory.interests = DEFAULT_INTERESTS.into();
     st
 }
+
+/// The owner's starting interests (init_state default and the v8 migration when the field is empty).
+pub const DEFAULT_INTERESTS: &str = "History and politics, especially Western European and East Asian history. Particularly the 18th and 19th centuries, and keen to learn more about the 13th to 17th centuries.";
 
 /// Bring an older State up to `STATE_VERSION`. Returns true when something changed.
 /// v1 -> v2: a gym section still holding exactly the six old generic templates (never customised)
@@ -212,6 +216,10 @@ pub fn migrate(st: &mut State, today: &str) -> bool {
         st.settings.assistant_name = "Miranda".into();
     }
     // v6 -> v7: `missed` is new (serde default: empty), nothing to convert
+    // v7 -> v8: `leisure` is new (empty); memory gains `interests`, filled with the default when empty
+    if st.version < 8 && st.memory.interests.trim().is_empty() {
+        st.memory.interests = DEFAULT_INTERESTS.into();
+    }
     st.version = STATE_VERSION;
     true
 }
@@ -396,6 +404,21 @@ pub fn sample_data(env: &mut Env) -> Value {
         env.st.goals.push(Goal { id, title: title.into(), horizon: horizon.into(), deadline: dl.map(day), why: why.into(), status: "active".into(), achieved_on: None, created: day(0) });
         added_goals += 1;
     }
+    let leisure: [(&str, &str, &str, &str, &str); 4] = [
+        ("read", "Piranesi", "current", "On chapter twelve", "A quiet, dreamlike novel about a man who lives alone in an endless house of statues and tides. It's more mystery than fantasy, and it rewards slow reading."),
+        ("watch", "Slow Horses", "someday", "", "A sharp, funny spy series about a team of disgraced agents shunted off to a shabby office. It's more weary wit than car chases."),
+        ("try", "The new cafe on Crown Street", "someday", "Someone said the flat white is great", "A small neighbourhood cafe that's meant to be good for a slow coffee and a pastry."),
+        ("play", "Stardew Valley", "someday", "", "A cosy farming game where you take over a run-down farm and slowly build a life in a village. It's relaxed, with no real pressure."),
+    ];
+    let mut added_leisure = 0;
+    for (kind, title, status, note, blurb) in leisure {
+        if env.st.leisure.iter().any(|l| l.title == title) {
+            continue;
+        }
+        let id = env.st.new_id();
+        env.st.leisure.push(Leisure { id, kind: kind.into(), title: title.into(), note: note.into(), status: status.into(), created: day(0), finished_on: None, last_suggested: None, blurb: blurb.into() });
+        added_leisure += 1;
+    }
     env.changed = true;
-    json!({"ok": true, "tasks": added_tasks, "goals": added_goals, "sessions": added_sessions})
+    json!({"ok": true, "tasks": added_tasks, "goals": added_goals, "sessions": added_sessions, "leisure": added_leisure})
 }

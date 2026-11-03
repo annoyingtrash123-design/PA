@@ -7,6 +7,7 @@ import { icon, weatherIconName } from "../icons";
 import { button, card, chip, clear, h, readAloud, segmented, toast } from "../ui";
 import { greeting, longDay } from "../util/dates";
 import { paragraphs } from "../util/text";
+import { weekCard } from "./week-card";
 
 type Kind = "morning" | "evening";
 let kind: Kind | null = null;
@@ -124,6 +125,7 @@ export function renderHome(root: HTMLElement): () => void {
     playHolder,
     segHolder,
     dayHolder,
+    weekCard(),
   );
   void load();
   return onContextUpdate(() => {

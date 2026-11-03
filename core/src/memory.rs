@@ -48,6 +48,9 @@ pub fn context_block(m: &Memory) -> String {
     }
     let r = &m.rhythm;
     s.push_str(&format!("  - Usually wakes between {} and {} and goes to sleep between {} and {}; keep evening suggestions finishing comfortably before bedtime, and nudge toward winding down in time for sleep in the evening.\n", r.wake_from, r.wake_to, r.sleep_from, r.sleep_to));
+    if !m.interests.trim().is_empty() {
+        s.push_str(&format!("  - Interests (things they love or want to learn about; private background, never recite the list, only let it quietly shape suggestions and recommendations): {}\n", m.interests.trim()));
+    }
     for n in &m.notes {
         s.push_str(&format!("  - Note: {}\n", n.text));
     }
@@ -182,6 +185,21 @@ pub fn put_rhythm(env: &mut Env, b: RhythmIn) -> Res<Memory> {
         return Err(ApiErr::bad("wake_from must not be after wake_to"));
     }
     env.st.memory.rhythm = r;
+    env.changed = true;
+    Ok(env.st.memory.clone())
+}
+
+#[derive(Deserialize)]
+pub struct InterestsIn {
+    text: String,
+}
+
+pub fn put_interests(env: &mut Env, b: InterestsIn) -> Res<Memory> {
+    let t = b.text.trim();
+    if t.chars().count() > 1000 {
+        return Err(ApiErr::bad("text must be at most 1000 characters"));
+    }
+    env.st.memory.interests = t.to_string();
     env.changed = true;
     Ok(env.st.memory.clone())
 }
