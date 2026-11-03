@@ -177,27 +177,8 @@
       "topics": [
         "east-asia"
       ],
-      "verified": false,
+      "verified": true,
       "note": "replaces NHK World, whose English feeds no longer exist"
-    },
-    {
-      "name": "Kyodo News",
-      "url": "https://english.kyodonews.net/rss/all.xml",
-      "topics": [
-        "east-asia"
-      ],
-      "verified": false,
-      "note": "replaces NHK World"
-    },
-    {
-      "name": "Nippon.com",
-      "url": "https://www.nippon.com/en/rss/all.xml",
-      "topics": [
-        "east-asia",
-        "life"
-      ],
-      "verified": false,
-      "note": "replaces NHK World"
     }
   ]
 }
