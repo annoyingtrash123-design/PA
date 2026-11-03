@@ -13,7 +13,7 @@ let kind: Kind | null = null;
 
 export function renderHome(root: HTMLElement): () => void {
   const clock = now();
-  if (!kind) kind = clock.now < "17:00" ? "morning" : "evening";
+  if (!kind) kind = clock.now < "21:00" ? "morning" : "evening";
   const name = assistantName();
   const user = getState().settings.user_name;
   const hello = user ? `${greeting(clock.now)}, ${user}` : greeting(clock.now);
