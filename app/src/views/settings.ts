@@ -8,6 +8,7 @@ import { resetWeather } from "../services/weather";
 import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, segmented, select, textInput, toast } from "../ui";
 import { stopAll, previewNatural } from "../services/readaloud";
 import { STYLES, VOICES } from "../services/gemini-tts";
+import { icon } from "../icons";
 import { getGeminiVoice, getStyle, getVoiceType, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
@@ -20,10 +21,54 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const sub = (t: string) => h("p", { class: "label-caps" }, t);
 const outlineBtn = (label: string, fn: () => void, ic = "check") => button(label, fn, { kind: "outline", icon: ic });
 
+const OPEN_KEY = "pa-settings-open";
+function openSections(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Turn every settings card that starts with an h3 into a collapsible section (closed by default; remembers what's open). */
+function makeCollapsible(root: HTMLElement): void {
+  const open = openSections();
+  root.querySelectorAll<HTMLElement>("section.card").forEach((c) => {
+    const head = c.firstElementChild;
+    if (!(head instanceof HTMLHeadingElement) || c.dataset.collapsible) return;
+    c.dataset.collapsible = "1";
+    const key = (head.textContent || "").replace(/^What .* knows about you$/, "What knows about you");
+    const body = h("div", { class: "stack collapse-body" });
+    while (head.nextSibling) body.appendChild(head.nextSibling);
+    const btn = h("button", { type: "button", class: "collapse-head", "aria-expanded": "false" }, h("span", { class: "title-sm" }, head.textContent || ""), icon("right", 22));
+    head.replaceWith(btn);
+    c.appendChild(body);
+    const set = (isOpen: boolean) => {
+      body.hidden = !isOpen;
+      btn.setAttribute("aria-expanded", String(isOpen));
+      c.classList.toggle("open", isOpen);
+    };
+    set(open.has(key));
+    btn.addEventListener("click", () => {
+      const now = !c.classList.contains("open");
+      set(now);
+      const s = openSections();
+      if (now) s.add(key);
+      else s.delete(key);
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify([...s]));
+      } catch {
+        // per-viewer convenience only
+      }
+    });
+  });
+}
+
 export function renderSettings(root: HTMLElement): void {
   const draw = () => {
     const y = window.scrollY;
     clear(root, ...build(draw));
+    makeCollapsible(root);
     window.scrollTo(0, y);
   };
   draw();

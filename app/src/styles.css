@@ -268,3 +268,9 @@ a.link { color: var(--lav); }
 .missed { display: flex; flex-direction: column; gap: 10px; }
 .missed-item + .missed-item { border-top: 1px solid var(--line, rgba(128,128,128,.25)); padding-top: 10px; }
 .missed .btn { min-height: 38px; padding: 8px 14px; font-size: 14px; }
+
+/* collapsible settings sections */
+.collapse-head { display: flex; align-items: center; justify-content: space-between; width: 100%; background: none; border: 0; padding: 2px 0; margin: 0; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
+.collapse-head svg { transition: transform 0.15s; color: var(--muted); flex: none; }
+.card.open .collapse-head svg { transform: rotate(90deg); }
+.card.open .collapse-body { margin-top: 12px; }
