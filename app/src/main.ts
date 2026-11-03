@@ -5,7 +5,7 @@ import { setupInstall } from "./install";
 import { refreshHolidays } from "./services/holidays";
 import { stop as stopSpeech } from "./services/speech";
 import { refreshWeather } from "./services/weather";
-import { clear, h, iconBtn, loading } from "./ui";
+import { clear, h, loading } from "./ui";
 import { setupUpdates } from "./updates";
 import { renderGoals } from "./views/goals";
 import { renderGym } from "./views/gym";
@@ -32,6 +32,7 @@ const TABS = [
   { id: "goals", hash: "#/goals", icon: "flag", label: "Goals" },
   { id: "gym", hash: "#/gym", icon: "gym", label: "Gym" },
   { id: "review", hash: "#/review", icon: "book", label: "Review" },
+  { id: "settings", hash: "#/settings", icon: "settings", label: "Settings" },
 ];
 
 // Hide the tab bar while the on-screen keyboard is up.
@@ -51,11 +52,7 @@ const view = document.getElementById("view")!;
 const tabs = document.getElementById("tabs")!;
 
 function drawChrome(active: string) {
-  if (active === "settings") {
-    clear(topbar, h("button", { type: "button", class: "back", onclick: () => (history.length > 1 ? history.back() : (location.hash = "#/")) }, icon("left", 26), "Settings"));
-  } else {
-    clear(topbar, h("h1", null, assistantName()), iconBtn("settings", "Settings", () => (location.hash = "#/settings"), "", 26));
-  }
+  clear(topbar, h("h1", null, assistantName()));
   clear(tabs, ...TABS.map((t) => h("a", { href: t.hash, class: t.id === active ? "active" : "", "aria-current": t.id === active ? "page" : null }, h("span", { class: "pill" }, icon(t.icon, 24)), t.label)));
 }
 

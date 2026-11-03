@@ -47,8 +47,8 @@ button { font: inherit; color: inherit; }
   background: var(--card); border-top: 1px solid var(--line);
   padding: 8px 4px calc(8px + var(--safe-b)); min-height: var(--nav-h);
 }
-#tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--muted); text-decoration: none; font-size: 12px; min-width: 0; }
-#tabs a .pill { display: grid; place-items: center; width: 56px; height: 30px; border-radius: 16px; transition: background 0.15s; }
+#tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--muted); text-decoration: none; font-size: 11.5px; min-width: 0; white-space: nowrap; }
+#tabs a .pill { display: grid; place-items: center; width: 48px; height: 30px; border-radius: 16px; transition: background 0.15s; }
 #tabs a.active { color: var(--text); }
 #tabs a.active .pill { background: var(--lav-soft); color: var(--text); }
 body.kb #tabs { display: none; }
