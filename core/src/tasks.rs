@@ -1,0 +1,598 @@
+//! Categories, tasks, recurrence, auto-categorisation, day views, rollover and occurrences.
+use crate::env::Env;
+use crate::error::{ApiErr, Res};
+use crate::gym::{self, WorkoutPlan};
+use crate::holidays;
+use crate::model::*;
+use crate::util::*;
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashSet;
+
+// ---------------------------------------------------------------- categories
+
+#[derive(Deserialize)]
+pub struct CategoryIn {
+    name: String,
+    color: String,
+}
+
+fn check_category(c: &CategoryIn) -> Res<()> {
+    if c.name.trim().is_empty() {
+        return Err(ApiErr::bad("category name cannot be empty"));
+    }
+    if c.color.trim().is_empty() {
+        return Err(ApiErr::bad("category color cannot be empty"));
+    }
+    Ok(())
+}
+
+pub fn create_category(env: &mut Env, b: CategoryIn) -> Res<Category> {
+    check_category(&b)?;
+    let c = Category { id: env.st.new_id(), name: b.name.trim().into(), color: b.color.trim().into() };
+    env.st.categories.push(c.clone());
+    env.changed = true;
+    Ok(c)
+}
+
+pub fn update_category(env: &mut Env, id: i64, b: CategoryIn) -> Res<Category> {
+    check_category(&b)?;
+    let c = env.st.categories.iter_mut().find(|c| c.id == id).ok_or_else(|| ApiErr::not_found("category not found"))?;
+    c.name = b.name.trim().into();
+    c.color = b.color.trim().into();
+    env.changed = true;
+    Ok(c.clone())
+}
+
+pub fn delete_category(env: &mut Env, id: i64) -> Res<Value> {
+    let n = env.st.categories.len();
+    env.st.categories.retain(|c| c.id != id);
+    if env.st.categories.len() == n {
+        return Err(ApiErr::not_found("category not found"));
+    }
+    for t in env.st.tasks.iter_mut().filter(|t| t.category_id == Some(id)) {
+        t.category_id = None;
+    }
+    env.changed = true;
+    Ok(json!({"ok": true}))
+}
+
+// ---------------------------------------------------------------- recurrence
+
+impl Recurrence {
+    pub fn matches(&self, d: NaiveDate) -> bool {
+        let wd = d.weekday().num_days_from_monday() as u8;
+        match self {
+            Recurrence::Daily => true,
+            Recurrence::Weekdays => wd < 5,
+            Recurrence::Weekly { days } => days.contains(&wd),
+        }
+    }
+}
+
+const PARTS: [&str; 4] = ["morning", "afternoon", "evening", "anytime"];
+
+pub fn part_order(p: &str) -> usize {
+    PARTS.iter().position(|x| *x == p).unwrap_or(3)
+}
+
+fn derive_part(time: &str) -> &'static str {
+    let h: u32 = time.get(..2).and_then(|x| x.parse().ok()).unwrap_or(0);
+    if h < 12 {
+        "morning"
+    } else if h < 17 {
+        "afternoon"
+    } else {
+        "evening"
+    }
+}
+
+// ------------------------------------------------------- auto-categorisation
+
+const KEYWORDS: &[(&str, &[&str])] = &[
+    ("Chores", &["laundry", "hoover", "vacuum", "clean", "cleaning", "dishes", "dishwasher", "bins", "bin", "tidy", "iron", "ironing", "wash", "mop", "dust", "sweep", "declutter", "fix", "repair", "tap"]),
+    ("Exercise", &["gym", "run", "running", "jog", "walk", "yoga", "swim", "workout", "cycle", "cycling", "stretch", "push", "pull", "leg", "legs", "pilates", "hike", "exercise", "lift", "cardio"]),
+    ("Study", &["study", "revise", "revision", "essay", "read chapter", "chapter", "lecture", "homework", "exam", "assignment", "course", "coursework", "revising", "dissertation", "thesis"]),
+    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "email", "emails", "client", "deadline", "presentation", "shift", "project", "invoice", "sprint", "colleague", "boss"]),
+    ("Errands", &["shop", "shopping", "groceries", "grocery", "post office", "pick up", "collect", "buy", "return", "parcel", "pharmacy", "supermarket", "drop off"]),
+    ("Appointments", &["dentist", "doctor", "gp", "appointment", "haircut", "vet", "optician", "checkup", "check-up", "physio", "hospital", "dermatologist"]),
+    ("Social", &["call", "mum", "dad", "friend", "friends", "party", "dinner with", "drinks", "birthday", "visit", "coffee with", "lunch with", "date night", "catch up", "brunch"]),
+    ("Self-care", &["rest", "nap", "bath", "skincare", "meditate", "meditation", "journal", "read", "relax", "therapy", "massage", "sleep", "breathe", "morning routine"]),
+    ("Admin & Money", &["bill", "bills", "pay", "bank", "tax", "budget", "form", "renew", "insurance", "rent", "council", "mortgage", "invoice", "passport", "visa", "savings", "subscription"]),
+];
+
+fn words(s: &str) -> String {
+    let w: Vec<String> = s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_lowercase()).collect();
+    format!(" {} ", w.join(" "))
+}
+
+/// Keyword match against existing category names only. Best score wins, ties go to table order.
+pub fn keyword_category(text: &str, cats: &[Category]) -> Option<i64> {
+    let hay = words(text);
+    let mut best: Option<(usize, i64)> = None;
+    for (name, kws) in KEYWORDS {
+        let Some(cat) = cats.iter().find(|c| c.name.trim().eq_ignore_ascii_case(name)) else { continue };
+        let score = kws.iter().filter(|k| hay.contains(&words(k))).count();
+        if score > 0 && best.is_none_or(|(s, _)| score > s) {
+            best = Some((score, cat.id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+fn other_category(st: &mut State) -> i64 {
+    if let Some(c) = st.categories.iter().find(|c| c.name.trim().eq_ignore_ascii_case("other")) {
+        return c.id;
+    }
+    let id = st.new_id();
+    st.categories.push(Category { id, name: "Other".into(), color: "#8C847D".into() });
+    id
+}
+
+/// Keyword categorisation with the "Other" fallback (creates "Other" if it does not exist).
+pub fn auto_category(st: &mut State, title: &str, notes: &str) -> i64 {
+    let chosen = keyword_category(title, &st.categories).or_else(|| keyword_category(&format!("{title} {notes}"), &st.categories));
+    match chosen {
+        Some(id) => id,
+        None => other_category(st),
+    }
+}
+
+// --------------------------------------------------------------------- tasks
+
+#[derive(Deserialize)]
+pub struct ChecklistIn {
+    #[serde(default)]
+    id: Option<i64>,
+    text: String,
+}
+
+#[derive(Deserialize)]
+pub struct TaskIn {
+    title: String,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    time: Option<String>,
+    #[serde(default)]
+    part_of_day: Option<String>,
+    #[serde(default)]
+    category_id: Option<Value>,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    recurrence: Option<Recurrence>,
+    #[serde(default)]
+    checklist: Vec<ChecklistIn>,
+}
+
+struct Clean {
+    title: String,
+    date: Option<String>,
+    time: Option<String>,
+    part: String,
+    notes: String,
+    recurrence: Option<Recurrence>,
+}
+
+fn clean(b: &TaskIn) -> Res<Clean> {
+    let title = b.title.trim().to_string();
+    if title.is_empty() {
+        return Err(ApiErr::bad("title cannot be empty"));
+    }
+    let time = match b.time.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(t) => Some(NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| ApiErr::bad("time must be HH:MM (24h)"))?.format("%H:%M").to_string()),
+    };
+    let part = match b.part_of_day.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(p) if PARTS.contains(&p) => Some(p.to_string()),
+        Some(_) => return Err(ApiErr::bad("part_of_day must be morning, afternoon, evening or anytime")),
+    };
+    let mut recurrence = b.recurrence.clone();
+    if let Some(Recurrence::Weekly { days }) = &mut recurrence {
+        if days.is_empty() || days.iter().any(|d| *d > 6) {
+            return Err(ApiErr::bad("weekly recurrence needs days between 0 (Mon) and 6 (Sun)"));
+        }
+        days.sort_unstable();
+        days.dedup();
+    }
+    let date = match (&recurrence, b.date.as_deref().map(str::trim)) {
+        (Some(_), _) => None,
+        (None, None) | (None, Some("")) => return Err(ApiErr::bad("one-off tasks need a date (or give a recurrence)")),
+        (None, Some(d)) => Some(fmt_date(parse_date(d).ok_or_else(|| ApiErr::bad("date must be YYYY-MM-DD"))?)),
+    };
+    let part_of_day = match &time {
+        Some(t) => derive_part(t).to_string(),
+        None => part.unwrap_or_else(|| "anytime".into()),
+    };
+    Ok(Clean { title, date, time, part: part_of_day, notes: b.notes.clone(), recurrence })
+}
+
+enum CatSpec {
+    Manual(Option<i64>),
+    Auto,
+}
+
+fn parse_cat_spec(st: &State, v: &Option<Value>) -> Res<CatSpec> {
+    match v {
+        None | Some(Value::Null) => Ok(CatSpec::Manual(None)),
+        Some(Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => Ok(CatSpec::Auto),
+        Some(Value::Number(n)) => {
+            let cid = n.as_i64().ok_or_else(|| ApiErr::bad("category_id must be a number, null or \"auto\""))?;
+            if !st.categories.iter().any(|c| c.id == cid) {
+                return Err(ApiErr::bad("category_id does not exist"));
+            }
+            Ok(CatSpec::Manual(Some(cid)))
+        }
+        Some(_) => Err(ApiErr::bad("category_id must be a number, null or \"auto\"")),
+    }
+}
+
+fn sync_checklist(st: &mut State, task_idx: usize, items: &[ChecklistIn]) {
+    let tid = st.tasks[task_idx].id;
+    let existing: HashSet<i64> = st.tasks[task_idx].checklist.iter().map(|c| c.id).collect();
+    let mut out: Vec<ChecklistItem> = vec![];
+    for it in items.iter().filter(|i| !i.text.trim().is_empty()) {
+        let id = match it.id.filter(|i| existing.contains(i) && !out.iter().any(|o| o.id == *i)) {
+            Some(id) => id,
+            None => st.new_id(),
+        };
+        out.push(ChecklistItem { id, text: it.text.trim().to_string() });
+    }
+    let keep: HashSet<i64> = out.iter().map(|c| c.id).collect();
+    for id in existing.difference(&keep) {
+        st.checklist_done.retain(|k, _| {
+            let mut p = k.split('|');
+            !(p.next() == Some(&tid.to_string()) && p.nth(1) == Some(&id.to_string()))
+        });
+    }
+    st.tasks[task_idx].checklist = out;
+}
+
+fn clear_done_state(st: &mut State, tid: i64) {
+    let prefix = format!("{tid}|");
+    st.completions.retain(|k, _| !k.starts_with(&prefix));
+    st.checklist_done.retain(|k, _| !k.starts_with(&prefix));
+}
+
+pub fn list_tasks(env: &Env) -> Value {
+    json!(env.st.tasks)
+}
+
+pub fn get_task(env: &Env, id: i64) -> Res<Task> {
+    env.st.tasks.iter().find(|t| t.id == id).cloned().ok_or_else(|| ApiErr::not_found("task not found"))
+}
+
+pub fn create_task(env: &mut Env, b: TaskIn) -> Res<Task> {
+    let c = clean(&b)?;
+    let spec = parse_cat_spec(env.st, &b.category_id)?;
+    let (category_id, auto) = match spec {
+        CatSpec::Manual(id) => (id, false),
+        CatSpec::Auto => (Some(auto_category(env.st, &c.title, &c.notes)), true),
+    };
+    let id = env.st.new_id();
+    env.st.tasks.push(Task {
+        id,
+        title: c.title,
+        date: c.date,
+        time: c.time,
+        part_of_day: c.part,
+        category_id,
+        category_auto: auto,
+        notes: c.notes,
+        recurrence: c.recurrence,
+        checklist: vec![],
+    });
+    let idx = env.st.tasks.len() - 1;
+    sync_checklist(env.st, idx, &b.checklist);
+    env.changed = true;
+    Ok(env.st.tasks[idx].clone())
+}
+
+pub fn update_task(env: &mut Env, id: i64, b: TaskIn) -> Res<Task> {
+    let idx = env.st.tasks.iter().position(|t| t.id == id).ok_or_else(|| ApiErr::not_found("task not found"))?;
+    let c = clean(&b)?;
+    let spec = parse_cat_spec(env.st, &b.category_id)?;
+    let (category_id, auto) = match spec {
+        CatSpec::Manual(id) => (id, false),
+        CatSpec::Auto => (Some(auto_category(env.st, &c.title, &c.notes)), true),
+    };
+    let old_rec = env.st.tasks[idx].recurrence.is_some();
+    let old_date = env.st.tasks[idx].date.clone();
+    {
+        let t = &mut env.st.tasks[idx];
+        t.title = c.title;
+        t.time = c.time;
+        t.part_of_day = c.part;
+        t.category_id = category_id;
+        t.category_auto = auto;
+        t.notes = c.notes;
+        t.recurrence = c.recurrence;
+        t.date = c.date.clone();
+    }
+    // keep the rollover marker only while the date is unchanged
+    if c.date != old_date {
+        env.st.rolled_over.remove(&id.to_string());
+    }
+    if old_rec != env.st.tasks[idx].recurrence.is_some() {
+        clear_done_state(env.st, id);
+        env.st.rolled_over.remove(&id.to_string());
+    }
+    sync_checklist(env.st, idx, &b.checklist);
+    env.changed = true;
+    Ok(env.st.tasks[idx].clone())
+}
+
+pub fn delete_task(env: &mut Env, id: i64) -> Res<Value> {
+    let n = env.st.tasks.len();
+    env.st.tasks.retain(|t| t.id != id);
+    if env.st.tasks.len() == n {
+        return Err(ApiErr::not_found("task not found"));
+    }
+    clear_done_state(env.st, id);
+    env.st.rolled_over.remove(&id.to_string());
+    env.changed = true;
+    Ok(json!({"ok": true}))
+}
+
+pub const CATEGORISE_SYSTEM: &str = "You categorise to-do tasks. Reply with exactly one category name from the given list, copied exactly, and nothing else.";
+
+/// `GET /api/tasks/{id}/categorise-prompt`
+pub fn categorise_prompt(env: &Env, id: i64) -> Res<Value> {
+    let t = get_task(env, id)?;
+    let names: Vec<&str> = env.st.categories.iter().map(|c| c.name.as_str()).collect();
+    let user = format!(
+        "Task title: {}\nNotes: {}\nCategories: {}\nWhich one category fits best?",
+        t.title,
+        if t.notes.trim().is_empty() { "(none)" } else { t.notes.trim() },
+        names.join(", ")
+    );
+    Ok(json!({"system_prompt": CATEGORISE_SYSTEM, "user_prompt": user, "names": names}))
+}
+
+/// `PUT /api/tasks/{id}/category` body `{"name","auto"}`
+pub fn set_category(env: &mut Env, id: i64, b: &Value) -> Res<Task> {
+    let name = b["name"].as_str().unwrap_or("").trim().trim_matches(|c: char| c == '"' || c == '\'' || c == '.' || c == '*').trim().to_string();
+    let auto = b["auto"].as_bool().unwrap_or(true);
+    let cat = env.st.categories.iter().find(|c| c.name.trim().eq_ignore_ascii_case(&name)).map(|c| c.id).ok_or_else(|| ApiErr::bad("no category with that name"))?;
+    let t = env.st.tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| ApiErr::not_found("task not found"))?;
+    t.category_id = Some(cat);
+    t.category_auto = auto;
+    env.changed = true;
+    Ok(t.clone())
+}
+
+// --------------------------------------------------------------- occurrences
+
+#[derive(Serialize, Clone, Debug)]
+pub struct OccChecklist {
+    pub id: i64,
+    pub text: String,
+    pub done: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Occurrence {
+    pub task_id: i64,
+    pub date: String,
+    pub title: String,
+    pub time: Option<String>,
+    pub part_of_day: String,
+    pub category: Option<Category>,
+    pub notes: String,
+    pub recurring: bool,
+    pub rolled_over_from: Option<String>,
+    pub done: bool,
+    pub checklist: Vec<OccChecklist>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct WorkHours {
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct DayInfo {
+    pub work: Option<WorkHours>,
+    pub holiday: Option<String>,
+    pub day_off: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct Day {
+    pub date: String,
+    pub weekday: String,
+    pub items: Vec<Occurrence>,
+    pub workout: Option<WorkoutPlan>,
+    /// Work hours for the day (not a task); null on non-work days, days off and holidays.
+    pub work: Option<WorkHours>,
+    pub holiday: Option<String>,
+    pub day_off: bool,
+}
+
+impl Day {
+    pub fn info(&self) -> DayInfo {
+        DayInfo { work: self.work.clone(), holiday: self.holiday.clone(), day_off: self.day_off }
+    }
+}
+
+/// (work hours, public holiday name, is a day off) for a date.
+pub fn day_info(st: &State, ctx: &Ctx, d: NaiveDate) -> DayInfo {
+    let w = &st.memory.work;
+    let ds = fmt_date(d);
+    let off = st.days_off.contains(&ds);
+    if !w.enabled {
+        return DayInfo { work: None, holiday: None, day_off: off };
+    }
+    let holiday = holidays::lookup(ctx, &ds);
+    let works = w.days.contains(&d.weekday().num_days_from_monday()) && holiday.is_none() && !off;
+    DayInfo { work: works.then(|| WorkHours { start: w.start.clone(), end: w.end.clone() }), holiday, day_off: off }
+}
+
+/// Move unfinished one-off tasks dated before `today` to `today`. Returns true if anything moved.
+pub fn rollover(st: &mut State, today: NaiveDate) -> bool {
+    let t = fmt_date(today);
+    let mut moved = false;
+    let done: HashSet<String> = st.completions.keys().cloned().collect();
+    for task in st.tasks.iter_mut() {
+        if task.recurrence.is_some() {
+            continue;
+        }
+        let Some(d) = task.date.clone() else { continue };
+        if d.as_str() < t.as_str() && !done.contains(&format!("{}|", task.id)) {
+            st.rolled_over.entry(task.id.to_string()).or_insert(d);
+            task.date = Some(t.clone());
+            moved = true;
+        }
+    }
+    moved
+}
+
+/// Resolve occurrences for `n` days from `start` (no rollover, no workouts).
+pub fn resolve_items(st: &State, start: NaiveDate, n: i64) -> Vec<(NaiveDate, Vec<Occurrence>)> {
+    let mut out = vec![];
+    for i in 0..n {
+        let d = start + Duration::days(i);
+        let ds = fmt_date(d);
+        let mut items = vec![];
+        for t in &st.tasks {
+            let (matches, key) = match &t.recurrence {
+                Some(r) => (r.matches(d), ds.clone()),
+                None => (t.date.as_deref() == Some(ds.as_str()), String::new()),
+            };
+            if !matches {
+                continue;
+            }
+            let tid = t.id;
+            items.push(Occurrence {
+                task_id: tid,
+                date: ds.clone(),
+                title: t.title.clone(),
+                time: t.time.clone(),
+                part_of_day: match &t.time {
+                    Some(tm) => derive_part(tm).to_string(),
+                    None => t.part_of_day.clone(),
+                },
+                category: t.category_id.and_then(|c| st.categories.iter().find(|x| x.id == c).cloned()),
+                notes: t.notes.clone(),
+                recurring: t.recurrence.is_some(),
+                rolled_over_from: if t.recurrence.is_none() { st.rolled_over.get(&tid.to_string()).cloned() } else { None },
+                done: st.completions.contains_key(&format!("{tid}|{key}")),
+                checklist: t
+                    .checklist
+                    .iter()
+                    .map(|c| OccChecklist { id: c.id, text: c.text.clone(), done: st.checklist_done.contains_key(&format!("{tid}|{key}|{}", c.id)) })
+                    .collect(),
+            });
+        }
+        items.sort_by(|a, b| match (&a.time, &b.time) {
+            (Some(x), Some(y)) => x.cmp(y).then(a.task_id.cmp(&b.task_id)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => part_order(&a.part_of_day).cmp(&part_order(&b.part_of_day)).then(a.task_id.cmp(&b.task_id)),
+        });
+        out.push((d, items));
+    }
+    out
+}
+
+/// Full day views, including the rollover (when today is in range) and workout projection.
+pub fn build_days(env: &mut Env, start: NaiveDate, n: i64) -> Vec<Day> {
+    let t = env.today;
+    if start <= t && t < start + Duration::days(n) && rollover(env.st, t) {
+        env.changed = true;
+    }
+    let items = resolve_items(env.st, start, n);
+    let workouts = gym::project(env.st, start, n, t);
+    items
+        .into_iter()
+        .zip(workouts)
+        .map(|((d, items), workout)| {
+            let info = day_info(env.st, env.ctx, d);
+            Day { date: fmt_date(d), weekday: weekday_name(d), items, workout, work: info.work, holiday: info.holiday, day_off: info.day_off }
+        })
+        .collect()
+}
+
+pub fn days(env: &mut Env, q: &std::collections::HashMap<String, String>) -> Res<Value> {
+    let start = match q.get("start") {
+        Some(s) => parse_date(s).ok_or_else(|| ApiErr::bad("start must be YYYY-MM-DD"))?,
+        None => env.today,
+    };
+    let n: i64 = match q.get("days") {
+        Some(s) => s.parse().map_err(|_| ApiErr::bad("days must be an integer"))?,
+        None => 7,
+    };
+    if !(1..=62).contains(&n) {
+        return Err(ApiErr::bad("days must be between 1 and 62"));
+    }
+    Ok(json!(build_days(env, start, n)))
+}
+
+#[derive(Deserialize)]
+pub struct ToggleIn {
+    task_id: i64,
+    date: String,
+    done: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ChecklistToggleIn {
+    task_id: i64,
+    date: String,
+    item_id: i64,
+    done: bool,
+}
+
+/// Returns (task, storage key date, effective occurrence date).
+fn locate(st: &State, task_id: i64, date: &str) -> Res<(Task, String, NaiveDate)> {
+    let task = st.tasks.iter().find(|t| t.id == task_id).cloned().ok_or_else(|| ApiErr::not_found("task not found"))?;
+    let d = parse_date(date).ok_or_else(|| ApiErr::bad("date must be YYYY-MM-DD"))?;
+    match &task.recurrence {
+        Some(r) => {
+            if !r.matches(d) {
+                return Err(ApiErr::bad("task does not occur on that date"));
+            }
+            Ok((task, fmt_date(d), d))
+        }
+        None => {
+            // one-off: the task's own (possibly rolled-over) date is authoritative
+            let own = task.date.as_deref().and_then(parse_date).unwrap_or(d);
+            Ok((task, String::new(), own))
+        }
+    }
+}
+
+fn occurrence(st: &State, task_id: i64, d: NaiveDate) -> Res<Occurrence> {
+    resolve_items(st, d, 1).into_iter().flat_map(|(_, v)| v).find(|o| o.task_id == task_id).ok_or_else(|| ApiErr::not_found("occurrence not found"))
+}
+
+pub fn toggle(env: &mut Env, b: ToggleIn) -> Res<Occurrence> {
+    let (_, key, d) = locate(env.st, b.task_id, &b.date)?;
+    let k = format!("{}|{key}", b.task_id);
+    if b.done {
+        env.st.completions.insert(k, true);
+    } else {
+        env.st.completions.remove(&k);
+    }
+    env.changed = true;
+    occurrence(env.st, b.task_id, d)
+}
+
+pub fn toggle_checklist(env: &mut Env, b: ChecklistToggleIn) -> Res<Occurrence> {
+    let (task, key, d) = locate(env.st, b.task_id, &b.date)?;
+    if !task.checklist.iter().any(|c| c.id == b.item_id) {
+        return Err(ApiErr::not_found("checklist item not found"));
+    }
+    let k = format!("{}|{key}|{}", b.task_id, b.item_id);
+    if b.done {
+        env.st.checklist_done.insert(k, true);
+    } else {
+        env.st.checklist_done.remove(&k);
+    }
+    env.changed = true;
+    occurrence(env.st, b.task_id, d)
+}

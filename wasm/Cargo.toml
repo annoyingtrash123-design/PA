@@ -1,0 +1,15 @@
+[package]
+name = "pa-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pa-core = { path = "../core" }
+wasm-bindgen = "=0.2.129"
+
+# wasm-pack would download binaryen to run wasm-opt; skip it so the build also works offline/in sandboxes.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
