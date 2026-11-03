@@ -128,7 +128,7 @@ fn export_import(env: &mut Env, b: &Value) -> Res<Value> {
     } else {
         st.gym.rotation.next_index = 0;
     }
-    seed::migrate(&mut st);
+    seed::migrate(&mut st, &fmt_date(env.today));
     *env.st = st;
     env.changed = true;
     Ok(serde_json::to_value(&*env.st).unwrap_or(Value::Null))
@@ -172,6 +172,8 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         ("PUT", ["rotation"]) => ok(gym::put_rotation(env, parse(body)?)?),
         ("GET", ["gym", "next"]) => ok(gym::next(env.st)),
         ("POST", ["gym", "rest"]) => ok(gym::rest_taken(env)?),
+        ("POST", ["gym", "skip-rest"]) => ok(gym::skip_rest(env)?),
+        ("POST", ["gym", "skip"]) => ok(gym::skip_next(env)?),
         ("GET", ["sessions"]) => Ok(gym::session_list(env.st, q)),
         ("POST", ["sessions"]) => ok(gym::session_create(env, parse(body)?)?),
         ("GET", ["sessions", id]) => ok(gym::session_get(env.st, id_of(id)?)?),
@@ -269,7 +271,11 @@ pub fn call_typed(state: &str, method: &str, path: &str, body: &str, ctx: &str) 
         None => return err_response(ApiErr::bad("ctx.today must be YYYY-MM-DD")),
     };
     // old states are upgraded on any call, and the upgraded state is returned so the UI persists it
-    let migrated = !importing && seed::migrate(&mut st);
+    let mut migrated = !importing && seed::migrate(&mut st, &ctx_v.today);
+    // missed days count as the rest day when a rest item is next (workouts always wait)
+    if !importing && needs_today(&method, path_only) {
+        migrated |= gym::roll_missed_days(&mut st, today);
+    }
     let mut env = Env { st: &mut st, ctx: &ctx_v, today, changed: migrated };
     match handle(&mut env, &method, path_only, &q, &body_v) {
         Ok(v) => {

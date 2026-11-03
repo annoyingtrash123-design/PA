@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 4;
+pub const STATE_VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -271,6 +271,8 @@ pub struct Gym {
     pub sessions: Vec<Session>,
     /// Internal: the date a rest day was last taken (so the projection can show "rest" for today).
     pub rest_taken_date: Option<String>,
+    /// Date the current next rotation item became next (a rest item waits one passed day, workouts wait forever).
+    pub next_since: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

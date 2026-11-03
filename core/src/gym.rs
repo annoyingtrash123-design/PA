@@ -233,6 +233,7 @@ pub fn delete_template(env: &mut Env, id: i64) -> Res<Value> {
     rot.items.retain(|i| i.template_id != Some(id));
     if rot.items.len() != before {
         rot.next_index = if rot.items.is_empty() { 0 } else { rot.next_index % rot.items.len() };
+        env.st.gym.next_since = Some(fmt_date(env.today));
     }
     env.changed = true;
     Ok(json!({"ok": true}))
@@ -269,25 +270,84 @@ pub fn put_rotation(env: &mut Env, b: RotationIn) -> Res<Rotation> {
     let items: Vec<RotItem> = b.items.into_iter().map(|i| RotItem { template_id: if i.rest { None } else { i.template_id }, rest: i.rest }).collect();
     env.st.gym.rotation.next_index = if items.is_empty() { 0 } else { next % items.len() };
     env.st.gym.rotation.items = items;
+    env.st.gym.next_since = Some(fmt_date(env.today));
     env.changed = true;
     Ok(get_rotation(env.st))
 }
 
-fn advance(st: &mut State, len: usize, to: usize) {
+fn advance(st: &mut State, len: usize, to: usize, today: NaiveDate) {
     st.gym.rotation.next_index = (to + 1) % len;
+    st.gym.next_since = Some(fmt_date(today));
+}
+
+/// Per-call housekeeping: days that pass while a rest item is next count as that rest day (one rest item
+/// per elapsed day). Workouts always wait. Returns true when the state changed.
+pub fn roll_missed_days(st: &mut State, today: NaiveDate) -> bool {
+    let td = fmt_date(today);
+    let len = st.gym.rotation.items.len();
+    let since = match st.gym.next_since.as_deref().and_then(parse_date) {
+        Some(s) => s,
+        None => {
+            st.gym.next_since = Some(td);
+            return true;
+        }
+    };
+    if len == 0 || since >= today {
+        return false;
+    }
+    let mut days = (today - since).num_days();
+    let mut taken = false;
+    while days > 0 && st.gym.rotation.items[st.gym.rotation.next_index % len].rest {
+        let i = st.gym.rotation.next_index % len;
+        advance(st, len, i, today);
+        taken = true;
+        days -= 1;
+    }
+    if taken {
+        // the missed day WAS the rest, so today goes straight to the next workout
+        st.gym.rest_taken_date = today.pred_opt().map(fmt_date);
+    }
+    taken
 }
 
 pub fn rest_taken(env: &mut Env) -> Res<Rotation> {
     let rot = get_rotation(env.st);
     match rot.items.get(rot.next_index) {
         Some(it) if it.rest => {
-            advance(env.st, rot.items.len(), rot.next_index);
+            advance(env.st, rot.items.len(), rot.next_index, env.today);
             env.st.gym.rest_taken_date = Some(fmt_date(env.today));
             env.changed = true;
             Ok(get_rotation(env.st))
         }
         _ => Err(ApiErr::bad("the next rotation item is not a rest day")),
     }
+}
+
+/// "Train today instead": move past the next rest item without recording a rest taken today.
+pub fn skip_rest(env: &mut Env) -> Res<Rotation> {
+    let rot = get_rotation(env.st);
+    match rot.items.get(rot.next_index) {
+        Some(it) if it.rest => {
+            advance(env.st, rot.items.len(), rot.next_index, env.today);
+            if env.st.gym.rest_taken_date.as_deref() == Some(fmt_date(env.today).as_str()) {
+                env.st.gym.rest_taken_date = None;
+            }
+            env.changed = true;
+            Ok(get_rotation(env.st))
+        }
+        _ => Err(ApiErr::bad("the next rotation item is not a rest day")),
+    }
+}
+
+/// Escape hatch: move past the next item (workout or rest) without logging anything.
+pub fn skip_next(env: &mut Env) -> Res<Rotation> {
+    let rot = get_rotation(env.st);
+    if rot.items.is_empty() {
+        return Err(ApiErr::bad("there is no rotation set up"));
+    }
+    advance(env.st, rot.items.len(), rot.next_index, env.today);
+    env.changed = true;
+    Ok(get_rotation(env.st))
 }
 
 // --------------------------------------------------------------------- plans
@@ -616,7 +676,7 @@ pub fn session_complete(env: &mut Env, id: i64) -> Res<Session> {
         if let Some(tid) = s.template_id {
             let len = rot.items.len();
             if let Some(k) = (0..len).map(|k| (rot.next_index + k) % len).find(|&i| rot.items[i].template_id == Some(tid) && !rot.items[i].rest) {
-                advance(env.st, len, k);
+                advance(env.st, len, k, env.today);
             }
         }
         env.changed = true;

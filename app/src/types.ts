@@ -188,7 +188,7 @@ export interface State {
   days_off: string[];
   goals: Goal[];
   memory: Memory;
-  gym: { exercises: Exercise[]; templates: Template[]; rotation: Rotation; sessions: Session[] };
+  gym: { exercises: Exercise[]; templates: Template[]; rotation: Rotation; sessions: Session[]; next_since?: string | null };
 }
 
 export interface BriefingPrep {

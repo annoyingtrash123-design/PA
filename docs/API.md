@@ -99,6 +99,9 @@ Exercises are shared by name across templates (the same `exercise_id`), so histo
 `GET /api/rotation` -> Rotation; `PUT /api/rotation` body `{"items":[...]}`
 `GET /api/gym/next` -> WorkoutPlan (the next item in the rotation)
 `POST /api/gym/rest` -> marks the current rest item as taken, advancing the rotation -> Rotation
+`POST /api/gym/skip-rest` -> "Train today instead": advances past the next item when it is a rest, WITHOUT recording a rest taken today, so today's plan (`/api/gym/next`, `/api/days`) becomes the next workout -> Rotation (400 if the next item is not a rest)
+`POST /api/gym/skip` -> escape hatch: advances past the next item (workout or rest) without logging anything -> Rotation. Missed workouts are never skipped automatically.
+Missed days: `state.gym.next_since` is the date the current next item became next (set whenever `next_index` changes; set to today by the v5 migration, or on the first call for a state without it). On every call, if the next item is a rest and `next_since` < today, the rest counts as taken: the rotation advances past it (one rest item per elapsed day), `rest_taken_date` = today so today's projection shows the rest, `next_since` = today, and the new state is returned. Workouts always wait.
 `POST /api/sessions` body `{"template_id":1}` -> Session (today, pre-filled with suggested weights, sets not done; the start weight when the exercise has no history). If an uncompleted session for today exists, return it. For a cardio template: no sets, `cardio` = `{"activity":"","minutes":30}` (30 clamped into the template's range).
 `PUT /api/sessions/{id}/sets` body `{"sets":[...]}` -> Session
 `PUT /api/sessions/{id}/cardio` body `{"activity":"Swimming","minutes":35}` -> Session (cardio sessions only; minutes 1..600)

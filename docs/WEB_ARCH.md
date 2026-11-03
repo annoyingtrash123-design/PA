@@ -100,3 +100,7 @@ for a stored v1 state. v1 -> v2: if the gym templates are exactly the six old ge
 Legs B; never customised) the whole gym section is replaced by the new defaults (sessions are dropped when all belong to those
 templates; otherwise they are kept with the exercises they reference). Any other state only gains the new fields (serde defaults).
 `POST /api/import` migrates the imported backup the same way.
+
+v5 adds `gym.next_since` (date the current next rotation item became next); the migration sets it to today. After the
+migration, every call (except the date-free ones) runs `gym::roll_missed_days`: a rest item that has been next for a passed day
+counts as taken and the rotation advances (state returned); workouts never advance on their own. See API.md (`/api/gym/skip-rest`, `/api/gym/skip`).

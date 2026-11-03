@@ -171,7 +171,7 @@ pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
 }
 
 /// A real fresh start: defaults only (no tasks, goals or sessions).
-pub fn init_state(_today: &str) -> State {
+pub fn init_state(today: &str) -> State {
     let mut st = State::default();
     for (i, (n, c)) in CATEGORY_DEFAULTS.iter().enumerate() {
         st.categories.push(Category { id: i as i64 + 1, name: n.to_string(), color: c.to_string() });
@@ -182,13 +182,14 @@ pub fn init_state(_today: &str) -> State {
         n
     });
     st.next_id = st.next_id.max(n + 1);
+    st.gym.next_since = Some(today.to_string());
     st
 }
 
 /// Bring an older State up to `STATE_VERSION`. Returns true when something changed.
 /// v1 -> v2: a gym section still holding exactly the six old generic templates (never customised)
 /// is replaced by the owner's routine; anything else only gains the new fields (serde defaults).
-pub fn migrate(st: &mut State) -> bool {
+pub fn migrate(st: &mut State, today: &str) -> bool {
     if st.version >= STATE_VERSION {
         return false;
     }
@@ -202,6 +203,9 @@ pub fn migrate(st: &mut State) -> bool {
         let next_name = names.get(st.gym.rotation.next_index).cloned().unwrap_or_default();
         st.gym.rotation.items = rotation_items(&st.gym);
         st.gym.rotation.next_index = ROTATION.iter().position(|n| *n == next_name).unwrap_or(0);
+    }
+    if st.version < 5 {
+        st.gym.next_since = Some(today.to_string());
     }
     st.version = STATE_VERSION;
     true
@@ -370,6 +374,7 @@ pub fn sample_data(env: &mut Env) -> Value {
             env.st.gym.rotation.next_index = i;
         }
         env.st.gym.rest_taken_date = None;
+        env.st.gym.next_since = Some(fmt_date(env.today));
     }
 
     let goals: [(&str, &str, Option<i64>, &str); 3] = [

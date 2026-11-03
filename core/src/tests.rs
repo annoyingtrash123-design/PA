@@ -57,7 +57,7 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 4);
+    assert_eq!(st.version, 5);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
@@ -472,7 +472,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 4);
+        assert_eq!(r["state"]["version"], 5);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
@@ -488,7 +488,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 4);
+        assert_eq!(m["version"], 5);
     }
 }
 
@@ -498,14 +498,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 4);
+    assert_eq!(r["body"]["version"], 5);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 4);
+    assert_eq!(r["state"]["version"], 5);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -518,7 +518,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 4);
+    assert_eq!(imp["version"], 5);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -754,8 +754,8 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v2.version = 2;
     v2.gym.rotation.items = old8.clone();
     v2.gym.rotation.next_index = 2;
-    assert!(crate::seed::migrate(&mut v2));
-    assert_eq!(v2.version, 4);
+    assert!(crate::seed::migrate(&mut v2, TODAY));
+    assert_eq!(v2.version, 5);
     assert_eq!(names(&v2), ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"]);
     assert_eq!(v2.gym.rotation.next_index, 4, "still Legs + Abs 1 next");
     // v3 (8 + rest), next = the rest day
@@ -764,7 +764,7 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v3.gym.rotation.items = old8.clone();
     v3.gym.rotation.items.push(crate::model::RotItem { template_id: None, rest: true });
     v3.gym.rotation.next_index = 8;
-    assert!(crate::seed::migrate(&mut v3));
+    assert!(crate::seed::migrate(&mut v3, TODAY));
     assert_eq!(v3.gym.rotation.items.len(), 10);
     assert_eq!(v3.gym.rotation.next_index, 3);
     // a customised rotation is left alone
@@ -772,6 +772,111 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     custom.version = 3;
     custom.gym.rotation.items = old8;
     custom.gym.rotation.items.swap(0, 1);
-    assert!(crate::seed::migrate(&mut custom));
+    assert!(crate::seed::migrate(&mut custom, TODAY));
     assert_eq!(custom.gym.rotation.items.len(), 8);
+}
+
+// ---- gym: missed days, skip-rest, skip
+
+fn set_next(a: &mut App, index: usize, since: &str) {
+    let mut st = a.st();
+    st.gym.rotation.next_index = index;
+    st.gym.next_since = Some(since.into());
+    st.gym.rest_taken_date = None;
+    a.state = serde_json::to_string(&st).unwrap();
+}
+
+#[test]
+fn missed_days_never_advance_a_workout() {
+    let mut a = App::new("2026-11-10");
+    set_next(&mut a, 0, "2026-11-01");
+    let r = call_typed(&a.state, "GET", "/api/gym/next", "", &a.ctx());
+    assert!(r.state.is_none());
+    assert_eq!(r.body["name"], "Push 1");
+    assert_eq!(a.st().gym.rotation.next_index, 0);
+}
+
+#[test]
+fn rest_next_since_yesterday_auto_advances_and_returns_state() {
+    let mut a = App::new("2026-11-10");
+    set_next(&mut a, 3, "2026-11-09");
+    let r = call_typed(&a.state, "GET", "/api/gym/next", "", &a.ctx());
+    assert_eq!(r.body["name"], "Legs + Abs 1");
+    let st = r.state.expect("auto-advance returns the state");
+    assert_eq!(st.gym.rotation.next_index, 4);
+    assert_eq!(st.gym.next_since.as_deref(), Some("2026-11-10"));
+    assert_eq!(st.gym.rest_taken_date.as_deref(), Some("2026-11-09"), "yesterday was the rest");
+    a.state = serde_json::to_string(&st).unwrap();
+    // the missed day was the rest: today goes straight to the next workout
+    let days = a.get("/api/days?start=2026-11-10&days=2");
+    assert_eq!(days[0]["workout"]["name"], "Legs + Abs 1");
+    assert_eq!(days[1]["workout"]["name"], "Push 2");
+    // stable on a second call
+    assert!(call_typed(&a.state, "GET", "/api/gym/next", "", &a.ctx()).state.is_none());
+}
+
+#[test]
+fn rest_next_since_today_does_not_advance_and_old_states_get_next_since() {
+    let mut a = App::new("2026-11-10");
+    set_next(&mut a, 3, "2026-11-10");
+    let r = call_typed(&a.state, "GET", "/api/gym/next", "", &a.ctx());
+    assert!(r.state.is_none());
+    assert_eq!(r.body["rest"], true);
+    // a v5 state without next_since is stamped, not advanced
+    let mut st = a.st();
+    st.gym.next_since = None;
+    a.state = serde_json::to_string(&st).unwrap();
+    let r = call_typed(&a.state, "GET", "/api/gym/next", "", &a.ctx());
+    assert_eq!(r.state.unwrap().gym.next_since.as_deref(), Some("2026-11-10"));
+    assert_eq!(r.body["rest"], true);
+}
+
+#[test]
+fn consecutive_rests_need_one_passed_day_each() {
+    let mut a = App::new("2026-11-10");
+    let mut st = a.st();
+    st.gym.rotation.items = vec![
+        crate::model::RotItem { template_id: None, rest: true },
+        crate::model::RotItem { template_id: None, rest: true },
+        crate::model::RotItem { template_id: st.gym.templates.first().map(|t| t.id), rest: false },
+    ];
+    st.gym.rotation.next_index = 0;
+    st.gym.next_since = Some("2026-11-09".into());
+    a.state = serde_json::to_string(&st).unwrap();
+    a.get("/api/gym/next");
+    assert_eq!(a.st().gym.rotation.next_index, 1, "only one day passed");
+    let mut st = a.st();
+    st.gym.rotation.next_index = 0;
+    st.gym.next_since = Some("2026-11-08".into());
+    a.state = serde_json::to_string(&st).unwrap();
+    assert_eq!(a.get("/api/gym/next")["name"], "Push 1");
+    assert_eq!(a.st().gym.rotation.next_index, 2);
+}
+
+#[test]
+fn skip_rest_makes_today_the_workout() {
+    let mut a = App::new("2026-11-10");
+    set_next(&mut a, 3, "2026-11-10");
+    assert_eq!(a.get("/api/days?start=2026-11-10&days=1")[0]["workout"]["rest"], true);
+    a.post("/api/gym/skip-rest", json!({}));
+    assert_eq!(a.get("/api/gym/next")["name"], "Legs + Abs 1");
+    assert_eq!(a.get("/api/days?start=2026-11-10&days=2")[0]["workout"]["name"], "Legs + Abs 1");
+    assert_eq!(a.st().gym.next_since.as_deref(), Some("2026-11-10"));
+    assert!(a.st().gym.rest_taken_date.is_none());
+    // next is a workout now, so skip-rest is a 400
+    assert_eq!(a.req("POST", "/api/gym/skip-rest", json!({})).0, 400);
+}
+
+#[test]
+fn skip_advances_past_a_workout_or_rest_without_logging() {
+    let mut a = App::new("2026-11-10");
+    set_next(&mut a, 0, "2026-11-01");
+    a.post("/api/gym/skip", json!({}));
+    assert_eq!(a.get("/api/gym/next")["name"], "Pull 1");
+    assert_eq!(a.get("/api/days?start=2026-11-10&days=1")[0]["workout"]["name"], "Pull 1");
+    assert!(a.st().gym.sessions.is_empty());
+    assert_eq!(a.st().gym.next_since.as_deref(), Some("2026-11-10"));
+    set_next(&mut a, 3, "2026-11-10");
+    a.post("/api/gym/skip", json!({}));
+    assert_eq!(a.get("/api/gym/next")["name"], "Legs + Abs 1");
 }

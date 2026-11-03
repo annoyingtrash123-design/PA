@@ -35,10 +35,16 @@ const bigBtn = (label: string, ic: string, fn: () => void) => button(label, fn, 
 function rToday(draw: () => void): HTMLElement[] {
   if (session && !session.completed) return rWorkout(draw);
   plan = api<WorkoutPlan>("GET", "/api/gym/next");
+  const skipBtn = () => button("Skip this one", async () => {
+    if (!(await confirmDialog("Skip this one?", "The rotation moves on to the next item and nothing is logged.", "Skip", false))) return;
+    try { api("POST", "/api/gym/skip"); draw(); } catch (e) { toast((e as Error).message); }
+  }, { kind: "text", cls: "btn-wide" });
   if (plan.rest) {
     return [card("stack", h("div", { class: "row", style: { gap: "10px", color: "var(--sage)" } }, icon("leaf", 28), h("h3", { class: "title-md", style: { color: "var(--text)" } }, "Next up: Rest day")), muted("No lifting today. Stretch, walk, nap, whatever feels good."), button("Mark rest day", () => {
       try { api("POST", "/api/gym/rest"); toast("Rest day logged. Enjoy it!"); draw(); } catch (e) { toast((e as Error).message); }
-    }, { icon: "check" }))];
+    }, { icon: "check" }), button("Train today instead", () => {
+      try { api("POST", "/api/gym/skip-rest"); draw(); } catch (e) { toast((e as Error).message); }
+    }, { kind: "outline" }), h("p", { class: "muted small" }, "Missed a day? Days you don't train count as your rest day automatically.")), skipBtn()];
   }
   const p = plan;
   const cardio = p.kind === "cardio";
@@ -62,6 +68,7 @@ function rToday(draw: () => void): HTMLElement[] {
   out.push(bigBtn(resuming ? "Continue workout" : "Start workout", "play", () => {
     try { session = api<Session>("POST", "/api/sessions", { template_id: p.template_id }); draw(); } catch (e) { toast((e as Error).message); }
   }));
+  out.push(skipBtn());
   return out;
 }
 
