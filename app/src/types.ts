@@ -191,6 +191,14 @@ export interface State {
   gym: { exercises: Exercise[]; templates: Template[]; rotation: Rotation; sessions: Session[]; next_since?: string | null };
 }
 
+/** The morning briefing as four spoken parts. */
+export interface MorningParts {
+  greeting: string;
+  weather_comment: string | null;
+  affirmation: string;
+  briefing: string;
+}
+
 export interface BriefingPrep {
   kind: string;
   date: string;
@@ -198,6 +206,8 @@ export interface BriefingPrep {
   stats: { total?: number; done?: number; gym_sessions?: number; [k: string]: unknown };
   affirmation?: string;
   template_text: string;
+  /** morning only: the no-AI text in the same four parts (template_text = these joined) */
+  template_parts?: MorningParts | null;
   cache_key: string;
   /** hash of the plan the text is about (no weather); changes when plans change */
   plan_fingerprint?: string;

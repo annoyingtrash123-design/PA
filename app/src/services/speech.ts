@@ -1,6 +1,8 @@
 // Read-aloud with the Web Speech API (speechSynthesis).
 import { speechChunks } from "../util/text";
 
+const PARAGRAPH_PAUSE_MS = 450;
+
 export type SpeechState = "idle" | "playing" | "paused";
 
 let state: SpeechState = "idle";
@@ -59,21 +61,27 @@ export async function speak(text: string, voiceName?: string): Promise<void> {
   stop();
   const id = ++runId;
   const voice = pickVoice(await listVoices(), voiceName);
-  const chunks = speechChunks(text);
+  // blank lines separate the spoken parts: a short natural pause after the last chunk of each paragraph
+  const chunks: { text: string; pause: number }[] = [];
+  for (const para of text.split(/\n\s*\n/)) {
+    const cs = speechChunks(para);
+    cs.forEach((c, k) => chunks.push({ text: c, pause: k === cs.length - 1 ? PARAGRAPH_PAUSE_MS : 0 }));
+  }
   if (!chunks.length || id !== runId) return;
   set("playing");
   let i = 0;
   const next = () => {
     if (id !== runId) return;
     if (i >= chunks.length) return set("idle");
-    const u = new SpeechSynthesisUtterance(chunks[i++]);
+    const chunk = chunks[i++];
+    const u = new SpeechSynthesisUtterance(chunk.text);
     if (voice) {
       u.voice = voice;
       u.lang = voice.lang;
     } else u.lang = "en-US";
     u.rate = 0.95;
     u.pitch = 1;
-    u.onend = next;
+    u.onend = () => (chunk.pause && i < chunks.length ? void setTimeout(next, chunk.pause) : next());
     u.onerror = (e) => {
       if (id !== runId || e.error === "canceled" || e.error === "interrupted") return;
       set("idle");

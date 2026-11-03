@@ -51,14 +51,15 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
   return obj as Record<string, unknown>;
 }
 
-/** Parse the morning reply {"weather_comment","briefing"}. Returns null if unusable. */
-export function parseMorningJson(raw: string): { weather_comment: string | null; briefing: string } | null {
+/** Parse the morning reply {"greeting","weather_comment","affirmation","briefing"}. Tolerant: any field may be missing
+ *  (callers fall back to the template part); null only if there is no usable briefing. */
+export function parseMorningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null; briefing: string } | null {
   const o = parseJsonObject(raw);
   if (!o) return null;
-  const briefing = typeof o.briefing === "string" ? cleanReply(o.briefing) : "";
+  const get = (k: string) => (typeof o[k] === "string" ? cleanReply(o[k] as string) : "") || null;
+  const briefing = get("briefing");
   if (!briefing) return null;
-  const wc = typeof o.weather_comment === "string" ? cleanReply(o.weather_comment) : "";
-  return { weather_comment: wc || null, briefing };
+  return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing };
 }
 
 /** Parse the digest reply: JSON, possibly fenced or with chatter around it. Returns null if unusable. */

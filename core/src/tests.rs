@@ -658,6 +658,50 @@ fn morning_template_word_count_on_sample_data() {
 }
 
 #[test]
+fn morning_template_parts_are_separate_and_specific() {
+    let weather = json!({"summary": "Light rain", "temp_max": 14, "temp_min": 8, "precip_prob": 80, "uv_max": 1.5});
+    for with_weather in [true, false] {
+        let mut a = App::with_sample(TODAY);
+        for off in 0..14 {
+            let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+            a.today = day.clone();
+            a.weather = if with_weather { json!({ day.clone(): weather }) } else { json!({}) };
+            let b = a.get(&format!("/api/briefing?kind=morning&date={day}"));
+            let p = &b["template_parts"];
+            let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
+            let (greeting, aff, body) = (s("greeting"), s("affirmation"), s("briefing"));
+            assert!(!greeting.is_empty() && words_in(&greeting) <= 12, "{greeting}");
+            assert!(greeting.contains(&weekday_name(d(&day))) || greeting.contains("morning") || greeting.contains("Morning"), "{greeting}");
+            assert_eq!(p["weather_comment"].is_null(), !with_weather, "{day}");
+            if with_weather {
+                assert!(s("weather_comment").contains("14"), "{}", s("weather_comment"));
+            }
+            // the body has no greeting and no weather
+            for w in ["degrees", "umbrella", "sun cream", "forecast", "Good morning", "Rise and shine", "Happy "] {
+                assert!(!body.contains(w), "{day}: body contains {w:?}\n{body}");
+            }
+            // affirmation: short, specific (names a task from the plan), no stats, no cliches
+            let titles: Vec<String> = a.get(&format!("/api/days?start={day}&days=1"))[0]["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap().to_string()).collect();
+            assert!(titles.iter().any(|t| aff.contains(t.as_str())), "{day}: affirmation names no task: {aff} / {titles:?}");
+            assert!(words_in(&aff) <= 60, "{aff}");
+            for part in [&greeting, &aff, &body, &s("weather_comment")] {
+                assert!(!has_stats(part), "{part}");
+            }
+            for c in ["you've got this", "believe in yourself", "you are enough"] {
+                assert!(!aff.to_lowercase().contains(c));
+            }
+            // template_text is the parts joined
+            let joined = [greeting.clone(), s("weather_comment"), aff.clone(), body.clone()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n\n");
+            assert_eq!(b["template_text"].as_str().unwrap(), joined);
+        }
+    }
+    let mut a = App::with_sample(TODAY);
+    assert!(a.get("/api/briefing?kind=evening")["template_parts"].is_null());
+    let sp = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"))["system_prompt"].as_str().unwrap().to_string();
+    assert!(sp.contains("affirmation") && sp.contains("WITHOUT any weather"));
+}
+
+#[test]
 fn morning_template_prefers_meaningful_fixed_points() {
     let mut a = App::with_sample(TODAY);
     let text = morning(&mut a, TODAY);

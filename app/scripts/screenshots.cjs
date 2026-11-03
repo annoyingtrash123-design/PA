@@ -22,7 +22,7 @@ const forecast = () => {
   await ctx.route(/generativelanguage\.googleapis\.com/, async (r) => {
     const body = JSON.parse(r.request().postData() || "{}");
     const json = body.generationConfig?.responseMimeType === "application/json";
-    const text = json ? JSON.stringify({ weather_comment: "A proper rainy one, 14 at most. Cosy if you're home, and nice to listen to from your desk.", overview: "A steady day." })
+    const text = json ? JSON.stringify({ greeting: "Morning! Happy Tuesday.", weather_comment: "A proper rainy one, 14 degrees at most. Cosy if you are home, and nice to listen to from your desk.", affirmation: "Stand-up is the one fixed point today, so do the quick bits before it and the groceries can wait until the way home.", briefing: "Looking back at yesterday, you watered the plants a bit late, but they are fine, and it counted.\n\nIf I were ordering the day, I would do the morning routine, stand-up, then groceries on the way home. Have a lovely day!", overview: "A steady day." })
       : "Good morning! It's a gentle rainy one, so a good day to settle in.\n\nLooking back at yesterday, you watered the plants a bit late, but they're fine, and it counted.\n\nIf I were ordering the day, I'd do the morning routine, stand-up, then groceries on the way home. Have a lovely day!";
     await r.fulfill({ json: { candidates: [{ content: { parts: [{ text }] } }] } });
   });

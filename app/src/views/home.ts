@@ -1,6 +1,6 @@
 import { assistantName, getState, now, today } from "../core";
 import type { BriefingResult } from "../services/ai-text";
-import { aiNotice, cachedWeatherComment, getBriefing, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
+import { affirmationFor, aiNotice, getBriefing, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
 import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
@@ -22,6 +22,9 @@ export function renderHome(root: HTMLElement): () => void {
   const dayHolder = h("div");
   let token = 0;
   let digest: Digest | null = null;
+  const affHolder = h("div", { hidden: true });
+  /** what "Read it to me" says right now: morning = greeting, weather, affirmation, briefing; evening = the wind-down text */
+  let script = "";
 
   const drawWeather = () => {
     const w = digest?.weather;
@@ -34,7 +37,13 @@ export function renderHome(root: HTMLElement): () => void {
     clear(weatherHolder, card("raised stack", h("div", { class: "weather-top" }, icon(weatherIconName(w.summary), 26), h("div", null, h("div", { class: "title-sm", style: { color: "var(--text)" } }, w.summary), loc ? h("div", { class: "muted small" }, loc) : null)), h("div", { class: "row wrap", style: { gap: "8px" } }, ...chips), digest?.weather_comment ? h("p", { class: "comment" }, digest.weather_comment) : null));
   };
 
-  const drawDay = (text: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null) => {
+  const drawAffirmation = (text: string | null | undefined) => {
+    affHolder.hidden = !text;
+    if (!text) return clear(affHolder);
+    clear(affHolder, card("affirmation", h("div", { class: "aff-head" }, icon("leaf", 18), h("span", { class: "label-caps" }, "For today")), h("p", { class: "aff-text" }, text)));
+  };
+
+  const drawDay = (text: string | null | undefined, greetingLine: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null) => {
     if (busy) return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
     const body = text || "I couldn't put your day into words just now. Check the Tasks tab for what's on.";
     const title = kind === "morning" ? "Your day" : "Your wind-down";
@@ -44,50 +53,54 @@ export function renderHome(root: HTMLElement): () => void {
         "raised summary",
         h("div", { class: "summary-head" }, icon(kind === "morning" ? "sun" : "moon", 20), h("span", { class: "label-caps" }, `${title} with ${name}`)),
         note ? h("div", { class: "row muted small", style: { gap: "8px" } }, h("span", { class: "spinner" }), note) : null,
+        greetingLine ? h("p", { class: "day-greeting" }, greetingLine) : null,
         ...paragraphs(body).map((p) => h("p", null, p)),
         resting ? h("p", { class: "muted small" }, resting) : null,
         onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
-        readAloud(() => body, () => getState().settings.voice, "Read it to me", !text),
+        readAloud(() => script || body, () => getState().settings.voice, "Read it to me", !text),
       ),
     );
   };
 
-  const show = (b: BriefingResult | null, shown: string | null, date: string) => {
-    const update = b?.outdated ? () => void regenerate(date) : null;
-    drawDay(b?.text || shown, false, undefined, b?.source === "template" ? aiNotice() : null, update);
+  /** Paint everything a briefing result holds: weather comment, affirmation card, "Your day" card, and the read-aloud script. */
+  const show = async (b: BriefingResult, date: string, note?: string) => {
+    const my = token;
+    const p = b.parts;
+    if (digest && p?.weather_comment) digest = { ...digest, weather_comment: p.weather_comment };
+    drawWeather();
+    // morning: the affirmation comes with the briefing; wind-down: the morning's (cached) or the template one
+    const aff = p ? p.affirmation : await affirmationFor(date).catch(() => null);
+    if (my !== token) return;
+    drawAffirmation(aff);
+    script = b.script;
+    const update = b.outdated ? () => void regenerate(date) : null;
+    drawDay(b.text, p?.greeting, false, note, b.source === "template" ? aiNotice() : null, update);
   };
   const regenerate = async (date: string) => {
     const my = ++token;
-    drawDay(null, true);
+    drawDay(null, null, true);
     const b = await getBriefing(kind!, date, { force: true }).catch(() => null);
     if (my !== token) return;
     if (b?.notice) toast(b.notice);
-    if (digest && b?.weather_comment) digest = { ...digest, weather_comment: b.weather_comment };
-    drawWeather();
-    show(b, templateBriefing(kind!, date), date);
+    await show(b ?? templateBriefing(kind!, date), date);
   };
 
   const load = async () => {
     const my = ++token;
     const date = today();
     // show the instant template version straight away; the AI version replaces it when it arrives
-    let shown: string | null = null;
+    let tpl: BriefingResult | null = null;
     try {
       digest = templateDigest(date);
-      drawWeather();
-      shown = templateBriefing(kind!, date);
-      drawDay(shown, false, hasKey() ? `${name} is putting this into words…` : undefined);
+      tpl = templateBriefing(kind!, date);
+      await show(tpl, date, hasKey() ? `${name} is putting this into words…` : undefined);
     } catch {
-      drawDay(null, true);
+      drawDay(null, null, true);
     }
-    // Only the first text of the day is automatic (the morning one also writes the weather comment); later changes need a tap
+    // Only the first text of the day is automatic (the morning one writes all four parts); later changes need a tap
     const b = await getBriefing(kind!, date).catch(() => null);
     if (my !== token) return;
-    const wc = b?.weather_comment ?? (b ? await cachedWeatherComment(date) : null);
-    if (my !== token) return;
-    if (digest && wc) digest = { ...digest, weather_comment: wc };
-    drawWeather();
-    show(b, shown, date);
+    await show(b ?? tpl ?? templateBriefing(kind!, date), date);
   };
 
   const segHolder = h("div", { class: "row", style: { justifyContent: "center" } });
@@ -103,6 +116,7 @@ export function renderHome(root: HTMLElement): () => void {
     root,
     h("div", null, h("h2", { class: "title-lg" }, hello), h("p", { class: "muted", style: { marginTop: "2px", fontSize: "14px" } }, longDay(clock.today))),
     weatherHolder,
+    affHolder,
     segHolder,
     dayHolder,
   );

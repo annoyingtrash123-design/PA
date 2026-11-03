@@ -390,31 +390,59 @@ fn add(v: &mut Vec<Piece>, s: String, k: PK) {
     v.push(Piece { text: s, kind: k });
 }
 
-fn morning_template(c: &Ctx, weather: &Option<Weather>) -> String {
+/// The four spoken parts of the morning briefing.
+pub struct MorningParts {
+    pub greeting: String,
+    pub weather_comment: Option<String>,
+    pub affirmation: String,
+    pub briefing: String,
+}
+
+impl MorningParts {
+    /// All parts as one text, blank-line separated (the no-AI `template_text`).
+    pub fn joined(&self) -> String {
+        let mut v: Vec<&str> = vec![self.greeting.as_str()];
+        if let Some(w) = self.weather_comment.as_deref().filter(|w| !w.is_empty()) {
+            v.push(w);
+        }
+        v.push(self.affirmation.as_str());
+        v.push(self.briefing.as_str());
+        v.retain(|p| !p.is_empty());
+        v.join("\n\n")
+    }
+}
+
+fn morning_parts(c: &Ctx, weather: &Option<Weather>) -> MorningParts {
+    let weather_comment = weather.as_ref().map(|w| digest::weather_comment_template(w, &c.memory, &c.items, &c.workout, &c.info, c.date));
+    MorningParts {
+        greeting: morning_greeting(c),
+        weather_comment,
+        // the holiday / day-off frame is already the first line of the briefing body
+        affirmation: daynote::template_note(&c.items, c.date, &c.goals),
+        briefing: morning_template(c),
+    }
+}
+
+/// One short spoken hello with the weekday and date feel.
+fn morning_greeting(c: &Ctx) -> String {
     let d = c.date;
     let n = name_suffix(&c.user);
-    let a = &c.assistant;
-    let mut v: Vec<Piece> = vec![];
-    
-    // 1. hello, date, work frame, weather through the memory prefs
-    must(&mut v, match d.num_days_from_ce() as usize % 4 {
-        0 => format!("Good morning{n}! It's {a} here, and I'm so glad you're up."),
-        1 => format!("Hey{n}, good morning! {a} here, ready to walk through your day with you."),
-        2 => format!("Morning{n}! It's {a}. Grab something warm to drink and let's look at today together."),
-        _ => format!("Rise and shine{n}! {a} here with your morning rundown."),
-    });
     let wd = weekday_name(d);
     let mo = d.format("%B").to_string();
-    must(&mut v, match d.num_days_from_ce() as usize % 3 {
-        0 => format!("Today is {wd}, {mo} {}.", ordinal(d.day())),
-        1 => format!("It's {wd}, the {} of {mo}.", ordinal(d.day())),
-        _ => format!("Happy {wd}! It's {mo} {} today.", ordinal(d.day())),
-    });
+    match d.num_days_from_ce() as usize % 4 {
+        0 => format!("Good morning{n}! Happy {wd}."),
+        1 => format!("Morning{n}! It's {wd}, the {} of {mo}.", ordinal(d.day())),
+        2 => format!("Hey{n}, good morning, and happy {wd}."),
+        _ => format!("Rise and shine{n}! It's {wd}, {mo} {}.", ordinal(d.day())),
+    }
+}
+
+/// The briefing body: no greeting and no weather (both are spoken first).
+fn morning_template(c: &Ctx) -> String {
+    let d = c.date;
+    let mut v: Vec<Piece> = vec![];
     if let Some(f) = digest::frame_sentence(&c.info) {
         must(&mut v, f);
-    }
-    if let Some(w) = weather {
-        must(&mut v, digest::weather_comment_template(w, &c.memory, &c.items, &c.workout, &c.info, d));
     }
 
     // 2. yesterday
@@ -630,7 +658,7 @@ fn morning_template(c: &Ctx, weather: &Option<Weather>) -> String {
         None => "Nothing is waiting on you, so the day is yours to shape.".into(),
     });
     must(&mut v, pick(&["I'll be right here if the plan changes.", "Have a good one, and shout if you need me.", "Go get started, and I'll be here when you need me."], d, 17).into());
-    assemble(v, 345, 440)
+    assemble(v, 285, 365)
 }
 
 fn lower_first(s: &str) -> String {
@@ -647,7 +675,7 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
     let a = &c.assistant;
     let mut parts: Vec<String> = vec![];
     match c.kind {
-        Kind::Morning => parts.push(morning_template(c, weather)),
+        Kind::Morning => parts.push(morning_parts(c, weather).joined()),
         Kind::Evening => {
             parts.push(match d.num_days_from_ce() as usize % 3 {
                 0 => format!("Hey{n}, it's {a}. Let's wind the day down together."),
@@ -859,11 +887,15 @@ GOALS: when active goals are given, connect specific completed or planned tasks 
 fn system_prompt(c: &Ctx) -> String {
     let words = match c.kind {
         Kind::Weekly => "between 200 and 300 words",
-        Kind::Morning => "between 320 and 450 words (a 2 to 3 minute read-aloud; do not stop short)",
+        Kind::Morning => "between 290 and 400 words for the briefing part alone (the four parts together are a 2 to 3 minute read-aloud; do not stop short)",
         Kind::Evening => "between 150 and 250 words",
     };
     let focus = match c.kind {
-        Kind::Morning => "This is the MORNING briefing, the main daily summary, read aloud in about 2 to 3 minutes. Flow naturally through these parts, as one spoken piece with no headings: (1) a warm hello and the weather, with tone and advice quietly shaped by the person's weather preferences (happy about cool days, a gentle heads-up and practical tips when hot, sun cream when UV is high and they avoid sunburn, cosy about cool rain if they like it) but never stating or explaining those preferences and tied to the day's plans rather than just read out; mention a public holiday or day off warmly if it is one (no work today); (2) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (3) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (4) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch hour only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop, and keep the evening finishing comfortably before bedtime); (5) a peek at tomorrow's notable things and appointments; (6) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Never use generic affirmations or cliches like 'you\'ve got this'.",
+        Kind::Morning => "This is the MORNING briefing, which you write as FOUR separate spoken parts that are read aloud in this order: greeting, weather_comment, affirmation, briefing. Together they run 2 to 3 minutes.\n\
+PART greeting: one short spoken hello with the weekday and date feel (for example 'Morning! Happy Tuesday.'), using the person's name if given. One or two short sentences at most, no weather, no plans.\n\
+PART weather_comment: 1 to 2 sentences interpreting the forecast, with tone and advice quietly shaped by the person's weather preferences (happy about cool days, a gentle heads-up and practical tips when hot, sun cream when UV is high and they avoid sunburn, cosy about cool rain if they like it) but NEVER stating or explaining those preferences, and tied to the day's plans rather than just read out. Temperatures as degrees, never a rain percentage. null if no weather is given.\n\
+PART affirmation: 1 or 2 sentences, at most 40 words, grounded and SPECIFIC to today's actual plan: name a real task, appointment or workout, or the shape of the day (where the busy stretch is, where there is slack or a breather). Practical and encouraging, not soppy. Never state or narrate the person's preferences. If a goal plausibly relates to a task today you may tie them together in a few words, never forced. Never use clichés or generic affirmations like 'you\'ve got this', 'believe in yourself', 'one step at a time' or 'you are enough'. No raw counts.\n\
+PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT any weather (those are spoken first, so do not repeat them), flowing naturally with no headings: mention a public holiday or day off warmly if it is one (no work today); (1) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (2) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (3) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch hour only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop, and keep the evening finishing comfortably before bedtime); (4) a peek at tomorrow's notable things and appointments; (5) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Do not repeat the affirmation. Never use generic affirmations or cliches like 'you\'ve got this'.",
         Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, mention whether tomorrow is a work day, a public holiday or a day off, gently nudge toward winding down in time for sleep, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
         Kind::Weekly => "This is the WEEKLY overview, read on Sunday. Open warmly. Pick two or three specific highlights that were actually done (task titles, gym sessions by name, and any exercise progressions) and connect them to the goals where they plausibly relate. Gently mention anything that slid, without guilt. Look ahead to the notable things next week and to any goal deadline coming up. Close with one short grounded line. If nothing much was done, be kind and low-key, give no stats, and focus on the week ahead and the goals. Do not list every task and never quote totals. No generic affirmations or cliches.",
     };
@@ -1047,6 +1079,10 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     // The morning briefing is a plan for the day: ticking things off must not change its cache key.
     let hash = if kind == Kind::Morning { fnv(&format!("{system}\n{}", plan_only(&user))) } else { fnv(&format!("{system}\n{user}")) };
     let text = template_text(&ctx, &weather);
+    let template_parts = (kind == Kind::Morning).then(|| {
+        let p = morning_parts(&ctx, &weather);
+        json!({"greeting": p.greeting, "weather_comment": p.weather_comment, "affirmation": p.affirmation, "briefing": p.briefing})
+    });
     let affirmation = match &ctx.week {
         Some(w) => week_line(w),
         None => daynote::note_text(&ctx.items, date, &ctx.goals, &ctx.info),
@@ -1062,6 +1098,7 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
         "stats": stats,
         "affirmation": affirmation,
         "template_text": text,
+        "template_parts": template_parts,
         "cache_key": format!("briefing:{}:{ds}:{hash}", kind.name()),
         "plan_fingerprint": plan_fingerprint(&ctx),
         "system_prompt": system,
