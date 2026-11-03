@@ -194,15 +194,37 @@ fn open_day(items: &[Occurrence], info: &DayInfo, date: NaiveDate) -> bool {
     false
 }
 
-/// Genuinely free room for a leisure suggestion: an empty day, a day off / holiday / quiet weekend day, or
-/// (for the evening) nothing timed after 18:00 and few items left.
+/// Room for a leisure suggestion. Morning: an empty day, a day off / holiday / quiet weekend day.
+/// Evening: most evenings qualify; only a genuinely packed one does not (2+ timed items from 18:00,
+/// a timed item at 20:00 or later, or a long list still waiting).
 pub fn free_room(items: &[Occurrence], info: &DayInfo, date: NaiveDate, evening: bool) -> bool {
     if !evening {
         return open_day(items, info, date);
     }
     let b = busy_items(items);
-    let late = b.iter().any(|o| o.time.as_deref().is_some_and(|t| t >= "18:00"));
-    !late && (b.len() <= 2 || open_day(items, info, date))
+    let from_18 = b.iter().filter(|o| o.time.as_deref().is_some_and(|t| t >= "18:00")).count();
+    let very_late = b.iter().any(|o| o.time.as_deref().is_some_and(|t| t >= "20:00"));
+    !(from_18 >= 2 || very_late || b.len() >= 7)
+}
+
+/// Is the morning too packed for an optional "on this day" aside? (3+ timed items or 6+ things waiting.)
+pub fn morning_packed(items: &[Occurrence]) -> bool {
+    let b = busy_items(items);
+    b.iter().filter(|o| o.time.is_some()).count() >= 3 || b.len() >= 6
+}
+
+/// Deterministic "on this day" flag: 2 mornings a week, 3 in some weeks, spread by a hash of the week.
+pub fn on_this_day(date: NaiveDate, items: &[Occurrence]) -> bool {
+    if morning_packed(items) {
+        return false;
+    }
+    let monday = date - Duration::days(date.weekday().num_days_from_monday() as i64);
+    let a = idx(monday, 93, 4);
+    let mut days = vec![a, a + 3];
+    if idx(monday, 94, 2) == 0 {
+        days.push((a + 5) % 7);
+    }
+    days.contains(&(date.weekday().num_days_from_monday() as usize))
 }
 
 fn tokens(s: &str) -> Vec<String> {
@@ -372,7 +394,7 @@ pub fn context_block(list: &[Leisure], pick: &Option<Leisure>, room: bool) -> St
         Some(l) => s.push_str(&format!("Computed leisure suggestion (use it only if there is free room): {}\n", action(l))),
         None => s.push_str("Computed leisure suggestion: none today\n"),
     }
-    s.push_str("LEISURE RULES: suggest AT MOST ONE leisure item, only when there is genuinely free time (see the free room line), softly and optionally in one sentence (for example 'if the afternoon stays quiet, it might be a nice chance to ...'), never on a busy day, never as a goal, task or progress to track, and not every day. When you do, use the computed suggestion; for a new item you may add one short spoken sentence from its description. Never mention finished items. If the computed suggestion says none, mention no leisure at all.\n");
+    s.push_str("LEISURE RULES: suggest AT MOST ONE leisure item, only when the free room line says yes, softly and optionally in one sentence (for example 'if the afternoon stays quiet, it might be a nice chance to ...'), never as a goal, task or progress to track. In the morning that means only genuinely free days; in the evening most evenings qualify, so do suggest it unless the computed suggestion says none. Only mention items on the list; never introduce new titles of your own. When you do, use the computed suggestion; for a new item you may add one short spoken sentence from its description. Never mention finished items. If the computed suggestion says none, mention no leisure at all.\n");
     s
 }
 

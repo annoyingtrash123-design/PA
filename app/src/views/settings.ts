@@ -267,7 +267,7 @@ function memoryCard(name: string): HTMLElement {
     h("hr", { class: "divider" }),
     sub("Daily rhythm"), h("span", null, "Usually wake"), h("div", { class: "pair" }, wf, wt), h("span", null, "Usually asleep by"), h("div", { class: "pair" }, sf, st), outlineBtn("Save daily rhythm", saveRhythm),
     h("hr", { class: "divider" }),
-    sub("Interests"), field("Interests", interests, "Things you love or want to learn about"), outlineBtn("Save interests", saveInterests),
+    sub("Interests"), field("Interests", interests, "Things you love or want to learn about — eras, places, genres, hobbies. Miranda uses this quietly when suggesting things."), outlineBtn("Save interests", saveInterests),
     h("hr", { class: "divider" }),
     sub("Notes"), notesCol, h("div", { class: "row" }, h("div", { class: "grow" }, newNote), iconBtn("add-circle", "Add note", addNote, "lav", 32)),
     h("p", { class: "field-hint" }, "e.g. I work from the office Tue to Thu"),

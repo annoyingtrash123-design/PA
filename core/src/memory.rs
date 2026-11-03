@@ -49,7 +49,7 @@ pub fn context_block(m: &Memory) -> String {
     let r = &m.rhythm;
     s.push_str(&format!("  - Usually wakes between {} and {} and goes to sleep between {} and {}; keep evening suggestions finishing comfortably before bedtime, and nudge toward winding down in time for sleep in the evening.\n", r.wake_from, r.wake_to, r.sleep_from, r.sleep_to));
     if !m.interests.trim().is_empty() {
-        s.push_str(&format!("  - Interests (things they love or want to learn about; private background, never recite the list, only let it quietly shape suggestions and recommendations): {}\n", m.interests.trim()));
+        s.push_str(&format!("  - Interests (things they love or want to learn about; private background, never recite the list, only let it quietly shape suggestions and recommendations. Only suggest specific works, films, books, shows, music, games or places that are on their leisure list; never introduce new titles of your own, and never volunteer content in Chinese, Korean or Japanese unless it is on that list): {}\n", m.interests.trim()));
     }
     for n in &m.notes {
         s.push_str(&format!("  - Note: {}\n", n.text));

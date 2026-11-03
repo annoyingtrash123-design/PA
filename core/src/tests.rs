@@ -1254,9 +1254,9 @@ fn leisure_state_v8_interests_and_sample_data() {
 
 #[test]
 fn leisure_suggested_only_with_free_room() {
-    // a packed work day: no suggestion in the morning or the evening
+    // a packed work day: no suggestion in the morning (the evening of a normal work day does get one)
     let mut a = App::with_sample(TODAY);
-    for kind in ["morning", "evening"] {
+    for kind in ["morning"] {
         let b = a.get(&format!("/api/briefing?kind={kind}"));
         assert!(leisure_line(&b).ends_with("none today"), "{kind}: {}", leisure_line(&b));
         for t in ["Piranesi", "Slow Horses", "Stardew", "Crown Street"] {
@@ -1264,6 +1264,7 @@ fn leisure_suggested_only_with_free_room() {
         }
     }
     assert!(a.st().leisure.iter().all(|l| l.last_suggested.is_none()));
+    assert!(!leisure_line(&a.get("/api/briefing?kind=evening")).ends_with("none today"));
     // a free Saturday gets exactly one
     let mut f = App::new("2026-11-07");
     add_leisure(&mut f, "read", "Book A", "someday");
@@ -1275,11 +1276,16 @@ fn leisure_suggested_only_with_free_room() {
     let mut e = App::new("2026-11-03");
     add_leisure(&mut e, "watch", "Show", "someday");
     let appt = cat_id(&mut e, "Social");
-    e.post("/api/tasks", json!({"title": "Dinner out", "date": "2026-11-03", "time": "19:00", "category_id": appt}));
+    e.post("/api/tasks", json!({"title": "Dinner out", "date": "2026-11-03", "time": "19:00", "category_id": appt.clone()}));
+    // one timed evening item is still a normal evening: suggest
+    assert!(leisure_line(&e.get("/api/briefing?kind=evening")).contains("Show"));
+    // a second timed item from 18:00 makes it packed
+    e.post("/api/tasks", json!({"title": "Book club", "date": "2026-11-03", "time": "19:30", "category_id": appt.clone()}));
     assert!(leisure_line(&e.get("/api/briefing?kind=evening")).ends_with("none today"));
     e.post("/api/days-off", json!({"date": "2026-11-04"}));
     e.today = "2026-11-04".into();
-    assert!(leisure_line(&e.get("/api/briefing?kind=morning&date=2026-11-04")).contains("Show"));
+    add_leisure(&mut e, "watch", "Other Show", "someday"); // "Show" was suggested yesterday evening
+    assert!(leisure_line(&e.get("/api/briefing?kind=morning&date=2026-11-04")).contains("Other Show"));
 }
 
 #[test]
@@ -1350,4 +1356,56 @@ fn blurb_prompt_endpoint() {
     let usr = b["user_prompt"].as_str().unwrap();
     assert!(usr.contains("The Count of Monte Cristo") && usr.contains("from Sam") && usr.contains("History and politics"), "{usr}");
     assert_eq!(a.req("GET", "/api/leisure/9999/blurb-prompt", json!({})).0, 404);
+}
+
+#[test]
+fn leisure_evening_suggested_on_a_normal_work_evening_not_a_packed_one() {
+    let mut a = App::new("2026-11-03");
+    add_leisure(&mut a, "watch", "Show", "someday");
+    let t = cat_id(&mut a, "Social");
+    a.post("/api/tasks", json!({"title": "Call mum", "date": "2026-11-03", "category_id": t.clone()}));
+    assert!(leisure_line(&a.get("/api/briefing?kind=evening")).contains("Show"));
+    a.post("/api/tasks", json!({"title": "Late film", "date": "2026-11-03", "time": "20:30", "category_id": t}));
+    let mut p = App::new("2026-11-03");
+    add_leisure(&mut p, "watch", "Show", "someday");
+    let t2 = cat_id(&mut p, "Social");
+    p.post("/api/tasks", json!({"title": "Late film", "date": "2026-11-03", "time": "20:30", "category_id": t2}));
+    assert!(leisure_line(&p.get("/api/briefing?kind=evening")).ends_with("none today"));
+}
+
+#[test]
+fn on_this_day_flag_is_deterministic_two_or_three_a_week_and_off_when_packed() {
+    use chrono::{Duration, NaiveDate};
+    let start = NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
+    for w in 0..12 {
+        let n = (0..7).filter(|d| crate::leisure::on_this_day(start + Duration::days(w * 7 + d), &[])).count();
+        assert!((2..=3).contains(&n), "week {w}: {n}");
+    }
+    let day = (0..7).map(|d| start + Duration::days(d)).find(|d| crate::leisure::on_this_day(*d, &[])).unwrap();
+    assert_eq!(crate::leisure::on_this_day(day, &[]), crate::leisure::on_this_day(day, &[]));
+    // prompt carries the flag and the rule; the template never mentions it
+    let ds = day.format("%Y-%m-%d").to_string();
+    let mut a = App::new(&ds);
+    let b = a.get("/api/briefing?kind=morning");
+    let up = b["user_prompt"].as_str().unwrap();
+    assert!(up.contains("On this day: yes"), "{up}");
+    assert!(b["system_prompt"].as_str().unwrap().contains("certain"));
+    assert!(!b["template_text"].as_str().unwrap().to_lowercase().contains("on this day"));
+    // a packed morning turns it off
+    let cat = cat_id(&mut a, "Social");
+    for (i, t) in ["09:00", "11:00", "13:00"].iter().enumerate() {
+        a.post("/api/tasks", json!({"title": format!("Meet {i}"), "date": ds, "time": t, "category_id": cat.clone()}));
+    }
+    assert!(a.get("/api/briefing?kind=morning")["user_prompt"].as_str().unwrap().contains("On this day: no"));
+}
+
+#[test]
+fn prompts_say_to_suggest_only_listed_works() {
+    let mut a = App::new(TODAY);
+    add_leisure(&mut a, "watch", "Show", "someday");
+    for kind in ["morning", "evening"] {
+        let up = a.get(&format!("/api/briefing?kind={kind}"))["user_prompt"].as_str().unwrap().to_string();
+        assert!(up.contains("never introduce new titles"), "{kind}");
+        assert!(up.contains("Chinese, Korean or Japanese"), "{kind}");
+    }
 }

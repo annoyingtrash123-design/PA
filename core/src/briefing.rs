@@ -81,6 +81,8 @@ struct Ctx {
     leisure_pick: Option<Leisure>,
     leisure_room: bool,
     leisure_open_day: bool,
+    /// morning only: ask the model for an optional 'on this day' sentence
+    on_this_day: bool,
     /// finished this week (weekly only)
     leisure_finished: Vec<Leisure>,
     memory: Memory,
@@ -116,6 +118,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
         leisure_pick: None,
         leisure_room: false,
         leisure_open_day: false,
+        on_this_day: false,
         leisure_finished: vec![],
         memory: env.st.memory.clone(),
         yesterday: vec![],
@@ -144,6 +147,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
                 ctx.cardio_done = gym::cardio_done_on(env.st, date).map(|c| gym::cardio_phrase(&c));
             }
             let evening = kind == Kind::Evening;
+            ctx.on_this_day = morning && leisure::on_this_day(date, &ctx.items);
             ctx.leisure = leisure::list_all(&env.st.leisure).into_iter().filter(|l| l.status != "finished").collect();
             ctx.leisure_room = leisure::free_room(&ctx.items, &ctx.info, date, evening);
             ctx.leisure_open_day = leisure::free_room(&ctx.items, &ctx.info, date, false);
@@ -943,7 +947,7 @@ fn system_prompt(c: &Ctx) -> String {
 PART greeting: one short spoken hello with the weekday and date feel (for example 'Morning! I hope you have a lovely Tuesday.'), using the person's name if given. One or two short sentences at most, no weather, no plans.\n\
 PART weather_comment: 1 to 2 sentences interpreting the forecast, with tone and advice quietly shaped by the person's weather preferences (happy about cool days, a gentle heads-up and practical tips when hot, sun cream when UV is high and they avoid sunburn, cosy about cool rain if they like it) but NEVER stating or explaining those preferences, and tied to the day's plans rather than just read out. Temperatures as degrees, never a rain percentage. null if no weather is given.\n\
 PART affirmation: 1 or 2 sentences, at most 40 words, grounded and SPECIFIC to today's actual plan: name a real task, appointment or workout, or the shape of the day (where the busy stretch is, where there is slack or a breather). Practical and encouraging, not soppy. Never state or narrate the person's preferences. If a goal plausibly relates to a task today you may tie them together in a few words, never forced. Never use clichés or generic affirmations like 'you\'ve got this', 'believe in yourself', 'one step at a time' or 'you are enough'. No raw counts.\n\
-PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT any weather (those are spoken first, so do not repeat them), flowing naturally with no headings: mention a public holiday or day off warmly if it is one (no work today); (1) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (2) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (3) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch break only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop; the lunch window is private background, so suggest such a thing only softly and optionally, in words like 'if you get a moment in the middle of the day, X would fit nicely', never stating the lunch times and never as an order like 'do X at lunch', and keep the evening finishing comfortably before bedtime); (4) a peek at tomorrow's notable things and appointments; (5) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Do not repeat the affirmation. Never use generic affirmations or cliches like 'you\'ve got this'.",
+PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT any weather (those are spoken first, so do not repeat them), flowing naturally with no headings: if the context says 'On this day: yes', start the briefing with ONE short spoken sentence about a well-known historical anniversary of today's calendar date that connects to the person's interests (use the interests text quietly), but ONLY if you are certain of both the date and the fact; if you are not completely certain, or the context says 'On this day: no', omit it entirely and never mention that you are omitting it. Then mention a public holiday or day off warmly if it is one (no work today); (1) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (2) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (3) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch break only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop; the lunch window is private background, so suggest such a thing only softly and optionally, in words like 'if you get a moment in the middle of the day, X would fit nicely', never stating the lunch times and never as an order like 'do X at lunch', and keep the evening finishing comfortably before bedtime); (4) a peek at tomorrow's notable things and appointments; (5) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Do not repeat the affirmation. Never use generic affirmations or cliches like 'you\'ve got this'.",
         Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, mention whether tomorrow is a work day, a public holiday or a day off, gently nudge toward winding down in time for sleep, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
         Kind::Weekly => "This is the WEEKLY overview, read on Sunday. Open warmly. Pick two or three specific highlights that were actually done (task titles, gym sessions by name, and any exercise progressions) and connect them to the goals where they plausibly relate. Gently mention anything that slid, without guilt. Look ahead to the notable things next week and to any goal deadline coming up. Close with one short grounded line. If nothing much was done, be kind and low-key, give no stats, and focus on the week ahead and the goals. Do not list every task and never quote totals. No generic affirmations or cliches.",
     };
@@ -1008,6 +1012,9 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
         s.push_str(&digest::context_line(&c.tomorrow_info, "Tomorrow's"));
     }
     s.push_str(&memory::context_block(&c.memory));
+    if c.kind == Kind::Morning {
+        s.push_str(&format!("On this day: {}\n", if c.on_this_day { "yes" } else { "no" }));
+    }
     if c.kind == Kind::Morning {
         s.push_str(&format!("Yesterday's items (done flags; mention what got done by name, kindly):\n{}", list(&c.yesterday)));
     }
