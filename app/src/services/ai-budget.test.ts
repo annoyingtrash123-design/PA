@@ -62,3 +62,17 @@ describe("pause logic", () => {
     expect(restingNotice("Miranda", "d", until + 1000, "UTC", store)).toBeNull();
   });
 });
+
+import { recordVoiceUse, voiceRemaining, VOICE_BUDGET, recordUse as recUse, remaining as textRemaining } from "./ai-budget";
+describe("separate voice budget", () => {
+  it("voice clips and text requests are counted independently", () => {
+    const m = new Map<string, string>();
+    const store = { get: (k: string) => m.get(k) ?? null, set: (k: string, v: string) => void m.set(k, v), del: (k: string) => void m.delete(k) };
+    for (let i = 0; i < 12; i++) recUse("2026-11-03", store as never);
+    expect(textRemaining("2026-11-03", store as never)).toBe(0);
+    expect(voiceRemaining("2026-11-03", store as never)).toBe(VOICE_BUDGET);
+    recordVoiceUse("2026-11-03", store as never);
+    expect(voiceRemaining("2026-11-03", store as never)).toBe(VOICE_BUDGET - 1);
+    expect(voiceRemaining("2026-11-04", store as never)).toBe(VOICE_BUDGET);
+  });
+});

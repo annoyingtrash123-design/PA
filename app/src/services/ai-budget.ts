@@ -49,6 +49,25 @@ export function recordUse(date: string, store: Store = lsStore): number {
   return count;
 }
 
+// ---- separate daily budget for the natural voice (Google limits voice and text models separately)
+export const VOICE_BUDGET = 10;
+export const VOICE_USAGE_KEY = "pa-voice-usage";
+export function voiceUsedToday(date: string, store: Store = lsStore): number {
+  try {
+    const j = JSON.parse(store.get(VOICE_USAGE_KEY) || "null");
+    if (j && j.date === date && Number.isFinite(j.count)) return Math.max(0, j.count);
+  } catch {
+    // fall through
+  }
+  return 0;
+}
+export const voiceRemaining = (date: string, store: Store = lsStore): number => Math.max(0, VOICE_BUDGET - voiceUsedToday(date, store));
+export function recordVoiceUse(date: string, store: Store = lsStore): number {
+  const count = voiceUsedToday(date, store) + 1;
+  store.set(VOICE_USAGE_KEY, JSON.stringify({ date, count }));
+  return count;
+}
+
 // ---- quota pauses
 /** Parse "Please retry in 5h48m34.5s" (any of h/m/s) into milliseconds; null if absent. */
 export function parseRetryInMs(msg: string): number | null {
@@ -84,9 +103,9 @@ export const isMainPaused = (nowMs: number, store: Store = lsStore) => getMainPa
 /** The natural-voice (TTS) models alone are out of quota; text writing may still work. */
 export const getTtsPausedUntil = (store: Store = lsStore) => getMs(TTS_PAUSED_KEY, store);
 export const setTtsPausedUntil = (ms: number, store: Store = lsStore) => store.set(TTS_PAUSED_KEY, String(Math.round(ms)));
-/** When the natural voice may be used again (0 = now): the later of the global and the TTS-only pause. */
+/** When the natural voice may be used again (0 = now). Voice has its own Google quota, so only the voice pause applies. */
 export const ttsBlockedUntil = (nowMs: number, store: Store = lsStore) => {
-  const u = Math.max(getPausedUntil(store), getTtsPausedUntil(store));
+  const u = getTtsPausedUntil(store);
   return u > nowMs ? u : 0;
 };
 

@@ -3,7 +3,7 @@
 import { api, assistantName, getState, hasStats, today } from "../core";
 import type { BriefingPrep, DigestPrep, MorningParts, Weather } from "../types";
 import { hasKey } from "./cache";
-import { DAILY_BUDGET, isPaused, LOW_BUDGET, remaining, restingNotice, usedToday } from "./ai-budget";
+import { DAILY_BUDGET, isPaused, LOW_BUDGET, remaining, restingNotice, usedToday, VOICE_BUDGET, voiceUsedToday } from "./ai-budget";
 import { shouldAutoGenerate, showUpdateButton, showWriteButton, storeKey, type StoredText } from "./ai-policy";
 import { mondayOf } from "../util/dates";
 import { generate, GeminiError, parseMorningJson, setDateProvider } from "./gemini";
@@ -106,7 +106,7 @@ export function aiNotice(): string | null {
 }
 
 /** AI uses so far today and the daily limit, for Settings. */
-export const aiUsage = () => ({ used: usedToday(today()), limit: DAILY_BUDGET });
+export const aiUsage = () => ({ used: usedToday(today()), limit: DAILY_BUDGET, voiceUsed: voiceUsedToday(today()), voiceLimit: VOICE_BUDGET });
 
 export interface BriefingResult extends Briefing {
   /** an AI text exists but the plan changed since: offer "Plans changed — update summary" */

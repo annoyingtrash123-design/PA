@@ -1,7 +1,7 @@
 // Read-aloud controller: the natural voice (Gemini audio in an HTMLAudioElement) with an automatic fall back to the
 // phone voice (Web Speech). One thing plays at a time. UI code subscribes with onPlayState / onProgress.
 import { assistantName, getState } from "../core";
-import { remaining, ttsBlockedUntil } from "./ai-budget";
+import { voiceRemaining, ttsBlockedUntil } from "./ai-budget";
 import { hasKey } from "./cache";
 import { budgetDate } from "./gemini";
 import { PREVIEW_TEXT, pcmToWav, planVoice, restingReason, synthesize } from "./gemini-tts";
@@ -135,7 +135,7 @@ export async function playAloud(text: string, phoneVoice: string, opts: { forceP
     wantNatural: !opts.forcePhone && getVoiceType() === "gemini",
     hasKey: hasKey(),
     blockedUntil: ttsBlockedUntil(now),
-    remaining: remaining(budgetDate()),
+    remaining: voiceRemaining(budgetDate()),
     now,
     name: assistantName(),
     timeZone: tz(),

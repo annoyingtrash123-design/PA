@@ -1,6 +1,6 @@
 // Gemini text-to-speech ("Natural voice"): generateContent with responseModalities ["AUDIO"], raw PCM wrapped into WAV,
 // counted against the same daily budget / quota pauses as the text calls, and cached in IndexedDB (`pa-tts-cache`).
-import { DAILY_BUDGET, clockText, pauseUntilFor, quotaMessage, recordUse, remaining, setTtsPausedUntil, ttsBlockedUntil } from "./ai-budget";
+import { VOICE_BUDGET, clockText, pauseUntilFor, quotaMessage, recordVoiceUse, setTtsPausedUntil, ttsBlockedUntil, voiceRemaining } from "./ai-budget";
 import { getKey } from "./cache";
 import { GeminiError, budgetDate } from "./gemini";
 import { kvDelete, kvGet, kvSet } from "./idb";
@@ -172,7 +172,7 @@ export function planVoice(i: PlanInput): VoicePlan {
   const name = i.name || "Miranda";
   if (!i.hasKey) return { mode: "phone", reason: `Using the phone voice — add a Gemini key in Settings to hear ${name}'s natural voice` };
   if (i.blockedUntil > i.now) return { mode: "phone", reason: restingReason(name, i.blockedUntil, i.timeZone) };
-  if (i.remaining <= 0) return { mode: "phone", reason: `Using the phone voice — today's AI allowance is used up` };
+  if (i.remaining <= 0) return { mode: "phone", reason: `Using the phone voice — today's voice allowance is used up (it resets at midnight)` };
   return { mode: "gemini" };
 }
 
@@ -199,7 +199,7 @@ async function requestAudio(model: string, key: string, text: string, o: SynthOp
     contents: [{ role: "user", parts: [{ text: buildPrompt(text, o.style) }] }],
     generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: o.voice } } } },
   };
-  recordUse(budgetDate());
+  recordVoiceUse(budgetDate());
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
@@ -287,7 +287,7 @@ export async function synthesize(text: string, o: SynthOptions): Promise<Blob> {
   const now = Date.now();
   const until = ttsBlockedUntil(now);
   if (until) throw blockedErr(quotaMessage(until, now), until);
-  if (remaining(budgetDate()) <= 0) throw blockedErr(`Today's AI allowance (${DAILY_BUDGET} requests) is used up`);
+  if (voiceRemaining(budgetDate()) <= 0) throw blockedErr(`Today's voice allowance (${VOICE_BUDGET} clips) is used up`);
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TTS_TIMEOUT_MS);
@@ -301,7 +301,7 @@ export async function synthesize(text: string, o: SynthOptions): Promise<Blob> {
     for (const model of candidates) {
       if (tried.has(model)) continue;
       tried.add(model);
-      if (remaining(budgetDate()) <= 0) break;
+      if (voiceRemaining(budgetDate()) <= 0) break;
       try {
         const blob = await requestAudio(model, key, clean, o, ctl.signal);
         void cachePut(cacheKey, blob, o.kind ?? "clip");
@@ -315,7 +315,7 @@ export async function synthesize(text: string, o: SynthOptions): Promise<Blob> {
       }
     }
     // every known name was retired: ask Google for the current speech models and try those once
-    if (round === 0 && !quotaErr && remaining(budgetDate()) > 0) {
+    if (round === 0 && !quotaErr && voiceRemaining(budgetDate()) > 0) {
       const fresh = (await discoverTtsModels(key, ctl.signal)).filter((m) => !tried.has(m));
       if (!fresh.length) break;
       candidates = fresh;
@@ -328,5 +328,5 @@ export async function synthesize(text: string, o: SynthOptions): Promise<Blob> {
     setTtsPausedUntil(quotaErr.pausedUntil ?? pauseUntilFor(quotaErr.message, Date.now()));
     throw quotaErr;
   }
-  throw lastErr ?? blockedErr(`Today's AI allowance (${DAILY_BUDGET} requests) is used up`);
+  throw lastErr ?? blockedErr(`Today's voice allowance (${VOICE_BUDGET} clips) is used up`);
 }

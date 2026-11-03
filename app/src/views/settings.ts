@@ -117,7 +117,7 @@ function build(redraw: () => void): HTMLElement[] {
   const keyStatus = h("p", { class: "small", hidden: true });
   const usageText = () => {
     const u = aiUsage();
-    return `AI uses today: ${u.used} of ${u.limit}`;
+    return `AI writing today: ${u.used} of ${u.limit} · Voice clips today: ${u.voiceUsed} of ${u.voiceLimit}`;
   };
   const usageLine = h("p", { class: "muted small" }, usageText());
   const runTest = async () => {
