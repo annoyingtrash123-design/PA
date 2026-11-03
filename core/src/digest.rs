@@ -130,41 +130,42 @@ pub fn weather_comment_template(w: &Weather, mem: &Memory, items: &[Occurrence],
     let first = match f {
         Feel::Snow => v(vec![format!("Snow in the forecast, {t} degrees at most."), format!("It's a snowy one today, topping out at {t} degrees.")]),
         Feel::Rain if p.likes_rain => v(vec![
-            format!("A proper rainy one, {t} degrees at most, and I know you don't mind that."),
-            format!("Rain today, {t} degrees at best, which suits you just fine."),
-            format!("Wet and grey at {t} degrees, the kind of weather you like."),
+            format!("A proper rainy one today, {t} degrees at most. Lovely and cosy."),
+            format!("Rain all day and a cool {t} degrees. A nice one to be inside for."),
+            format!("Wet and grey at {t} degrees, the soft, rainy kind of day."),
         ]),
         Feel::Rain => v(vec![
             format!("A wet one today, {t} degrees at most, so keep an umbrella close."),
             format!("Rain on the way and {t} degrees at best, so not the nicest of days outside."),
         ]),
         Feel::HotRain if t as f64 > p.too_hot_above => v(vec![
-            format!("Rain about, but it's still {t} degrees, which is too hot for you, so expect it to be sticky rather than cosy. Keep cool and keep an umbrella handy."),
-            format!("A hot, muggy one: {t} degrees with showers around, well past what you find comfortable. Light clothes, water close, and an umbrella."),
+            format!("Hot and muggy today, {t} degrees with showers around. Light clothes, water close, and an umbrella."),
+            format!("A sticky {t} degrees with rain about, so keep cool and keep an umbrella handy."),
         ]),
         Feel::HotRain => v(vec![
-            format!("Showers today, but warm with it at {t} degrees, more than you like, so it'll feel muggy rather than cosy."),
-            format!("Rain around and {t} degrees, warmer than your comfort zone, so dress light and keep an umbrella close."),
+            format!("Showers today, but warm with it at {t} degrees, so it'll feel a bit muggy. Dress light and keep an umbrella close."),
+            format!("Rain around and a warm {t} degrees, so lighter layers and an umbrella."),
         ]),
         Feel::TooHot => v(vec![
-            format!("It's a hot one, {t} degrees, which is past what you find comfortable. Keep water close and take it slowly in the afternoon."),
-            format!("Properly hot today at {t} degrees, more than you enjoy, so go easy on yourself and keep cool."),
+            format!("It's a hot one, {t} degrees. Keep water close and take it slowly in the afternoon."),
+            format!("Properly hot today at {t} degrees, so go easy and stay cool where you can."),
         ]),
         Feel::Hot => v(vec![
             format!("Warm and getting hot, {t} degrees at the top, so lighter clothes and plenty of water."),
-            format!("A hot-ish {t} degrees today, a touch more than you like, so dress light."),
+            format!("A warm {t} degrees today, so dress light."),
         ]),
         Feel::Warm => v(vec![
-            format!("A mild, slightly warm {t} degrees, just above your sweet spot but easy to enjoy."),
-            format!("Pleasantly warm at {t} degrees, a notch warmer than you like but nothing to fuss about."),
+            format!("A mild, slightly warm {t} degrees today."),
+            format!("Pleasantly warm at {t} degrees, nothing to fuss about."),
         ]),
         Feel::Comfy => v(vec![
-            format!("Lovely and cool, {t} degrees at most, right in your comfort zone."),
-            format!("A comfortable {t} degrees today, exactly the kind of cool you like."),
-            format!("Nice weather for you, {t} degrees at most, cool and easy."),
+            format!("Lovely and cool today, {t} degrees at most."),
+            format!("A cool, comfortable {t} degrees."),
+            format!("Nice and cool, {t} degrees at most, an easy one."),
         ]),
         Feel::Cold => v(vec![format!("A chilly one, {t} degrees at best, so layer up."), format!("Properly cold today, just {t} degrees at the top, so wrap up well.")]),
     };
+
     let second: Option<String> = if sunny_uv {
         Some(match f {
             Feel::TooHot | Feel::Hot => "The sun is strong too, so sun cream before you head out and shade where you can.".to_string(),
@@ -337,7 +338,7 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
 
 pub const SYSTEM: &str = "You write two short texts for the home screen of a personal planner app, about ONE specific day, in the voice of a warm, chatty friend who knows the person. \
 Reply with ONLY a JSON object: {\"weather_comment\": string or null, \"overview\": string}. No markdown, no code fences, no emojis. \
-weather_comment: 1 to 2 sentences interpreting the forecast through the person's weather preferences (cool is comfortable if so; warn kindly when hot or too hot; suggest sun cream or shade when UV is high and they want to avoid sunburn; enjoy rain if they like rain) and, where natural, relating it to the day's plans (an office day versus a home day, outdoor tasks, the gym). Temperatures may be said as degrees (e.g. 14 degrees), but never quote the rain probability as a percentage. Set it to null if no weather is given. Only mention an office or home context if a note or task suggests it. \
+weather_comment: 1 to 2 sentences on the forecast whose tone and advice are quietly shaped by the person's weather preferences (cool days get a happy tone; hot days a gentle heads-up and practical advice; sun cream or shade when UV is high and they want to avoid sunburn; rain sounds cosy if they like it and it is cool), WITHOUT ever stating or explaining those preferences and, where natural, relating it to the day's plans (an office day versus a home day, outdoor tasks, the gym). Temperatures may be said as degrees (e.g. 14 degrees), but never quote the rain probability as a percentage. Set it to null if no weather is given. Only mention an office or home context if a note or task suggests it. \
 overview: 2 to 4 short sentences in plain prose organising the day: its shape (what the morning is about, the afternoon, the evening; on a work day, before work, during work and after work, with work as a fixed block that is not a task; on a public holiday or day off, say warmly that there is no work), naming the key things, pointing out a breather, tying to a goal only where it plausibly relates. NEVER state raw counts, fractions or percentages (no '5 tasks', '3 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few smaller bits' are fine. Never a bare list of every task: name at most four things and summarise the rest. You may mention the workout briefly. No cliches such as 'you've got this'. Do not invent tasks, times or numbers.";
 
 pub fn weather_line(w: &Option<Weather>, quote_hint: &str) -> String {

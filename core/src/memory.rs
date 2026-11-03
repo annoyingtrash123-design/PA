@@ -23,7 +23,7 @@ const DAY_NAMES: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Fri
 /// Lines describing the memory for a Gemini context.
 pub fn context_block(m: &Memory) -> String {
     let w = &m.weather;
-    let mut s = String::from("What you know about this person (use as background; weave in naturally only where it fits, never recite it):\n");
+    let mut s = String::from("What you know about this person. This is private background that silently shapes your tone, advice and suggestions. Never say it back to them or explain your reasoning from it (no 'which is too hot for you', 'the weather you like', 'your comfort zone', 'since you work 10 to 5'); just act on it naturally, the way a good assistant who knows them would:\n");
     s.push_str(&format!(
         "  - Weather preferences: cool up to {} C is comfortable; they find it hot above {} C and too hot above {} C; {}; {}.\n",
         w.comfortable_max,

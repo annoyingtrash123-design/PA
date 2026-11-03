@@ -911,3 +911,19 @@ fn hot_rain_is_never_the_kind_of_weather_they_like() {
     }
     assert!(crate::memory::context_block(&st.memory).contains("Temperature outranks rain"));
 }
+
+#[test]
+fn weather_lines_never_narrate_preferences() {
+    let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
+    let info = crate::tasks::DayInfo::default();
+    for (summary, max) in [("Light rain", 14), ("Light rain", 24), ("Light rain", 28), ("Clear sky", 15), ("Clear sky", 20), ("Clear sky", 24), ("Clear sky", 30), ("Snow", 1)] {
+        let w = crate::model::Weather { summary: summary.into(), temp_max: max, temp_min: max - 6, precip_prob: Some(10), uv_max: Some(5.0) };
+        for i in 0..7 {
+            let d = chrono::NaiveDate::from_ymd_opt(2026, 11, 1 + i).unwrap();
+            let c = crate::digest::weather_comment_template(&w, &st.memory, &[], &None, &info, d).to_lowercase();
+            for bad in ["for you", "you like", "you enjoy", "comfort zone", "suits you", "you don't mind", "sweet spot", "you find"] {
+                assert!(!c.contains(bad), "{bad:?} in {c}");
+            }
+        }
+    }
+}
