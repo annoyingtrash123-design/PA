@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 6;
+pub const STATE_VERSION: u32 = 7;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -289,6 +289,8 @@ pub struct State {
     pub checklist_done: BTreeMap<String, bool>,
     /// "<task_id>" -> original date
     pub rolled_over: BTreeMap<String, String>,
+    /// "<task_id>" -> original date: timed / Appointments one-offs whose day passed undone (their date is NOT moved)
+    pub missed: BTreeMap<String, String>,
     pub days_off: Vec<String>,
     pub goals: Vec<Goal>,
     pub memory: Memory,
@@ -306,6 +308,7 @@ impl Default for State {
             completions: BTreeMap::new(),
             checklist_done: BTreeMap::new(),
             rolled_over: BTreeMap::new(),
+            missed: BTreeMap::new(),
             days_off: vec![],
             goals: vec![],
             memory: Memory::default(),

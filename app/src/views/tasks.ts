@@ -2,10 +2,10 @@ import { api, today } from "../core";
 import { onContextUpdate } from "../services/events";
 import { icon } from "../icons";
 import { button, card, chip, clear, h, iconBtn, toast } from "../ui";
-import { addDays, dayMonth, longDay, mondayOf } from "../util/dates";
+import { addDays, dayMonth, longDay, mondayOf, WEEKDAY_SHORT, weekdayIndex } from "../util/dates";
 import { occurrenceTile } from "./occurrence";
 import { openTaskDialog } from "./task-dialog";
-import type { Day } from "../types";
+import type { Day, Occurrence } from "../types";
 
 let week = "";
 
@@ -18,6 +18,7 @@ export function renderTasks(root: HTMLElement): () => void {
     const days = api<Day[]>("GET", `/api/days?start=${week}&days=7`);
     const end = addDays(week, 6);
     const isThis = week === thisWeek();
+    const missed = isThis ? api<Occurrence[]>("GET", "/api/missed") : [];
     const go = (n: number) => {
       week = addDays(week, 7 * n);
       draw();
@@ -26,6 +27,7 @@ export function renderTasks(root: HTMLElement): () => void {
     const out: (HTMLElement | null)[] = [
       h("div", { class: "weekbar" }, iconBtn("left", "Previous week", () => go(-1)), h("div", { class: "mid" }, h("h2", { class: "title-sm", style: { fontSize: "17px" } }, `${dayMonth(week)} - ${dayMonth(end)}`), h("p", { class: "muted small" }, isThis ? "This week" : week.slice(0, 4))), iconBtn("right", "Next week", () => go(1))),
       isThis ? null : h("div", { class: "row", style: { justifyContent: "center" } }, button("This week", () => { week = thisWeek(); draw(); }, { kind: "outline", icon: "event" })),
+      missed.length ? missedCard(missed, draw) : null,
       ...days.map((d) => dayCard(d, draw)),
     ];
     clear(root, ...out);
@@ -78,4 +80,32 @@ function dayMenu(d: Day, redraw: () => void): HTMLElement {
   const close = () => wrap.querySelector(".menu-pop")?.remove();
   wrap.appendChild(btn);
   return wrap;
+}
+
+/** Timed tasks / appointments whose day passed: never moved silently, the user decides. */
+function missedCard(items: Occurrence[], redraw: () => void): HTMLElement {
+  const act = (fn: () => void) => {
+    try {
+      fn();
+      redraw();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+  const rows = items.map((o) =>
+    h(
+      "div",
+      { class: "missed-item" },
+      h("div", { class: "occ-title" }, o.title),
+      h("div", { class: "occ-sub" }, `was ${WEEKDAY_SHORT[weekdayIndex(o.date)]}${o.time ? ` ${o.time}` : ""}`),
+      h(
+        "div",
+        { class: "chip-row", style: { marginTop: "6px" } },
+        button("Move to today", () => act(() => api("POST", `/api/missed/${o.task_id}/today`)), { kind: "tonal", icon: "redo" }),
+        button("Reschedule", () => openTaskDialog({ date: o.date, occ: o, onSaved: redraw }), { kind: "outline", icon: "event" }),
+        button("Dismiss", () => act(() => api("POST", `/api/missed/${o.task_id}/dismiss`)), { kind: "text" }),
+      ),
+    ),
+  );
+  return card("compact missed", h("div", { class: "day-title" }, "Missed"), ...rows);
 }

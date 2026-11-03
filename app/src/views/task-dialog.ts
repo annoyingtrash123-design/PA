@@ -29,6 +29,9 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
   const catValue = !occ || t.category_auto ? "auto" : t.category_id ? String(t.category_id) : "none";
   const category = select([["auto", "Auto (let the assistant pick)"], ["none", "No category"], ...state.categories.map((c): [string, string] => [String(c.id), c.name])], catValue);
   const notes = h("textarea", { class: "input", rows: 2, placeholder: "Anything to remember" }, t.notes ?? "") as HTMLTextAreaElement;
+  const dateIn = h("input", { class: "input", type: "date", value: t.date || opts.date });
+  const dateField = field("Date", dateIn);
+  dateField.hidden = !!rec;
   const repeat = select(REPEAT, rec ? rec.kind : "none");
   const days = new Set<number>(rec && rec.kind === "weekly" ? rec.days : []);
   const dayRow = h("div", { class: "daychips", hidden: !(rec && rec.kind === "weekly") });
@@ -41,7 +44,10 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
     };
     dayRow.appendChild(b);
   });
-  repeat.onchange = () => (dayRow.hidden = repeat.value !== "weekly");
+  repeat.onchange = () => {
+    dayRow.hidden = repeat.value !== "weekly";
+    dateField.hidden = repeat.value !== "none";
+  };
 
   const items: { id?: number; input: HTMLInputElement }[] = [];
   const itemsCol = h("div", { class: "stack", style: { gap: "6px" } });
@@ -76,7 +82,8 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
       if (!days.size) return fail("Pick at least one day.");
       recurrence = { kind: "weekly", days: [...days].sort() };
     }
-    const date = recurrence ? null : task?.date || opts.date;
+    if (!recurrence && !/^\d{4}-\d{2}-\d{2}$/.test(dateIn.value)) return fail("Pick a date.");
+    const date = recurrence ? null : dateIn.value;
     const body = {
       title: ttl, date, time: tm,
       part_of_day: tm ? derivePart(tm) : part.value || "anytime",
@@ -117,7 +124,7 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
   const body = [
     occ?.recurring ? h("div", { class: "note-box" }, "This is a repeating task: changes apply to the whole series.") : null,
     field("What needs doing?", title),
-    useTime.el, timeField, partField,
+    dateField, useTime.el, timeField, partField,
     field("Category", category),
     field("Notes", notes),
     field("Repeat", repeat), dayRow,

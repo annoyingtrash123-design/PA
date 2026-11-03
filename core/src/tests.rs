@@ -57,7 +57,7 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 6);
+    assert_eq!(st.version, 7);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
@@ -472,7 +472,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 6);
+        assert_eq!(r["state"]["version"], 7);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
@@ -488,7 +488,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 6);
+        assert_eq!(m["version"], 7);
     }
 }
 
@@ -498,14 +498,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 6);
+    assert_eq!(r["body"]["version"], 7);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 6);
+    assert_eq!(r["state"]["version"], 7);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -518,7 +518,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 6);
+    assert_eq!(imp["version"], 7);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -801,7 +801,7 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v2.gym.rotation.items = old8.clone();
     v2.gym.rotation.next_index = 2;
     assert!(crate::seed::migrate(&mut v2, TODAY));
-    assert_eq!(v2.version, 6);
+    assert_eq!(v2.version, 7);
     assert_eq!(names(&v2), ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"]);
     assert_eq!(v2.gym.rotation.next_index, 4, "still Legs + Abs 1 next");
     // v3 (8 + rest), next = the rest day
@@ -970,4 +970,76 @@ fn weather_lines_never_narrate_preferences() {
             }
         }
     }
+}
+
+fn cat_id(a: &mut App, name: &str) -> Value {
+    a.get("/api/categories").as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["id"].clone()
+}
+
+#[test]
+fn missed_untimed_rolls_timed_and_appointments_are_missed() {
+    let mut a = App::new(TODAY);
+    let appt = cat_id(&mut a, "Appointments");
+    let plain = a.post("/api/tasks", json!({"title": "Pay rent", "date": "2026-10-30", "category_id": null}));
+    let timed = a.post("/api/tasks", json!({"title": "Call bank", "date": "2026-10-30", "time": "10:00", "category_id": null}));
+    let dent = a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "category_id": appt}));
+    let rec = a.post("/api/tasks", json!({"title": "Stretch", "time": "07:00", "recurrence": {"kind": "daily"}, "category_id": null}));
+    let m = a.get("/api/missed");
+    let m = m.as_array().unwrap();
+    assert_eq!(m.len(), 2);
+    assert_eq!(m[0]["title"], "Dentist");
+    assert_eq!(m[0]["date"], "2026-10-29");
+    assert_eq!(m[1]["time"], "10:00");
+    assert_eq!(m[1]["category"], Value::Null);
+    assert_eq!(a.get(&format!("/api/tasks/{}", plain["id"]))["date"], TODAY);
+    assert_eq!(a.get(&format!("/api/tasks/{}", timed["id"]))["date"], "2026-10-30");
+    assert_eq!(a.get(&format!("/api/tasks/{}", dent["id"]))["date"], "2026-10-29");
+    assert_eq!(a.get(&format!("/api/tasks/{}", rec["id"]))["date"], Value::Null);
+    // the days view does not carry them over
+    let day = a.get("/api/days?start=2026-11-02&days=1");
+    let titles: Vec<&str> = day[0]["items"].as_array().unwrap().iter().map(|o| o["title"].as_str().unwrap()).collect();
+    assert_eq!(titles, vec!["Stretch", "Pay rent"]);
+    assert_eq!(a.st().version, 7);
+    assert_eq!(a.st().missed.len(), 2);
+}
+
+#[test]
+fn missed_move_to_today_dismiss_edit_and_delete_clear() {
+    let mut a = App::new(TODAY);
+    let mk = |a: &mut App, t: &str| a.post("/api/tasks", json!({"title": t, "date": "2026-10-30", "time": "10:00", "category_id": null}));
+    let (x, y, z, w) = (mk(&mut a, "X"), mk(&mut a, "Y"), mk(&mut a, "Z"), mk(&mut a, "W"));
+    assert_eq!(a.get("/api/missed").as_array().unwrap().len(), 4);
+    // move to today keeps the time
+    let o = a.post(&format!("/api/missed/{}/today", x["id"]), json!({}));
+    assert_eq!(o["date"], TODAY);
+    assert_eq!(o["time"], "10:00");
+    assert_eq!(a.get(&format!("/api/tasks/{}", x["id"]))["date"], TODAY);
+    // dismiss: done on the original date
+    a.post(&format!("/api/missed/{}/dismiss", y["id"]), json!({}));
+    assert_eq!(a.get(&format!("/api/tasks/{}", y["id"]))["date"], "2026-10-30");
+    let day = a.get("/api/days?start=2026-10-30&days=1");
+    assert_eq!(day[0]["items"][0]["done"], true);
+    // editing the date to today or later clears it
+    let mut body = a.get(&format!("/api/tasks/{}", z["id"]));
+    body["date"] = json!("2026-11-05");
+    body["time"] = json!("14:00");
+    body["category_id"] = Value::Null;
+    assert_eq!(a.req("PUT", &format!("/api/tasks/{}", z["id"]), body).0, 200);
+    // delete clears
+    a.req("DELETE", &format!("/api/tasks/{}", w["id"]), json!({}));
+    assert!(a.get("/api/missed").as_array().unwrap().is_empty());
+    assert!(a.st().missed.is_empty());
+    assert_eq!(a.req("POST", &format!("/api/missed/{}/today", x["id"]), json!({})).0, 404);
+}
+
+#[test]
+fn morning_template_mentions_a_missed_appointment() {
+    let mut a = App::new(TODAY);
+    let appt = cat_id(&mut a, "Appointments");
+    a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "category_id": appt}));
+    let b = a.get("/api/briefing?kind=morning");
+    assert!(b["template_text"].as_str().unwrap().contains("Dentist from Thursday is waiting for a new time in Tasks."), "{}", b["template_text"]);
+    assert!(b["user_prompt"].as_str().unwrap().contains("Missed and still waiting"));
+    let mut c = App::new(TODAY);
+    assert!(!c.get("/api/briefing?kind=morning")["template_text"].as_str().unwrap().contains("waiting for"));
 }

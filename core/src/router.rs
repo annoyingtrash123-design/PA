@@ -158,6 +158,10 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         ("GET", ["days"]) => tasks::days(env, q),
         ("POST", ["occurrences", "toggle"]) => ok(tasks::toggle(env, parse(body)?)?),
         ("POST", ["occurrences", "checklist"]) => ok(tasks::toggle_checklist(env, parse(body)?)?),
+        // missed timed tasks / appointments
+        ("GET", ["missed"]) => Ok(tasks::missed(env)),
+        ("POST", ["missed", id, "today"]) => ok(tasks::missed_today(env, id_of(id)?)?),
+        ("POST", ["missed", id, "dismiss"]) => tasks::missed_dismiss(env, id_of(id)?),
         // gym
         ("GET", ["exercises"]) => Ok(gym::list_exercises(env)),
         ("POST", ["exercises"]) => ok(gym::create_exercise(env, parse(body)?)?),

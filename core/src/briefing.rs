@@ -78,6 +78,8 @@ struct Ctx {
     yesterday: Vec<Occurrence>,
     info: DayInfo,
     tomorrow_info: DayInfo,
+    /// timed tasks / appointments whose day passed (morning only), oldest first
+    missed: Vec<Occurrence>,
 }
 
 fn count_done(items: &[Occurrence]) -> usize {
@@ -105,6 +107,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
         yesterday: vec![],
         info: DayInfo::default(),
         tomorrow_info: DayInfo::default(),
+        missed: vec![],
     };
     match kind {
         Kind::Morning | Kind::Evening => {
@@ -114,6 +117,9 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
             if morning {
                 let y = days.remove(0);
                 ctx.yesterday = y.items;
+            }
+            if morning {
+                ctx.missed = tasks::missed_list(env.st);
             }
             let first = days.remove(0);
             ctx.info = first.info();
@@ -468,6 +474,16 @@ fn morning_template(c: &Ctx) -> String {
         back.push_str(&format!(" {} didn't quite happen, so it's moved across to today, with no pressure at all.", limited(rolled.clone(), 2)));
     }
     must(&mut v, back);
+    if !c.missed.is_empty() {
+        let mut parts: Vec<String> = vec![];
+        for o in c.missed.iter().take(2) {
+            let wd = parse_date(&o.date).map(weekday_name).unwrap_or_else(|| "earlier".into());
+            parts.push(format!("{} from {wd}", o.title));
+        }
+        let verb = if c.missed.len() == 1 { "is" } else { "are" };
+        let what = if c.missed.len() == 1 { "a new time" } else { "new times" };
+        must(&mut v, format!("The {} {verb} waiting for {what} in Tasks.", parts.join(" and the ")));
+    }
 
     // 3. today by category
     let todo: Vec<&Occurrence> = c.items.iter().filter(|o| !o.done).collect();
@@ -961,6 +977,10 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
     s.push_str(&memory::context_block(&c.memory));
     if c.kind == Kind::Morning {
         s.push_str(&format!("Yesterday's items (done flags; mention what got done by name, kindly):\n{}", list(&c.yesterday)));
+    }
+    if !c.missed.is_empty() {
+        let m: Vec<String> = c.missed.iter().take(3).map(|o| format!("{} (from {}{})", o.title, parse_date(&o.date).map(weekday_name).unwrap_or_default(), o.time.as_deref().map(|t| format!(" at {}", say_time(t))).unwrap_or_default())).collect();
+        s.push_str(&format!("Missed and still waiting for a new time in the Tasks tab: {}. Mention this once, in one short gentle sentence such as 'The dentist slot from Monday is waiting for a new time in Tasks.' No counts, no guilt.\n", m.join("; ")));
     }
     match c.kind {
         Kind::Morning | Kind::Evening => {

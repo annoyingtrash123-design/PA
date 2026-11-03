@@ -25,10 +25,10 @@ const TPL: [string, number[]][] = [
 
 export function init_state(today: string): string {
   const s: Any = {
-    version: 6, next_id: 100,
+    version: 7, next_id: 100,
     settings: { assistant_name: "Miranda", user_name: "", voice: "", location_name: "Sydney", latitude: -33.8688, longitude: 151.2093, timezone: "Australia/Sydney" },
     categories: CATS.map(([name, color], i) => ({ id: i + 1, name, color })),
-    tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, days_off: [], goals: [],
+    tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, missed: {}, days_off: [], goals: [],
     memory: {
       weather: { comfortable_max: 18, hot_above: 22, too_hot_above: 25, likes_rain: true, avoid_sunburn: true },
       work: { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60 },
@@ -87,6 +87,18 @@ function sampleData(s: Any, today: string) {
   s.gym.sessions.push({ id: id(), template_id: 1, name: "Push A", date: addDays(today, -1), completed: true, sets: sets(62.5, 8) });
 }
 
+function rollMock(s: Any, today: string) {
+  s.missed ??= {};
+  for (const t of s.tasks) {
+    if (t.recurrence || !t.date || t.date >= today || s.completions[`${t.id}|`]) continue;
+    const appt = s.categories.find((c: Any) => c.id === t.category_id)?.name === "Appointments";
+    if (t.time || appt) s.missed[t.id] = t.date;
+    else { delete s.missed[t.id]; s.rolled_over[t.id] = s.rolled_over[t.id] || t.date; t.date = today; }
+  }
+}
+function missedMock(s: Any): Any[] {
+  return Object.entries(s.missed as Record<string, string>).map(([id, d]) => occurrencesFor(s, d, d).find((o) => o.task_id === +id)).filter((o) => o && !o.done) as Any[];
+}
 function occurrencesFor(s: Any, date: string, today: string): Any[] {
   const wd = weekdayIndex(date);
   const out: Any[] = [];
@@ -217,14 +229,21 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
   if (M(/^\/api\/tasks\/(\d+)$/)) {
     const i = s.tasks.findIndex((x: Any) => x.id === +m![1]); if (i < 0) throw nf();
     if (is("GET")) return ro(s.tasks[i]);
-    if (is("PUT")) { s.tasks[i] = cleanTask(body, s.tasks[i]); return mut(s.tasks[i]); }
-    if (is("DELETE")) { s.tasks.splice(i, 1); return mut({}); }
+    if (is("PUT")) { s.tasks[i] = cleanTask(body, s.tasks[i]); if (s.missed && (!s.tasks[i].date || s.tasks[i].date >= ctx.today)) delete s.missed[s.tasks[i].id]; return mut(s.tasks[i]); }
+    if (is("DELETE")) { if (s.missed) delete s.missed[s.tasks[i].id]; s.tasks.splice(i, 1); return mut({}); }
   }
   if (is("GET") && p === "/api/days") {
     const start = q.get("start")!, n = +(q.get("days") || 1);
     // roll over unfinished one-offs when today is covered
-    for (const t of s.tasks) if (!t.recurrence && t.date && t.date < ctx.today && !s.completions[`${t.id}|`] && start <= ctx.today && addDays(start, n - 1) >= ctx.today) { s.rolled_over[t.id] = s.rolled_over[t.id] || t.date; t.date = ctx.today; }
+    if (start <= ctx.today && addDays(start, n - 1) >= ctx.today) rollMock(s, ctx.today);
     return mut(Array.from({ length: n }, (_, i) => dayDetail(s, ctx, addDays(start, i))));
+  }
+  if (is("GET") && p === "/api/missed") { rollMock(s, ctx.today); return mut(missedMock(s)); }
+  if (M(/^\/api\/missed\/(\d+)\/(today|dismiss)$/) && is("POST")) {
+    const t = s.tasks.find((x: Any) => x.id === +m![1]); if (!t || !s.missed[t.id]) throw nf();
+    delete s.missed[t.id];
+    if (m![2] === "today") { t.date = ctx.today; return mut(occurrencesFor(s, ctx.today, ctx.today).find((o) => o.task_id === t.id)); }
+    s.completions[`${t.id}|`] = true; return mut({ ok: true });
   }
   if (is("POST") && p === "/api/occurrences/toggle") {
     const t = s.tasks.find((x: Any) => x.id === body.task_id); if (!t) throw nf();
@@ -301,7 +320,7 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
   }
   if (M(/^\/api\/sessions\/(\d+)\/sets$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.sets = body.sets; return mut(x); }
   if (M(/^\/api\/sessions\/(\d+)\/cardio$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.cardio = { activity: body.activity, minutes: body.minutes }; return mut(x); }
-  if (is("GET") && p === "/api/state/migrate") return ro({ version: 6 });
+  if (is("GET") && p === "/api/state/migrate") return ro({ version: 7 });
   if (M(/^\/api\/sessions\/(\d+)\/complete$/) && is("POST")) {
     const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.completed = true;
     const r = s.gym.rotation; const n = r.items.length;

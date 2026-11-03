@@ -246,3 +246,7 @@ a.link { color: var(--lav); }
 .install-text span { color: var(--muted); }
 .install-banner .btn { min-height: 38px; padding: 8px 16px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.missed { display: flex; flex-direction: column; gap: 10px; }
+.missed-item + .missed-item { border-top: 1px solid var(--line, rgba(128,128,128,.25)); padding-top: 10px; }
+.missed .btn { min-height: 38px; padding: 8px 14px; font-size: 14px; }

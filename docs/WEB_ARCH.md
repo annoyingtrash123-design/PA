@@ -23,7 +23,7 @@ AI-generated texts are cached by the UI in IndexedDB (`pa-ai-cache`, keyed by th
 
 ```json
 State = {
-  "version": 6,
+  "version": 7,
   "next_id": 100,
   "settings": {"assistant_name":"Miranda","user_name":"","voice":"", "location_name":"Sydney",
                "latitude":-33.8688,"longitude":151.2093,"timezone":"Australia/Sydney"},
@@ -32,6 +32,7 @@ State = {
   "completions": {"<task_id>|<date>": true},       // recurring: per date; one-off: date ""
   "checklist_done": {"<task_id>|<date>|<item_id>": true},
   "rolled_over": {"<task_id>": "<original date>"},
+  "missed": {"<task_id>": "<original date>"},     // timed / Appointments one-offs that were not done in time (date unchanged)
   "days_off": ["YYYY-MM-DD"],
   "goals": [Goal],
   "memory": Memory,                         // weather, work (incl lunch_minutes, holiday_region), rhythm, notes
@@ -101,14 +102,14 @@ no notes); gym: the owner's routine (Push 1/2, Pull 1/2, Legs + Abs 1/2, Cardio;
 counterweight machines) and rotation Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, Pull 2, Legs + Abs 2, Cardio; no sessions, tasks or goals.
 
 ### State versions and migration
-`State.version` is 6. Every `call` first upgrades an older state (`seed::migrate`) and, when it did, returns the upgraded state
-in `state` even for a GET, so the UI persists it; `startCore` additionally calls `GET /api/state/migrate` (body `{"version":6}`) once
+`State.version` is 7. Every `call` first upgrades an older state (`seed::migrate`) and, when it did, returns the upgraded state
+in `state` even for a GET, so the UI persists it; `startCore` additionally calls `GET /api/state/migrate` (body `{"version":7}`) once
 for a stored v1 state. v1 -> v2: if the gym templates are exactly the six old generic ones (Push A, Push B, Pull A, Pull B, Legs A,
 Legs B; never customised) the whole gym section is replaced by the new defaults (sessions are dropped when all belong to those
 templates; otherwise they are kept with the exercises they reference). Any other state only gains the new fields (serde defaults).
 `POST /api/import` migrates the imported backup the same way.
 
-v5 adds `gym.next_since` (date the current next rotation item became next); the migration sets it to today. After the
+v7 adds `missed` (empty after migration). v5 adds `gym.next_since` (date the current next rotation item became next); the migration sets it to today. After the
 migration, every call (except the date-free ones) runs `gym::roll_missed_days`: a rest item that has been next for a passed day
 counts as taken and the rotation advances (state returned); workouts never advance on their own. See API.md (`/api/gym/skip-rest`, `/api/gym/skip`).
 

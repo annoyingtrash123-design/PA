@@ -316,6 +316,10 @@ pub fn update_task(env: &mut Env, id: i64, b: TaskIn) -> Res<Task> {
     if c.date != old_date {
         env.st.rolled_over.remove(&id.to_string());
     }
+    // a new date (today or later) or a repeat makes it no longer missed
+    if env.st.tasks[idx].recurrence.is_some() || c.date.as_deref().is_some_and(|d| d >= fmt_date(env.today).as_str()) {
+        env.st.missed.remove(&id.to_string());
+    }
     if old_rec != env.st.tasks[idx].recurrence.is_some() {
         clear_done_state(env.st, id);
         env.st.rolled_over.remove(&id.to_string());
@@ -333,6 +337,7 @@ pub fn delete_task(env: &mut Env, id: i64) -> Res<Value> {
     }
     clear_done_state(env.st, id);
     env.st.rolled_over.remove(&id.to_string());
+    env.st.missed.remove(&id.to_string());
     env.changed = true;
     Ok(json!({"ok": true}))
 }
@@ -432,23 +437,106 @@ pub fn day_info(st: &State, ctx: &Ctx, d: NaiveDate) -> DayInfo {
     DayInfo { work: works.then(|| WorkHours { start: w.start.clone(), end: w.end.clone() }), holiday, day_off: off }
 }
 
-/// Move unfinished one-off tasks dated before `today` to `today`. Returns true if anything moved.
+fn is_appointment(st: &State, task: &Task) -> bool {
+    task.category_id.and_then(|c| st.categories.iter().find(|x| x.id == c)).is_some_and(|c| c.name.trim().eq_ignore_ascii_case("appointments"))
+}
+
+/// Unfinished one-off tasks dated before `today`: untimed ones (outside the Appointments category) move to
+/// `today`; timed ones and appointments keep their date and are marked in `st.missed`. Returns true if anything changed.
 pub fn rollover(st: &mut State, today: NaiveDate) -> bool {
     let t = fmt_date(today);
-    let mut moved = false;
+    let mut changed = false;
     let done: HashSet<String> = st.completions.keys().cloned().collect();
-    for task in st.tasks.iter_mut() {
+    // drop marks of tasks that are gone, done, recurring or no longer in the past
+    let before = st.missed.len();
+    let keep: Vec<String> = st
+        .tasks
+        .iter()
+        .filter(|k| k.recurrence.is_none() && k.date.as_deref().is_some_and(|d| d < t.as_str()) && !done.contains(&format!("{}|", k.id)))
+        .map(|k| k.id.to_string())
+        .collect();
+    st.missed.retain(|k, _| keep.contains(k));
+    changed |= st.missed.len() != before;
+    let mut moved: Vec<(usize, String)> = vec![];
+    let mut missed: Vec<(String, String)> = vec![];
+    for (i, task) in st.tasks.iter().enumerate() {
         if task.recurrence.is_some() {
             continue;
         }
         let Some(d) = task.date.clone() else { continue };
         if d.as_str() < t.as_str() && !done.contains(&format!("{}|", task.id)) {
-            st.rolled_over.entry(task.id.to_string()).or_insert(d);
-            task.date = Some(t.clone());
-            moved = true;
+            if task.time.is_some() || is_appointment(st, task) {
+                missed.push((task.id.to_string(), d));
+            } else {
+                moved.push((i, d));
+            }
         }
     }
-    moved
+    for (id, d) in missed {
+        if st.missed.get(&id) != Some(&d) {
+            st.missed.insert(id, d);
+            changed = true;
+        }
+    }
+    for (i, d) in moved {
+        let id = st.tasks[i].id.to_string();
+        st.missed.remove(&id);
+        st.rolled_over.entry(id).or_insert(d);
+        st.tasks[i].date = Some(t.clone());
+        changed = true;
+    }
+    changed
+}
+
+/// Missed items (original date, as occurrences on that date), oldest first.
+pub fn missed_list(st: &State) -> Vec<Occurrence> {
+    let mut out: Vec<Occurrence> = st
+        .missed
+        .iter()
+        .filter_map(|(id, d)| {
+            let id: i64 = id.parse().ok()?;
+            let o = occurrence(st, id, parse_date(d)?).ok()?;
+            (!o.done).then_some(o)
+        })
+        .collect();
+    out.sort_by(|a, b| a.date.cmp(&b.date).then(a.time.cmp(&b.time)).then(a.task_id.cmp(&b.task_id)));
+    out
+}
+
+/// `GET /api/missed`
+pub fn missed(env: &mut Env) -> Value {
+    if rollover(env.st, env.today) {
+        env.changed = true;
+    }
+    json!(missed_list(env.st))
+}
+
+fn take_missed(env: &mut Env, id: i64) -> Res<NaiveDate> {
+    let d = env.st.missed.get(&id.to_string()).and_then(|d| parse_date(d)).ok_or_else(|| ApiErr::not_found("missed item not found"))?;
+    env.st.tasks.iter().find(|t| t.id == id).ok_or_else(|| ApiErr::not_found("task not found"))?;
+    Ok(d)
+}
+
+/// `POST /api/missed/{id}/today`: move to today, keeping the time.
+pub fn missed_today(env: &mut Env, id: i64) -> Res<Occurrence> {
+    take_missed(env, id)?;
+    let t = fmt_date(env.today);
+    if let Some(task) = env.st.tasks.iter_mut().find(|x| x.id == id) {
+        task.date = Some(t.clone());
+    }
+    env.st.missed.remove(&id.to_string());
+    env.st.rolled_over.remove(&id.to_string());
+    env.changed = true;
+    occurrence(env.st, id, env.today)
+}
+
+/// `POST /api/missed/{id}/dismiss`: counts as handled (done on its original date).
+pub fn missed_dismiss(env: &mut Env, id: i64) -> Res<Value> {
+    take_missed(env, id)?;
+    env.st.completions.insert(format!("{id}|"), true);
+    env.st.missed.remove(&id.to_string());
+    env.changed = true;
+    Ok(json!({"ok": true}))
 }
 
 /// Resolve occurrences for `n` days from `start` (no rollover, no workouts).

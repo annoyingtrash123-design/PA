@@ -70,7 +70,17 @@ Occurrence = {
 `POST /api/occurrences/toggle` body `{"task_id":1,"date":"2026-11-02","done":true}` → Occurrence
 `POST /api/occurrences/checklist` body `{"task_id":1,"date":"2026-11-02","item_id":5,"done":true}` → Occurrence
 
-Rollover rule: when today is requested, any one-off task with `date < today` and not done is moved to today (its `date` becomes today; `rolled_over_from` keeps the original date).
+Rollover rule: when today is requested, any one-off task with `date < today` and not done is handled by kind:
+- untimed and not in the "Appointments" category: moved to today (its `date` becomes today; `rolled_over_from` keeps the original date).
+- timed (`time` set) or in the "Appointments" category: NOT moved. Its `date` stays and it is recorded in `State.missed` (`{"<task_id>": "<original date>"}`).
+- recurring tasks are unaffected.
+
+Missed items:
+`GET /api/missed` -> `[Occurrence]` on each item's original date (oldest first; done items and deleted tasks are not listed). Also runs the rollover.
+`POST /api/missed/{id}/today` -> Occurrence: moves the task to today keeping its time; clears the missed mark (404 if not missed).
+`POST /api/missed/{id}/dismiss` -> `{"ok":true}`: marks it done on its original date and clears the mark (404 if not missed).
+`PUT /api/tasks/{id}` clears the mark when the date becomes today or later (or the task becomes recurring); `DELETE /api/tasks/{id}` clears it too.
+The morning briefing mentions missed items in one gentle sentence (template only when there are some; AI context carries the same guidance, no counts).
 
 ## Gym
 ```json

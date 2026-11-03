@@ -211,6 +211,7 @@ pub fn migrate(st: &mut State, today: &str) -> bool {
     if st.version < 6 && st.settings.assistant_name == "Sunny" {
         st.settings.assistant_name = "Miranda".into();
     }
+    // v6 -> v7: `missed` is new (serde default: empty), nothing to convert
     st.version = STATE_VERSION;
     true
 }

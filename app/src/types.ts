@@ -185,6 +185,7 @@ export interface State {
   completions: Record<string, boolean>;
   checklist_done: Record<string, boolean>;
   rolled_over: Record<string, string>;
+  missed?: Record<string, string>;
   days_off: string[];
   goals: Goal[];
   memory: Memory;
