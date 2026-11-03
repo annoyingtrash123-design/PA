@@ -17,14 +17,11 @@ export interface TtsVoice {
   name: string;
   trait: string;
 }
-/** The 30 prebuilt voices and the one-word characters from Google's docs. */
+/** Google's female prebuilt voices and their one-word characters from the docs (the male-sounding ones are left out). */
 export const VOICES: TtsVoice[] = [
-  ["Sulafat", "Warm"], ["Achernar", "Soft"], ["Aoede", "Breezy"], ["Vindemiatrix", "Gentle"], ["Achird", "Friendly"],
-  ["Callirrhoe", "Easy-going"], ["Despina", "Smooth"], ["Laomedeia", "Upbeat"], ["Leda", "Youthful"], ["Zephyr", "Bright"],
-  ["Autonoe", "Bright"], ["Erinome", "Clear"], ["Kore", "Firm"], ["Gacrux", "Mature"], ["Pulcherrima", "Forward"],
-  ["Schedar", "Even"], ["Sadachbia", "Lively"], ["Zubenelgenubi", "Casual"], ["Puck", "Upbeat"], ["Charon", "Informative"],
-  ["Fenrir", "Excitable"], ["Orus", "Firm"], ["Enceladus", "Breathy"], ["Iapetus", "Clear"], ["Umbriel", "Easy-going"],
-  ["Algieba", "Smooth"], ["Algenib", "Gravelly"], ["Rasalgethi", "Informative"], ["Alnilam", "Firm"], ["Sadaltager", "Knowledgeable"],
+  ["Sulafat", "Warm"], ["Achernar", "Soft"], ["Aoede", "Breezy"], ["Vindemiatrix", "Gentle"], ["Callirrhoe", "Easy-going"],
+  ["Despina", "Smooth"], ["Laomedeia", "Upbeat"], ["Leda", "Youthful"], ["Zephyr", "Bright"], ["Autonoe", "Bright"],
+  ["Erinome", "Clear"], ["Kore", "Firm"], ["Gacrux", "Mature"], ["Pulcherrima", "Forward"],
 ].map(([name, trait]) => ({ name, trait }));
 /** Warm, soft, female-sounding and listed as "Warm" in the docs: suits a chatty, caring assistant. */
 export const DEFAULT_VOICE = "Sulafat";

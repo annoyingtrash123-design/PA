@@ -27,3 +27,12 @@ describe("favourite voices", () => {
     expect(cleanFavs("x")).toEqual([]);
   });
 });
+
+import { VOICES } from "./gemini-tts";
+import { cleanFavs as clean2 } from "./voice-prefs";
+it("only female voices are offered, and a saved male favourite is dropped", () => {
+  const names = VOICES.map((v) => v.name);
+  for (const m of ["Puck", "Charon", "Fenrir", "Orus", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Algenib", "Rasalgethi", "Alnilam", "Schedar", "Achird", "Zubenelgenubi", "Sadachbia", "Sadaltager"]) expect(names).not.toContain(m);
+  expect(names).toContain("Sulafat");
+  expect(clean2(["Puck", "Kore"])).toEqual(["Kore"]);
+});
