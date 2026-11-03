@@ -122,6 +122,8 @@ export interface Memory {
   rhythm: { wake_from: string; wake_to: string; sleep_from: string; sleep_to: string };
   notes: { id: number; text: string }[];
   interests: string;
+  /** YYYY-MM-DD the private profile was last applied; empty = never. Never show interests/notes in the UI. */
+  profile_updated: string;
 }
 
 export type TemplateKind = "strength" | "cardio";

@@ -33,7 +33,7 @@ export function init_state(today: string): string {
       weather: { comfortable_max: 18, hot_above: 22, too_hot_above: 25, likes_rain: true, avoid_sunburn: true },
       work: { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60, lunch_window_start: "12:00", lunch_window_end: "14:00" },
       rhythm: { wake_from: "06:00", wake_to: "07:00", sleep_from: "23:00", sleep_to: "00:00" },
-      notes: [], interests: "History and politics, especially Western European and East Asian history. Particularly the 18th and 19th centuries, and keen to learn more about the 13th to 17th centuries.",
+      notes: [], profile_updated: "", interests: "History and politics, especially Western European and East Asian history. Particularly the 18th and 19th centuries, and keen to learn more about the 13th to 17th centuries.",
     },
     gym: {
       exercises: EX.map((name, i) => ({ id: i + 1, name, assisted: false })),
@@ -295,6 +295,25 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
       s.leisure[i] = next; return mut(next);
     }
     if (is("DELETE")) { s.leisure.splice(i, 1); return mut({}); }
+  }
+  if (is("POST") && p === "/api/profile/apply") {
+    if (body.v !== 1) throw bad("unsupported profile version");
+    const r = { interests: false, notes: 0, work: false, weather: false, goals_added: 0, leisure_added: 0 };
+    if (typeof body.interests === "string") { s.memory.interests = body.interests.trim(); r.interests = true; }
+    if (Array.isArray(body.notes)) { s.memory.notes = body.notes.map((t: string) => ({ id: id(), text: t.trim() })); r.notes = s.memory.notes.length; }
+    if (body.work) { s.memory.work = { ...s.memory.work, ...body.work }; r.work = true; }
+    if (body.weather) { s.memory.weather = { ...s.memory.weather, ...body.weather }; r.weather = true; }
+    const has = (list: Any[], t: string) => list.some((x: Any) => x.title.trim().toLowerCase() === t.trim().toLowerCase());
+    for (const g of body.add_goals ?? []) if (!has(s.goals, g.title)) { s.goals.push({ id: id(), created: ctx.today, achieved_on: null, status: "active", why: "", deadline: null, ...g }); r.goals_added++; }
+    for (const l of body.add_leisure ?? []) if (!has(s.leisure, l.title)) { s.leisure.push({ id: id(), note: "", status: "someday", created: ctx.today, finished_on: null, last_suggested: null, blurb: "", ...l }); r.leisure_added++; }
+    s.memory.profile_updated = body.updated;
+    return mut(r);
+  }
+  if (is("POST") && p === "/api/profile/clear") {
+    s.memory.interests = ""; s.memory.notes = []; s.memory.profile_updated = "";
+    s.memory.work = { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60, lunch_window_start: "12:00", lunch_window_end: "14:00" };
+    s.memory.weather = { comfortable_max: 18, hot_above: 22, too_hot_above: 25, likes_rain: true, avoid_sunburn: true };
+    return mut({ cleared: true });
   }
   if (is("PUT") && p === "/api/memory/interests") { s.memory.interests = String(body.text ?? "").trim(); return mut(s.memory); }
   // memory

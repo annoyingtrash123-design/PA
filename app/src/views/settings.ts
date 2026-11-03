@@ -5,20 +5,20 @@ import { refreshHolidays } from "../services/holidays";
 import { kvClear } from "../services/idb";
 import { listVoices } from "../services/speech";
 import { resetWeather } from "../services/weather";
-import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, segmented, select, textInput, toast, toggle } from "../ui";
+import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, segmented, select, textInput, toast } from "../ui";
 import { stopAll, previewNatural } from "../services/readaloud";
 import { STYLES, VOICES } from "../services/gemini-tts";
 import { getGeminiVoice, getStyle, getVoiceType, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
-import { isValidTimezone, WEEKDAY_SHORT } from "../util/dates";
+import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
+import { isValidTimezone } from "../util/dates";
 import type { Category, Memory } from "../types";
 
 const PALETTE = ["#EC6A5C", "#F59E0B", "#E8B931", "#6BAA75", "#4CAF50", "#26A69A", "#4FA3D1", "#5C6BC0", "#9575CD", "#D5679B", "#A1887F", "#78909C"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const sub = (t: string) => h("p", { class: "label-caps" }, t);
 const outlineBtn = (label: string, fn: () => void, ic = "check") => button(label, fn, { kind: "outline", icon: ic });
-const withSuffix = (input: HTMLElement, suffix: string) => h("div", { class: "input-suffix" }, input, h("span", null, suffix));
 
 export function renderSettings(root: HTMLElement): void {
   const draw = () => {
@@ -185,6 +185,7 @@ function build(redraw: () => void): HTMLElement[] {
       field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
     memoryCard(name),
+    profileCard(redraw),
     categoriesCard(),
     card("stack", h("h3", { class: "title-sm" }, "Backup"), muted("Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick),
     card("stack", h("h3", { class: "title-sm" }, "Data"), h("div", { class: "row wrap" }, button("Load sample data", () => void loadSample(), { kind: "outline", icon: "add" }), button("Reset everything", () => void reset(), { kind: "text", icon: "delete", cls: "danger" }))),
@@ -200,35 +201,8 @@ function memoryCard(name: string): HTMLElement {
   } catch (e) {
     return card("stack", h("h3", { class: "title-sm" }, `What ${name} knows about you`), muted((e as Error).message));
   }
-  const w = mem.weather, wk = mem.work, rh = mem.rhythm;
-  const num = (label: string, v: number) => { const i = h("input", { class: "input", type: "text", inputmode: "decimal", value: String(v), "aria-label": label }); return { i, el: field(label, withSuffix(i, "°C")) }; };
-  const cf = num("Comfortable up to", w.comfortable_max), hot = num("Hot above", w.hot_above), tooHot = num("Too hot above", w.too_hot_above);
-  const rain = toggle("I like rainy days", w.likes_rain), sun = toggle("I want to avoid sunburn", w.avoid_sunburn);
-  const saveWeather = () => {
-    const vals = [cf.i, hot.i, tooHot.i].map((i) => Number(i.value.replace(",", ".")));
-    if (vals.some((v) => !Number.isFinite(v))) return toast("Temperatures should be numbers");
-    try { api("PUT", "/api/memory/weather", { comfortable_max: vals[0], hot_above: vals[1], too_hot_above: vals[2], likes_rain: rain.input.checked, avoid_sunburn: sun.input.checked }); toast("Weather preferences saved"); } catch (e) { toast((e as Error).message); }
-  };
-
-  const on = toggle("I work set hours", wk.enabled);
-  const days = new Set(wk.days);
-  const dayRow = h("div", { class: "daychips" }, ...WEEKDAY_SHORT.map((n, i) => { const b = h("button", { type: "button", class: `daychip ${days.has(i) ? "on" : ""}`, "aria-pressed": String(days.has(i)) }, n); b.onclick = () => { days.has(i) ? days.delete(i) : days.add(i); b.classList.toggle("on", days.has(i)); b.setAttribute("aria-pressed", String(days.has(i))); }; return b; }));
+  const rh = mem.rhythm;
   const time = (v: string, label: string) => h("input", { class: "input", type: "time", value: v, "aria-label": label });
-  const start = time(wk.start, "Work start"), end = time(wk.end, "Work end");
-  const lunch = h("input", { class: "input", type: "text", inputmode: "numeric", value: String(wk.lunch_minutes), "aria-label": "Lunch break minutes" });
-  const lunchFrom = time(wk.lunch_window_start ?? "12:00", "Lunch usually from"), lunchTo = time(wk.lunch_window_end ?? "14:00", "Lunch usually until");
-  const region = textInput(wk.holiday_region ?? "", { placeholder: "AU-NSW" });
-  const saveWork = () => {
-    if (!HHMM.test(start.value) || !HHMM.test(end.value) || !HHMM.test(lunchFrom.value) || !HHMM.test(lunchTo.value)) return toast("Times should look like 09:30");
-    const l = Math.round(Number(lunch.value));
-    if (!Number.isFinite(l)) return toast("Lunch break should be a number of minutes");
-    try {
-      api("PUT", "/api/memory/work", { enabled: on.input.checked, lunch_minutes: l, lunch_window_start: lunchFrom.value, lunch_window_end: lunchTo.value, days: [...days].sort(), start: start.value, end: end.value, holiday_region: region.value.trim() });
-      toast("Work hours saved");
-      void refreshHolidays();
-    } catch (e) { toast((e as Error).message); }
-  };
-
   const wf = time(rh.wake_from, "Wake from"), wt = time(rh.wake_to, "Wake to"), sf = time(rh.sleep_from, "Asleep from"), st = time(rh.sleep_to, "Asleep to");
   const saveRhythm = () => {
     const body = { wake_from: wf.value, wake_to: wt.value, sleep_from: sf.value, sleep_to: st.value };
@@ -236,41 +210,45 @@ function memoryCard(name: string): HTMLElement {
     try { api("PUT", "/api/memory/rhythm", body); toast("Daily rhythm saved"); } catch (e) { toast((e as Error).message); }
   };
 
-  const notesCol = h("div", { class: "stack", style: { gap: "2px" } });
-  const drawNotes = (notes: Memory["notes"]) => clear(notesCol, ...(notes.length ? notes.map((n) => h("div", { class: "note-row" }, h("p", null, n.text), iconBtn("edit", "Edit note", () => editNote(n), "muted sm", 20), iconBtn("delete", "Delete note", () => { try { drawNotes(api<Memory>("DELETE", `/api/memory/notes/${n.id}`).notes); } catch (e) { toast((e as Error).message); } }, "muted sm", 20))) : [muted("No notes yet.")]));
-  const editNote = (n: { id: number; text: string }) => {
-    const ta = h("textarea", { class: "input", rows: 3 }, n.text) as HTMLTextAreaElement;
-    const m = openModal("Edit note", ta, [button("Cancel", () => m.close(), { kind: "text" }), button("Save", () => {
-      if (!ta.value.trim()) return;
-      try { drawNotes(api<Memory>("PUT", `/api/memory/notes/${n.id}`, { text: ta.value.trim() }).notes); m.close(); } catch (e) { toast((e as Error).message); }
-    })]);
-    ta.focus();
-  };
-  drawNotes(mem.notes);
-  const newNote = textInput("", { placeholder: "Add a note", maxlength: 500 });
-  const addNote = () => {
-    const text = newNote.value.trim();
-    if (!text) return;
-    try { drawNotes(api<Memory>("POST", "/api/memory/notes", { text }).notes); newNote.value = ""; } catch (e) { toast((e as Error).message); }
-  };
-  newNote.onkeydown = (e) => { if (e.key === "Enter") addNote(); };
-
-  const interests = h("textarea", { class: "input", rows: 4, maxlength: 1000, placeholder: "e.g. Cooking, birdwatching, modern Japanese fiction" }, mem.interests ?? "") as HTMLTextAreaElement;
-  const saveInterests = () => { try { api("PUT", "/api/memory/interests", { text: interests.value }); toast("Interests saved"); } catch (e) { toast((e as Error).message); } };
-
   return card("stack",
     h("h3", { class: "title-sm" }, `What ${name} knows about you`),
     muted(`${name} uses this to write your daily digest and briefings.`),
-    sub("Weather preferences"), cf.el, hot.el, tooHot.el, rain.el, sun.el, outlineBtn("Save weather preferences", saveWeather),
-    h("hr", { class: "divider" }),
-    sub("Work hours"), on.el, dayRow, h("div", { class: "pair" }, field("Start", start), field("End", end)), field("Lunch break", withSuffix(lunch, "min")), h("div", { class: "pair" }, field("Lunch usually between", lunchFrom), field("and", lunchTo)), field("Holiday region", region, "Public holidays are shown for this region, e.g. AU-NSW. Leave empty for none."), outlineBtn("Save work hours", saveWork),
-    h("hr", { class: "divider" }),
     sub("Daily rhythm"), h("span", null, "Usually wake"), h("div", { class: "pair" }, wf, wt), h("span", null, "Usually asleep by"), h("div", { class: "pair" }, sf, st), outlineBtn("Save daily rhythm", saveRhythm),
-    h("hr", { class: "divider" }),
-    sub("Interests"), field("Interests", interests, "Things you love or want to learn about — eras, places, genres, hobbies. Miranda uses this quietly when suggesting things."), outlineBtn("Save interests", saveInterests),
-    h("hr", { class: "divider" }),
-    sub("Notes"), notesCol, h("div", { class: "row" }, h("div", { class: "grow" }, newNote), iconBtn("add-circle", "Add note", addNote, "lav", 32)),
-    h("p", { class: "field-hint" }, "e.g. I work from the office Tue to Thu"),
+  );
+}
+
+// ---------------- private profile ----------------
+function profileCard(redraw: () => void): HTMLElement {
+  let updated = "";
+  try { updated = api<Memory>("GET", "/api/memory").profile_updated ?? ""; } catch { /* shown as not set */ }
+  const when = updated ? new Date(`${updated}T12:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "";
+  const ta = h("textarea", { class: "input", rows: 4, autocomplete: "off", spellcheck: false, "aria-label": "Paste a profile code", placeholder: "MIRANDA1:…" }) as HTMLTextAreaElement;
+  const apply = () => {
+    if (!ta.value.trim()) return toast("Paste a profile code first");
+    try {
+      const r = api<ApplySummary>("POST", "/api/profile/apply", decodeProfile(ta.value));
+      ta.value = "";
+      toast(summarize(r));
+      if (r.work) void refreshHolidays();
+      window.dispatchEvent(new Event("pa-settings"));
+      redraw();
+    } catch (e) {
+      toast(e instanceof ProfileCodeError || e instanceof ApiError ? e.message : String(e));
+    }
+  };
+  const clearIt = async () => {
+    if (!(await confirmDialog("Clear private profile?", "This removes the private interests, notes, work hours and weather preferences. Goals and leisure items it added stay.", "Clear"))) return;
+    try { api("POST", "/api/profile/clear", {}); } catch (e) { return toast((e as Error).message); }
+    window.dispatchEvent(new Event("pa-settings"));
+    toast("Private profile cleared");
+    redraw();
+  };
+  return card("stack",
+    h("h3", { class: "title-sm" }, "Private profile"),
+    h("p", { class: "small" }, updated ? `Private profile: set · updated ${when}` : "Not set yet"),
+    muted("Your interests, notes, work hours and weather preferences are kept private and aren't shown here. Ask Claude for a profile code to add or change them."),
+    field("Paste a profile code", ta),
+    h("div", { class: "row wrap" }, outlineBtn("Apply", apply), updated ? button("Clear private profile", () => void clearIt(), { kind: "text", cls: "danger" }) : null),
   );
 }
 

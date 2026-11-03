@@ -1409,3 +1409,51 @@ fn prompts_say_to_suggest_only_listed_works() {
         assert!(up.contains("Chinese, Korean or Japanese"), "{kind}");
     }
 }
+
+#[test]
+fn private_profile_apply_and_clear() {
+    let mut a = App::new(TODAY);
+    a.post("/api/goals", json!({"title": "Learn pottery", "horizon": "medium"}));
+    let body = json!({
+        "v": 1, "updated": "2026-11-03", "interests": "Pottery and tide pools",
+        "notes": ["Example note one", "Example note two"],
+        "work": {"enabled": true, "days": [1, 2, 3], "start": "08:30", "end": "16:00", "lunch_minutes": 30, "lunch_window_start": "12:00", "lunch_window_end": "13:30", "holiday_region": "AU-VIC"},
+        "weather": {"comfortable_max": 20, "hot_above": 24, "too_hot_above": 28, "likes_rain": false, "avoid_sunburn": false},
+        "add_goals": [{"title": "learn POTTERY", "horizon": "long"}, {"title": "Run a 10k", "horizon": "medium", "why": "health", "deadline": "2027-03-01"}],
+        "add_leisure": [{"kind": "read", "title": "A Made-up Book", "note": "n"}, {"kind": "watch", "title": "Sample Film", "status": "current"}]
+    });
+    let r = a.post("/api/profile/apply", body.clone());
+    assert_eq!(r, json!({"interests": true, "notes": 2, "work": true, "weather": true, "goals_added": 1, "leisure_added": 2}));
+    let m = a.get("/api/memory");
+    assert_eq!((m["interests"].as_str(), m["profile_updated"].as_str(), m["notes"].as_array().unwrap().len()), (Some("Pottery and tide pools"), Some("2026-11-03"), 2));
+    assert_eq!((m["work"]["start"].as_str(), m["work"]["days"].clone(), m["weather"]["hot_above"].as_f64()), (Some("08:30"), json!([1, 2, 3]), Some(24.0)));
+    // replace semantics + duplicate skip on re-apply
+    let r = a.post("/api/profile/apply", body);
+    assert_eq!((r["notes"].as_i64(), r["goals_added"].as_i64(), r["leisure_added"].as_i64()), (Some(2), Some(0), Some(0)));
+    assert_eq!(a.get("/api/memory")["notes"].as_array().unwrap().len(), 2);
+    assert_eq!(a.st().goals.len(), 2);
+    // absent sections are left alone
+    let r = a.post("/api/profile/apply", json!({"v": 1, "updated": "2026-11-04"}));
+    assert_eq!((r["interests"].clone(), r["work"].clone()), (json!(false), json!(false)));
+    assert_eq!(a.get("/api/memory")["interests"], "Pottery and tide pools");
+    // validation errors leave the state untouched
+    let before = a.st().memory.profile_updated.clone();
+    for bad in [
+        json!({"v": 2, "updated": "2026-11-05"}),
+        json!({"v": 1, "updated": "nope"}),
+        json!({"v": 1, "updated": "2026-11-05", "interests": "changed", "work": {"start": "18:00", "end": "09:00"}}),
+        json!({"v": 1, "updated": "2026-11-05", "notes": ["ok", "  "]}),
+        json!({"v": 1, "updated": "2026-11-05", "weather": {"comfortable_max": 30, "hot_above": 20}}),
+        json!({"v": 1, "updated": "2026-11-05", "add_goals": [{"title": "Fine goal", "horizon": "long"}, {"title": "Bad", "horizon": "weekly"}]}),
+        json!({"v": 1, "updated": "2026-11-05", "add_leisure": [{"kind": "swim", "title": "X"}]}),
+    ] {
+        let (s, _) = a.req("POST", "/api/profile/apply", bad);
+        assert_eq!(s, 400);
+    }
+    assert_eq!((a.st().memory.profile_updated, a.st().memory.interests.as_str(), a.st().goals.len()), (before, "Pottery and tide pools", 2));
+    // clear
+    a.post("/api/profile/clear", json!({}));
+    let m = a.get("/api/memory");
+    assert_eq!((m["interests"].as_str(), m["profile_updated"].as_str(), m["notes"].as_array().unwrap().len(), m["work"]["start"].as_str(), m["weather"]["hot_above"].as_f64()), (Some(""), Some(""), 0, Some("10:00"), Some(22.0)));
+    assert_eq!(a.st().goals.len(), 2);
+}

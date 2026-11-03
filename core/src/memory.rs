@@ -92,11 +92,11 @@ fn hm(name: &str, v: &str) -> Res<u32> {
 
 #[derive(Deserialize)]
 pub struct WeatherIn {
-    comfortable_max: Option<f64>,
-    hot_above: Option<f64>,
-    too_hot_above: Option<f64>,
-    likes_rain: Option<bool>,
-    avoid_sunburn: Option<bool>,
+    pub comfortable_max: Option<f64>,
+    pub hot_above: Option<f64>,
+    pub too_hot_above: Option<f64>,
+    pub likes_rain: Option<bool>,
+    pub avoid_sunburn: Option<bool>,
 }
 
 pub fn put_weather(env: &mut Env, b: WeatherIn) -> Res<Memory> {
@@ -254,4 +254,117 @@ pub fn days_off_delete(env: &mut Env, date: &str) -> Value {
         env.changed = true;
     }
     json!(env.st.days_off)
+}
+
+// ---------------------------------------------------------------- private profile
+
+#[derive(Deserialize)]
+pub struct ProfileGoal {
+    title: String,
+    horizon: String,
+    #[serde(default)]
+    why: Option<String>,
+    #[serde(default)]
+    deadline: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ProfileLeisure {
+    kind: String,
+    title: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ProfileIn {
+    v: u32,
+    updated: String,
+    #[serde(default)]
+    interests: Option<String>,
+    #[serde(default)]
+    notes: Option<Vec<String>>,
+    #[serde(default)]
+    work: Option<WorkIn>,
+    #[serde(default)]
+    weather: Option<WeatherIn>,
+    #[serde(default)]
+    add_goals: Vec<ProfileGoal>,
+    #[serde(default)]
+    add_leisure: Vec<ProfileLeisure>,
+}
+
+/// Applies a private profile. All-or-nothing: on any validation error the state is left untouched.
+pub fn profile_apply(env: &mut Env, b: ProfileIn) -> Res<Value> {
+    if b.v != 1 {
+        return Err(ApiErr::bad("unsupported profile version"));
+    }
+    let updated = parse_date(b.updated.trim()).map(fmt_date).ok_or_else(|| ApiErr::bad("updated must be YYYY-MM-DD"))?;
+    let backup = env.st.clone();
+    let was_changed = env.changed;
+    let r = apply_inner(env, b, updated);
+    if r.is_err() {
+        *env.st = backup;
+        env.changed = was_changed;
+    }
+    r
+}
+
+fn apply_inner(env: &mut Env, b: ProfileIn, updated: String) -> Res<Value> {
+    let has_interests = b.interests.is_some();
+    if let Some(t) = b.interests {
+        put_interests(env, InterestsIn { text: t })?;
+    }
+    let mut notes = 0;
+    if let Some(list) = b.notes {
+        let texts = list.iter().map(|t| note_text(t)).collect::<Res<Vec<_>>>()?;
+        env.st.memory.notes.clear();
+        for text in texts {
+            let id = env.st.new_id();
+            env.st.memory.notes.push(Note { id, text });
+            notes += 1;
+        }
+    }
+    let has_work = b.work.is_some();
+    if let Some(w) = b.work {
+        put_work(env, w)?;
+    }
+    let has_weather = b.weather.is_some();
+    if let Some(w) = b.weather {
+        put_weather(env, w)?;
+    }
+    let mut goals_added = 0;
+    for g in b.add_goals {
+        let dup = |t: &str| env.st.goals.iter().any(|x| x.title.trim().to_lowercase() == t.trim().to_lowercase());
+        if dup(&g.title) {
+            continue;
+        }
+        crate::goals::create(env, crate::goals::GoalIn { title: g.title, horizon: g.horizon, deadline: g.deadline, why: g.why, status: None, achieved_on: None })?;
+        goals_added += 1;
+    }
+    let mut leisure_added = 0;
+    for l in b.add_leisure {
+        if env.st.leisure.iter().any(|x| x.title.trim().to_lowercase() == l.title.trim().to_lowercase()) {
+            continue;
+        }
+        crate::leisure::create(env, crate::leisure::LeisureIn { kind: l.kind, title: l.title, note: l.note, status: l.status, finished_on: None, blurb: None })?;
+        leisure_added += 1;
+    }
+    env.st.memory.profile_updated = updated;
+    env.changed = true;
+    Ok(json!({"interests": has_interests, "notes": notes, "work": has_work, "weather": has_weather, "goals_added": goals_added, "leisure_added": leisure_added}))
+}
+
+/// Clears interests, notes, work hours (back to defaults), weather preferences (defaults) and the profile date.
+pub fn profile_clear(env: &mut Env) -> Value {
+    let m = &mut env.st.memory;
+    m.interests = String::new();
+    m.notes.clear();
+    m.work = WorkPrefs::default();
+    m.weather = WeatherPrefs::default();
+    m.profile_updated = String::new();
+    env.changed = true;
+    json!({"cleared": true})
 }

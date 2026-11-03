@@ -175,6 +175,8 @@ pub struct Memory {
     pub notes: Vec<Note>,
     /// Free text: things the person loves or wants to learn about (silent AI context, shapes leisure picks).
     pub interests: String,
+    /// Date (YYYY-MM-DD) the private profile was last applied; empty = never.
+    pub profile_updated: String,
 }
 
 /// Something for free time: watch / read / listen / play / try.
