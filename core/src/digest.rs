@@ -262,7 +262,7 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
             None => &mut anytime,
         };
         if is_named(o) {
-            slot.0.push(item_phrase(o));
+            slot.0.push(crate::taskvoice::inline_phrase(o));
         } else {
             slot.1 = true;
         }

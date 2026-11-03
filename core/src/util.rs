@@ -155,3 +155,17 @@ pub fn url_decode(s: &str) -> String {
     }
     String::from_utf8_lossy(&out).into_owned()
 }
+
+/// Lower-case the first letter unless the first word looks like a name or acronym ("Eggs, oats" -> "eggs, oats";
+/// "Sam's" and "TOPIK" stay).
+pub fn lower_first_word(s: &str) -> String {
+    let first = s.split_whitespace().next().unwrap_or("");
+    let base = first.split('\'').next().unwrap_or("").to_lowercase();
+    let common = ["yesterday", "today", "tomorrow", "tonight", "last", "next", "this", "that", "it", "there", "don", "can", "won", "week", "month", "year"].contains(&base.as_str());
+    let keep = (first.contains('\'') && !common) || first.chars().skip(1).any(|c| c.is_uppercase()) || first == "I";
+    if keep {
+        return s.to_string();
+    }
+    let mut c = s.chars();
+    c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}

@@ -1816,12 +1816,13 @@ fn templates_walk_through_every_task_with_we_phrasing() {
         println!("{kind}: {t}\n");
         for title in &titles {
             let ph = crate::taskvoice::task_phrase(title).text().to_string();
-            assert!(t.contains(title) || t.contains(&ph), "{kind}: missing {title}\n{t}");
+            let lt = t.to_lowercase();
+            assert!(lt.contains(&title.to_lowercase()) || lt.contains(&ph.to_lowercase()), "{kind}: missing {title}\n{t}");
         }
         assert!(!t.contains("plus a few more") && !t.contains("a few more,"), "{t}");
         assert!(t.contains("we've got") || t.contains("you've got") || t.contains("we have") || t.contains("for us") || t.contains("your day"), "{t}");
-        assert!(t.contains("Reminder letter is in the drawer"), "notes missing\n{t}");
-        assert!(t.contains("checklist starts with gather last quarter's numbers"), "checklist step missing\n{t}");
+        assert!(t.contains("says reminder letter is in the drawer"), "notes missing\n{t}");
+        assert!(t.contains("the first step is gathering last quarter's numbers"), "checklist step missing\n{t}");
         assert!(t.contains("half hour") && t.contains("ten minutes"), "size hints missing\n{t}");
         assert!(!has_stats(&t));
         assert_spoken(kind, &t);
@@ -1845,7 +1846,7 @@ fn many_tasks_name_the_extras_in_one_sentence() {
     }
     let t = a.get("/api/briefing?kind=evening")["template_text"].as_str().unwrap().to_string();
     for title in &titles {
-        assert!(t.contains(title.as_str()), "missing {title}\n{t}");
+        assert!(t.to_lowercase().contains(&title.to_lowercase()), "missing {title}\n{t}");
     }
     assert!(t.contains("The smaller bits are"), "{t}");
     assert!(!t.contains("plus a few more"), "{t}");
@@ -1987,8 +1988,14 @@ fn imperative_titles_read_naturally_in_sentences() {
         assert_eq!(task_phrase(title), Phrase::Gerund(want.into()), "{title}");
     }
     // nouns and book-club style titles stay as they are
-    assert_eq!(task_phrase("Dentist check-up"), Phrase::Noun("Dentist check-up".into()));
-    assert_eq!(task_phrase("Book club"), Phrase::Noun("Book club".into()));
+    assert_eq!(task_phrase("Dentist check-up"), Phrase::Noun("dentist check-up".into()));
+    assert_eq!(task_phrase("Book club"), Phrase::Noun("book club".into()));
+    assert_eq!(task_phrase("Powerhouse Museum"), Phrase::Noun("Powerhouse Museum".into()));
+    assert_eq!(task_phrase("Sam's birthday"), Phrase::Noun("Sam's birthday".into()));
+    assert_eq!(task_phrase("Submit weekly report"), Phrase::Gerund("submitting the weekly report".into()));
+    assert_eq!(task_phrase("Book dentist appointment"), Phrase::Gerund("booking the dentist appointment".into()));
+    assert_eq!(task_phrase("Reply to Sam's email"), Phrase::Gerund("replying to Sam's email".into()));
+    assert_eq!(task_phrase("Drink water"), Phrase::Gerund("drinking water".into()));
     // and the template uses the phrasing
     let days = days_from(1);
     let mut a = task_app_for_days(&days, &["Try Gemini learning mode for Korean study", "Read about the Australian mining boom", "Make book club inquiries", "Organise the hall cupboard"]);
@@ -2092,7 +2099,7 @@ fn every_prompt_carries_the_spoken_style_guide() {
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
     assert!(b["news"]["system_prompt"].as_str().unwrap().contains(crate::STYLE_GUIDE));
     assert!(crate::STYLE_GUIDE.contains("never put one inside a quoted headline"));
-    for k in ["BASE TONE", "NEWS TONE", "EXAMPLE OF THE TONE FOR THE DAY", "EXAMPLE OF THE TONE FOR THE NEWS", "speaking of", "reflective takeaway"] {
+    for k in ["BASE TONE", "NEWS TONE", "EXAMPLE OF THE TONE FOR THE DAY", "EXAMPLE OF THE TONE FOR THE NEWS", "speaking of", "reflective takeaway", "PERSONAL ASSISTANT MANNER", "DAY ARC", "WIND-DOWN VOICE", "NEVER: sell"] {
         assert!(crate::STYLE_GUIDE.contains(k), "{k}");
     }
 }
@@ -2106,4 +2113,53 @@ fn news_leads_are_complete_sentences() {
     }
     assert_eq!(first_sentence("The cut off lead ends here. And then a part that was trimmed…"), "The cut off lead ends here.");
     assert_eq!(first_sentence("A lead with no end that keeps going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going"), "");
+}
+
+#[test]
+fn knowledge_picks_fit_the_day_and_vary() {
+    use crate::knowledge::{self, K};
+    let d = chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap();
+    let wet = knowledge::tags("evening", Some(16), "Rain showers", true, &["Study".into()], true, true, false, "");
+    for t in ["evening", "rain", "cold", "study", "goal", "quiet", "workday"] {
+        assert!(wet.contains(&t), "{t}");
+    }
+    let p = knowledge::picks(knowledge::kinds_for(true, false), &wet, d);
+    assert_eq!(p.iter().map(|e| e.kind).collect::<Vec<_>>(), vec![K::Memory, K::Fact, K::WindDown]);
+    // a different memory most days over a week, never the same one two days running
+    let mut seen = std::collections::HashSet::new();
+    let mut last = "";
+    for i in 0..7 {
+        let q = knowledge::picks(knowledge::kinds_for(false, false), &wet, d + chrono::Duration::days(i));
+        assert_ne!(q[0].text, last);
+        last = q[0].text;
+        seen.insert(q[0].text);
+    }
+    assert!(seen.len() >= 5, "{}", seen.len());
+    // wind-down lines only ever go to the evening
+    let m = knowledge::picks(knowledge::kinds_for(false, false), &knowledge::tags("morning", Some(22), "Clear", false, &[], true, false, true, ""), d);
+    assert!(m.iter().all(|e| e.kind != K::WindDown));
+}
+
+#[test]
+fn knowledge_entries_are_clean() {
+    for e in crate::knowledge::ENTRIES {
+        let t = e.text.to_lowercase();
+        let words: Vec<&str> = t.split(|c: char| !c.is_alphanumeric()).collect();
+        for bad in ["bro", "dude", "manifest", "manifesting", "astrology", "crystals", "promo", "subscribe", "discount"] {
+            assert!(!words.contains(&bad), "{bad}: {}", e.text);
+        }
+        assert!(!e.tags.is_empty());
+        assert!(e.text.ends_with('.') || e.text.ends_with('!'), "{}", e.text);
+        assert!(!crate::has_stats(e.text), "{}", e.text);
+    }
+}
+
+#[test]
+fn every_summary_prompt_carries_the_knowledge_picks() {
+    let mut a = news_app(TODAY);
+    for kind in ["morning", "evening", "weekly"] {
+        let b = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"));
+        assert!(b["system_prompt"].as_str().unwrap().contains("LITTLE THINGS TO DRAW ON"), "{kind}");
+        assert!(b.to_string().contains("Little things you could draw on today"), "{kind}");
+    }
 }

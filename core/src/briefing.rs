@@ -6,6 +6,7 @@ use crate::env::Env;
 use crate::error::{ApiErr, Res};
 use crate::goals;
 use crate::gym::{self, WorkoutPlan};
+use crate::knowledge;
 use crate::leisure;
 use crate::memory;
 use crate::news;
@@ -381,7 +382,7 @@ pub fn is_big(o: &Occurrence) -> bool {
 /// Quick, errand-like things that plausibly fit a lunch break.
 fn lunchable(o: &Occurrence) -> bool {
     let w: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
-    o.time.is_none() && !is_big(o) && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
+    o.time.is_none() && !is_big(o) && o.part_of_day != "evening" && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
 }
 
 fn cat_name(o: &Occurrence) -> String {
@@ -396,6 +397,19 @@ fn group_name(o: &Occurrence) -> String {
     } else {
         cat_name(o)
     }
+}
+
+/// Routines named in one breath, timed ones first, as they read mid-sentence ("your morning routine at 7:30 AM and planning tomorrow").
+fn routine_list<T: std::borrow::Borrow<Occurrence>>(routines: &[T]) -> Vec<String> {
+    let mut r: Vec<&Occurrence> = routines.iter().map(|o| o.borrow()).collect();
+    r.sort_by_key(|o| o.time.is_none());
+    r.iter()
+        .map(|o| {
+            let p = taskvoice::inline_phrase(o);
+            let noun = matches!(taskvoice::task_phrase(&o.title), taskvoice::Phrase::Noun(_));
+            if noun && p.starts_with(|c: char| c.is_lowercase()) && p.contains("routine") { format!("your {p}") } else { p }
+        })
+        .collect()
 }
 
 fn cat_lead(cat: &str, routine: bool, list: &str, d: NaiveDate, salt: u64) -> String {
@@ -613,7 +627,7 @@ fn morning_template(c: &Ctx) -> String {
             must(&mut v, text);
         }
         if !routines.is_empty() {
-            let list: Vec<String> = routines.iter().map(|o| item_phrase(o)).collect();
+            let list = routine_list(&routines);
             must(&mut v, cat_lead("Self-care", true, &join(&list), d, 0));
         }
         if !already.is_empty() {
@@ -640,14 +654,18 @@ fn morning_template(c: &Ctx) -> String {
 
     // 4. suggested order
     let timed: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_some()).cloned().collect();
-    let fixed: Vec<String> = timed.iter().filter(|o| !is_routine(o)).map(|o| item_phrase(o)).collect();
+    let fixed: Vec<String> = timed.iter().filter(|o| !is_routine(o)).map(|o| taskvoice::inline_phrase(o)).collect();
     let timed_routines: Vec<&Occurrence> = timed.iter().filter(|o| is_routine(o)).cloned().collect();
     let loose: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_none() && cat_name(o) != "Exercise" && !is_routine(o)).cloned().collect();
     let big: Vec<&Occurrence> = loose.iter().filter(|o| is_big(o)).cloned().collect();
     let quick: Vec<&Occurrence> = loose.iter().filter(|o| !is_big(o)).cloned().collect();
     let titles = |v: &[&Occurrence], k: usize| -> Vec<String> { v.iter().take(k).map(|o| taskvoice::inline_phrase(o)).collect() };
     if !fixed.is_empty() {
-        must(&mut v, format!("The fixed points are {}, so everything else bends around those.", join(&fixed)));
+        must(&mut v, if fixed.len() == 1 {
+            format!("The one fixed point is {}, so everything else can bend around it.", fixed[0])
+        } else {
+            format!("The fixed points are {}, so everything else bends around those.", join(&fixed))
+        });
     } else if let Some(r) = timed_routines.first() {
         must(&mut v, format!("Beyond your {}, nothing is pinned to the clock today, so the rest can flex around how you feel.", r.title.to_lowercase()));
     }
@@ -664,6 +682,7 @@ fn morning_template(c: &Ctx) -> String {
             taskvoice::inline_phrase(b),
             if quick.is_empty() { String::new() } else { format!(", like {}", limited(titles(&quick, 2), 2)) }
         )),
+        (None, 1) => must(&mut v, format!("The only loose thing is {}, and it's a quick one, so slot it in wherever it suits.", titles(&quick, 1)[0])),
         (None, q) if q > 0 => must(&mut v, format!(
             "Nothing loose is heavy, so run through {} in whatever order feels good, quickest first for an easy win.",
             limited(titles(&quick, 3), 3)
@@ -674,9 +693,10 @@ fn morning_template(c: &Ctx) -> String {
             }
         }
     }
-    let evening_routines: Vec<String> = todo.iter().filter(|o| is_routine(o) && o.time.is_none() && o.part_of_day == "evening").map(|o| o.title.clone()).collect();
+    let evening_routines: Vec<String> = todo.iter().filter(|o| is_routine(o) && o.time.is_none() && o.part_of_day == "evening").map(|o| taskvoice::inline_phrase(o)).collect();
     if !evening_routines.is_empty() {
-        must(&mut v, format!("To close the day, {} is a calm, low-effort way to finish.", join(&evening_routines)));
+        let verb = if evening_routines.len() > 1 { "are" } else { "is" };
+        must(&mut v, format!("To close the day, {} {verb} a calm, low-effort way to finish.", join(&evening_routines)));
     }
     if let Some(w) = &c.info.work {
         let r = &c.memory.rhythm;
@@ -730,7 +750,7 @@ fn morning_template(c: &Ctx) -> String {
 
     // extras: real content used only when the morning would otherwise run short
     if let Some(o) = todo.iter().find(|o| !o.checklist.is_empty()) {
-        let steps: Vec<String> = o.checklist.iter().filter(|s| !s.done).map(|s| s.text.to_lowercase()).collect();
+        let steps: Vec<String> = o.checklist.iter().filter(|s| !s.done).map(|s| taskvoice::step_phrase(&s.text)).collect();
         if !steps.is_empty() {
             add(&mut v, format!("Your {} is really just {}, which is easy to tick off bit by bit.", o.title.to_lowercase(), join(&steps)), PK::Extra(1));
         }
@@ -874,7 +894,7 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                     _ => format!("You did nice work today, with {} now off your plate.", join(&done_titles)),
                 }
             });
-            let left: Vec<String> = c.items.iter().filter(|o| !o.done).map(|o| taskvoice::inline_phrase(o)).collect();
+            let left: Vec<String> = c.items.iter().filter(|o| !o.done && !is_routine(o)).map(taskvoice::inline_phrase).collect();
             if !left.is_empty() {
                 parts.push(format!("{} {} still waiting, but any one-off tasks will roll over to tomorrow on their own, so there's nothing to stress about.", cap(&join(&left)), if left.len() == 1 { "is" } else { "are" }));
             }
@@ -929,7 +949,7 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                     }
                 };
                 if !routines.is_empty() {
-                    let list: Vec<String> = routines.iter().map(|o| item_phrase(o)).collect();
+                    let list = routine_list(&routines);
                     s.push_str(&format!(" {}", cat_lead("Self-care", true, &join(&list), d, 0)));
                 }
                 if let Some(p) = w {
@@ -1113,7 +1133,8 @@ PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT
         "You are {a}, the user's personal assistant and friend. You are writing a script that will be read aloud by a text-to-speech voice, so write exactly how a chatty, caring friend would talk.\n\
          {spoken}\nRules: plain spoken sentences only. No markdown, no asterisks, no headings, no bullet points, no numbered lists, no emojis, no stage directions, no quotation marks around the whole text. \
          Say times naturally, like 'at seven thirty in the morning' or 'at 3 PM'. Say 'kilos' instead of 'kg'. Weather temperatures are in Celsius and should be said as degrees. \
-         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{TONE}\n{focus}{rules}{news}",
+         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{TONE}\n{kb}\n{focus}{rules}{news}",
+        kb = knowledge::RULES,
         a = c.assistant,
         spoken = concat!(spoken_rule!(), style_guide!()),
         rules = match c.kind {
@@ -1245,7 +1266,35 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
     } else {
         s.push_str(&leisure::finished_context(&c.leisure_finished));
     }
+    s.push_str(&knowledge::context_block(&knowledge_picks(c, weather)));
     s
+}
+
+/// Today's few optional memories, facts, tips and thoughts for the model, fitted to the day.
+fn knowledge_picks(c: &Ctx, weather: &Option<Weather>) -> Vec<&'static knowledge::Entry> {
+    let mut cats: Vec<String> = c.items.iter().filter(|o| !o.done).map(cat_name).collect();
+    if c.kind == Kind::Evening {
+        if let Some((_, items, _)) = &c.tomorrow {
+            cats.extend(items.iter().map(cat_name));
+        }
+    }
+    if c.workout.as_ref().is_some_and(|p| !p.rest) || c.gym_done.is_some() {
+        cats.push("Exercise".into());
+    }
+    let busy = c.items.iter().filter(|o| !o.done && !is_routine(o)).count() >= 4;
+    let leisure = c.leisure_pick.as_ref().map(|l| format!("{} {}", l.title, l.note)).unwrap_or_default();
+    let tags = knowledge::tags(
+        c.kind.name(),
+        weather.as_ref().map(|w| w.temp_max),
+        weather.as_ref().map(|w| w.summary.as_str()).unwrap_or(""),
+        weather.as_ref().and_then(|w| w.precip_prob).is_some_and(|p| p >= 50),
+        &cats,
+        c.info.work.is_some(),
+        !c.goals.is_empty(),
+        busy,
+        &leisure,
+    );
+    knowledge::picks(knowledge::kinds_for(c.kind == Kind::Evening, c.kind == Kind::Weekly), &tags, c.date)
 }
 
 /// The text without anything inside quotation marks (headlines are quoted word for word and may hold numbers).

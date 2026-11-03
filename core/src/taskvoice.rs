@@ -61,9 +61,14 @@ const VERBS: &[(&str, &str)] = &[
     ("ring", "ringing"), ("arrange", "arranging"), ("confirm", "confirming"), ("download", "downloading"), ("install", "installing"),
     ("complete", "completing"), ("cook", "cooking"), ("bake", "baking"), ("walk", "walking"), ("watch", "watching"), ("create", "creating"),
     ("draft", "drafting"), ("look", "looking"), ("set", "setting"), ("sign", "signing"), ("apply", "applying"), ("research", "researching"),
+    ("gather", "gathering"), ("collect", "collecting"), ("drink", "drinking"), ("stretch", "stretching"), ("meet", "meeting"),
+    ("empty", "emptying"), ("vacuum", "vacuuming"), ("mop", "mopping"), ("fold", "folding"), ("hang", "hanging"), ("feed", "feeding"),
+    ("study", "studying"), ("revise", "revising"), ("register", "registering"),
 ];
 /// Verbs that take "some" before a bare plural ("making some book club inquiries").
 const SOME_VERBS: &[&str] = &["make", "buy", "send", "write", "order", "print", "book"];
+/// Object words that never take "the" ("reading about…", "drinking water", "replying to…").
+const NO_ARTICLE: &[&str] = &["to", "for", "with", "on", "in", "at", "up", "out", "off", "about", "into", "over", "back", "down", "through", "from", "of", "and", "or", "it", "them", "him", "me", "us", "water", "lunch", "dinner", "breakfast", "homework", "coffee", "tea", "food", "money", "time", "exercise", "cardio", "yoga", "piano", "guitar", "some", "every", "each", "two", "three", "four", "five", "ten", "next", "last"];
 const DETERMINERS: &[&str] = &["a", "an", "the", "my", "your", "our", "his", "her", "their", "some", "any", "this", "that", "these", "those", "more", "new", "another", "all", "no", "about"];
 
 /// A task title as it reads inside a sentence.
@@ -88,13 +93,14 @@ pub fn task_phrase(title: &str) -> Phrase {
     let t = title.trim();
     let mut it = t.split_whitespace();
     let Some(first) = it.next() else { return Phrase::Noun(t.to_string()) };
+    let noun = || Phrase::Noun(mid_title(t));
     let rest: Vec<&str> = it.collect();
     let key = first.to_lowercase();
-    let Some((_, ger)) = VERBS.iter().find(|(v, _)| *v == key) else { return Phrase::Noun(t.to_string()) };
+    let Some((_, ger)) = VERBS.iter().find(|(v, _)| *v == key) else { return noun() };
     // "Book club", "Order of service" and the like are nouns
     if let Some(n) = rest.first().map(|w| w.to_lowercase()) {
         if (key == "book" && matches!(n.as_str(), "club" | "shelf" | "launch")) || (key == "order" && n == "of") || (key == "sign" && n == "off") {
-            return Phrase::Noun(t.to_string());
+            return noun();
         }
     }
     if first.chars().any(|c| !c.is_alphabetic()) {
@@ -106,12 +112,31 @@ pub fn task_phrase(title: &str) -> Phrase {
         let first_obj = rest[0].to_lowercase();
         let last = rest[rest.len() - 1].to_lowercase();
         let plural = last.len() > 3 && last.ends_with('s') && !last.ends_with("ss") && !last.ends_with("us") && !last.ends_with("is");
-        if SOME_VERBS.contains(&key.as_str()) && plural && !DETERMINERS.contains(&first_obj.as_str()) && !first_obj.chars().any(|c| c.is_ascii_digit()) {
+        let plain = !DETERMINERS.contains(&first_obj.as_str()) && !first_obj.chars().any(|c| c.is_ascii_digit()) && rest[0].chars().next().is_some_and(|c| c.is_lowercase());
+        if SOME_VERBS.contains(&key.as_str()) && plural && plain {
             out.push_str("some ");
+        } else if plain && !plural && rest.len() >= 2 && !NO_ARTICLE.contains(&first_obj.as_str()) && !first_obj.contains('\'') && !first_obj.ends_with("ing") {
+            // "submit weekly report" reads as "submitting the weekly report"
+            out.push_str("the ");
         }
         out.push_str(&rest.join(" "));
     }
     Phrase::Gerund(out)
+}
+
+/// A plain title as it reads mid-sentence: sentence-case titles ("Coffee with Alex", "Team stand-up") lose their
+/// leading capital; names, possessives, acronyms, single words and Title Case ("Powerhouse Museum") keep it.
+pub fn mid_title(t: &str) -> String {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let first = words.first().copied().unwrap_or("");
+    let sentence_case = words.len() >= 2 && words[1..].iter().any(|w| w.chars().next().is_some_and(|c| c.is_lowercase()));
+    let lowerable = first.chars().skip(1).all(|c| c.is_lowercase() || c == '-') && !first.contains('\'') && first != "I";
+    if sentence_case && lowerable {
+        let mut c = t.chars();
+        c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default()
+    } else {
+        t.to_string()
+    }
 }
 
 /// The task as it reads mid-sentence, with its time ("calling mum at 3 PM").
@@ -233,9 +258,10 @@ pub fn blurb(o: &Occurrence, i: usize, lk: &Look, used: &mut Used, goal: Option<
     };
     let mut s1 = lead;
     if let Some(n) = note_fragment(o) {
+        let n = if n.starts_with("I ") || n.starts_with("I'") { n.to_string() } else { crate::util::lower_first_word(&n) };
         s1.push_str(&format!(", and your note on it says {n}"));
     } else if let Some(step) = o.checklist.iter().find(|c| !c.done) {
-        s1.push_str(&format!(", and the checklist starts with {}", step.text.trim().trim_end_matches('.').to_lowercase()));
+        s1.push_str(&format!(", and the first step is {}", step_phrase(&step.text)));
     }
     s1.push('.');
     let reason: Option<String> = match goal {
@@ -318,4 +344,13 @@ pub fn signoff(d: NaiveDate, name: &str, with_name: bool) -> String {
         format!("Nothing else needs your attention tonight{n}, so get comfy and switch off for a bit."),
     ];
     pool[idx(d, 77, pool.len())].clone()
+}
+
+/// A checklist step as it reads mid-sentence ("gather last quarter's numbers" -> "gathering last quarter's numbers").
+pub fn step_phrase(step: &str) -> String {
+    let t = step.trim().trim_end_matches('.');
+    match task_phrase(t) {
+        Phrase::Gerund(g) => g,
+        Phrase::Noun(n) => crate::util::lower_first_word(&n),
+    }
 }
