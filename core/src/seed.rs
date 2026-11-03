@@ -109,7 +109,7 @@ fn strength_templates() -> Vec<(&'static str, &'static str, Vec<Def>)> {
     ]
 }
 
-/// The owner's routine: exercises, templates (shared exercises by name) and the 8-item rotation.
+/// The owner's routine: exercises, templates (shared exercises by name) and the 9-item rotation (8 workouts + rest).
 /// Ids come from `next`.
 pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
     let mut gym = Gym::default();
@@ -147,6 +147,8 @@ pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
         let tid = gym.templates.iter().find(|t| t.name == n).map(|t| t.id);
         gym.rotation.items.push(RotItem { template_id: tid, rest: false });
     }
+    // a full rest day closes the cycle: Legs + Abs 2 -> light Cardio -> Rest -> Push 1
+    gym.rotation.items.push(RotItem { template_id: None, rest: true });
     gym.rotation.next_index = 0;
     gym
 }
@@ -173,6 +175,26 @@ pub fn migrate(st: &mut State) -> bool {
     if st.version >= STATE_VERSION {
         return false;
     }
+    if st.version < 2 {
+        migrate_v1_gym(st);
+    }
+    // v2 -> v3: the untouched 8-workout default rotation gains a rest day at the end of the cycle
+    let names: Vec<Option<String>> = st
+        .gym
+        .rotation
+        .items
+        .iter()
+        .map(|it| if it.rest { None } else { it.template_id.and_then(|id| st.gym.templates.iter().find(|t| t.id == id)).map(|t| t.name.clone()) })
+        .collect();
+    let default: Vec<Option<String>> = ROTATION.iter().map(|n| Some(n.to_string())).collect();
+    if names == default {
+        st.gym.rotation.items.push(RotItem { template_id: None, rest: true });
+    }
+    st.version = STATE_VERSION;
+    true
+}
+
+fn migrate_v1_gym(st: &mut State) {
     let mut names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
     names.sort_unstable();
     let mut old: Vec<&str> = OLD_DEFAULT_NAMES.to_vec();
@@ -210,8 +232,6 @@ pub fn migrate(st: &mut State) -> bool {
         gym.sessions = sessions;
         st.gym = gym;
     }
-    st.version = STATE_VERSION;
-    true
 }
 
 struct T<'a> {

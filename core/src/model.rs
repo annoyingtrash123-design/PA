@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 2;
+pub const STATE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]

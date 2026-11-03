@@ -29,7 +29,7 @@ export async function startCore(): Promise<void> {
   ready = true;
   if (!saved) void persist();
   // upgrade an older stored state (the core does it on any call; this one makes it persist right away)
-  else if (saved.version < 2) api("GET", "/api/state/migrate");
+  else api("GET", "/api/state/migrate"); // no-op unless the stored state is older than the core
 }
 
 let saving: Promise<void> = Promise.resolve();

@@ -57,15 +57,15 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 2);
+    assert_eq!(st.version, 3);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
     let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, ["Push 1", "Push 2", "Pull 1", "Pull 2", "Legs + Abs 1", "Legs + Abs 2", "Cardio"]);
-    assert_eq!(st.gym.rotation.items.len(), 8);
-    let rot: Vec<&str> = st.gym.rotation.items.iter().map(|i| st.gym.templates.iter().find(|t| Some(t.id) == i.template_id).unwrap().name.as_str()).collect();
-    assert_eq!(rot, ["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio"]);
+    assert_eq!(st.gym.rotation.items.len(), 9);
+    let rot: Vec<&str> = st.gym.rotation.items.iter().map(|i| if i.rest { "Rest" } else { st.gym.templates.iter().find(|t| Some(t.id) == i.template_id).unwrap().name.as_str() }).collect();
+    assert_eq!(rot, ["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio", "Rest"]);
     assert!(st.gym.templates.iter().filter(|t| t.kind == "strength").all(|t| t.exercises.iter().all(|e| e.sets == 4 && e.rep_min == 10 && e.rep_max == 10)));
     assert!(st.tasks.is_empty() && st.goals.is_empty() && st.gym.sessions.is_empty() && st.memory.notes.is_empty());
     assert_eq!(st.settings.location_name, "Sydney");
@@ -232,8 +232,8 @@ fn gym_projection_over_the_eight_item_cycle() {
     // sample data: Push 1, Pull 1, Legs + Abs 1, Cardio done => today is Push 2
     let days = a.get("/api/days?start=2026-11-01&days=10");
     assert!(days[0]["workout"].is_null(), "past days have no workout");
-    let names: Vec<&str> = (1..10).map(|i| days[i]["workout"]["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["Push 2", "Pull 2", "Legs + Abs 2", "Cardio", "Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2"]);
+    let names: Vec<&str> = (1..10).map(|i| if days[i]["workout"]["rest"] == true { "Rest" } else { days[i]["workout"]["name"].as_str().unwrap() }).collect();
+    assert_eq!(names, ["Push 2", "Pull 2", "Legs + Abs 2", "Cardio", "Rest", "Push 1", "Pull 1", "Legs + Abs 1", "Cardio"]);
     assert_eq!(days[4]["workout"]["kind"], "cardio");
     assert_eq!(a.get("/api/gym/next")["name"], "Push 2");
 }
@@ -368,7 +368,7 @@ fn cardio_session_flow() {
     assert_eq!(c["cardio"]["activity"], "Swimming");
     // the first Cardio item at/after next_index (index 7, since next is Push 2 at 4) was passed
     assert_eq!(rot_before, 4);
-    assert_eq!(a.get("/api/rotation")["next_index"], 0);
+    assert_eq!(a.get("/api/rotation")["next_index"], 8, "the rest day follows the second cardio");
     // a strength session is not a cardio one
     let push = a.post("/api/sessions", json!({"template_id": tpl(&a, "Push 1").id}));
     assert_eq!(a.req("PUT", &format!("/api/sessions/{}/cardio", push["id"]), json!({"activity": "x", "minutes": 5})).0, 400);
@@ -472,12 +472,12 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 2);
+        assert_eq!(r["state"]["version"], 3);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["Push 1", "Push 2", "Pull 1", "Pull 2", "Legs + Abs 1", "Legs + Abs 2", "Cardio"]);
-        assert_eq!(st.gym.rotation.items.len(), 8);
+        assert_eq!(st.gym.rotation.items.len(), 9);
         assert_eq!(st.gym.rotation.next_index, 0);
         assert!(st.gym.sessions.is_empty(), "sessions of the old defaults are dropped");
         assert!(st.gym.exercises.iter().all(|e| e.name != "Bench Press"));
@@ -488,7 +488,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 2);
+        assert_eq!(m["version"], 3);
     }
 }
 
@@ -498,14 +498,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 2);
+    assert_eq!(r["body"]["version"], 3);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 2);
+    assert_eq!(r["state"]["version"], 3);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -518,7 +518,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 2);
+    assert_eq!(imp["version"], 3);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -739,4 +739,19 @@ fn evening_and_weekly_templates_render() {
         assert!(words_in(&t) > 40, "{kind:?}: {t}");
         assert!(!has_stats(&t));
     }
+}
+
+#[test]
+fn v2_default_rotation_gains_a_rest_day_but_custom_rotation_is_untouched() {
+    let mut st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
+    st.gym.rotation.items.pop(); // a v2 state: the 8-workout default, no rest
+    st.version = 2;
+    let mut custom = st.clone();
+    assert!(crate::seed::migrate(&mut st));
+    assert_eq!(st.version, 3);
+    assert_eq!(st.gym.rotation.items.len(), 9);
+    assert!(st.gym.rotation.items[8].rest);
+    custom.gym.rotation.items.swap(0, 1); // customised order: leave it alone
+    assert!(crate::seed::migrate(&mut custom));
+    assert_eq!(custom.gym.rotation.items.len(), 8);
 }
