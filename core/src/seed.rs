@@ -47,7 +47,29 @@ const REPS: i64 = 10;
 
 const CARDIO_OPTIONS: [&str; 4] = ["Swimming", "Rowing machine", "Stair machine", "Intense walking/hiking"];
 const OLD_DEFAULT_NAMES: [&str; 6] = ["Push A", "Push B", "Pull A", "Pull B", "Legs A", "Legs B"];
-const ROTATION: [&str; 8] = ["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio"];
+/// Push -> Pull -> Cardio -> Rest -> Legs, twice: legs always come fresh off a rest day and
+/// cardio never lands on sore legs. "Rest" is a rest item.
+const ROTATION: [&str; 10] = ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"];
+/// Earlier default rotations, replaced by `ROTATION` when found untouched in a stored state.
+const OLD_ROTATIONS: [&[&str]; 2] = [
+    &["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio"],
+    &["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio", "Rest"],
+];
+
+fn rotation_items(gym: &Gym) -> Vec<RotItem> {
+    ROTATION
+        .iter()
+        .map(|n| if *n == "Rest" { RotItem { template_id: None, rest: true } } else { RotItem { template_id: gym.templates.iter().find(|t| t.name == *n).map(|t| t.id), rest: false } })
+        .collect()
+}
+
+fn rotation_names(gym: &Gym) -> Vec<String> {
+    gym.rotation
+        .items
+        .iter()
+        .map(|it| if it.rest { "Rest".to_string() } else { it.template_id.and_then(|id| gym.templates.iter().find(|t| t.id == id)).map(|t| t.name.clone()).unwrap_or_default() })
+        .collect()
+}
 
 fn strength_templates() -> Vec<(&'static str, &'static str, Vec<Def>)> {
     vec![
@@ -109,7 +131,7 @@ fn strength_templates() -> Vec<(&'static str, &'static str, Vec<Def>)> {
     ]
 }
 
-/// The owner's routine: exercises, templates (shared exercises by name) and the 9-item rotation (8 workouts + rest).
+/// The owner's routine: exercises, templates (shared exercises by name) and the 10-item rotation.
 /// Ids come from `next`.
 pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
     let mut gym = Gym::default();
@@ -143,12 +165,7 @@ pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
         minutes_min: Some(20),
         minutes_max: Some(40),
     });
-    for n in ROTATION {
-        let tid = gym.templates.iter().find(|t| t.name == n).map(|t| t.id);
-        gym.rotation.items.push(RotItem { template_id: tid, rest: false });
-    }
-    // a full rest day closes the cycle: Legs + Abs 2 -> light Cardio -> Rest -> Push 1
-    gym.rotation.items.push(RotItem { template_id: None, rest: true });
+    gym.rotation.items = rotation_items(&gym);
     gym.rotation.next_index = 0;
     gym
 }
@@ -178,17 +195,13 @@ pub fn migrate(st: &mut State) -> bool {
     if st.version < 2 {
         migrate_v1_gym(st);
     }
-    // v2 -> v3: the untouched 8-workout default rotation gains a rest day at the end of the cycle
-    let names: Vec<Option<String>> = st
-        .gym
-        .rotation
-        .items
-        .iter()
-        .map(|it| if it.rest { None } else { it.template_id.and_then(|id| st.gym.templates.iter().find(|t| t.id == id)).map(|t| t.name.clone()) })
-        .collect();
-    let default: Vec<Option<String>> = ROTATION.iter().map(|n| Some(n.to_string())).collect();
-    if names == default {
-        st.gym.rotation.items.push(RotItem { template_id: None, rest: true });
+    // v2/v3 -> v4: an untouched earlier default rotation becomes Push, Pull, Cardio, Rest, Legs (x2),
+    // keeping the same workout up next
+    let names = rotation_names(&st.gym);
+    if OLD_ROTATIONS.iter().any(|old| names.iter().map(String::as_str).eq(old.iter().copied())) {
+        let next_name = names.get(st.gym.rotation.next_index).cloned().unwrap_or_default();
+        st.gym.rotation.items = rotation_items(&st.gym);
+        st.gym.rotation.next_index = ROTATION.iter().position(|n| *n == next_name).unwrap_or(0);
     }
     st.version = STATE_VERSION;
     true
@@ -352,7 +365,7 @@ pub fn sample_data(env: &mut Env) -> Value {
         added_sessions += 1;
     }
     if added_sessions > 0 {
-        // the default rotation is Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, ...: next is Push 2
+        // the sample sessions cover the first half of the cycle: next is Push 2
         if let Some(i) = env.st.gym.rotation.items.iter().position(|it| it.template_id == env.st.gym.templates.iter().find(|t| t.name == "Push 2").map(|t| t.id)) {
             env.st.gym.rotation.next_index = i;
         }

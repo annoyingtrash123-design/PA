@@ -39,7 +39,7 @@
 
 ### Gym
 - Workout templates with variations (e.g. Push A, Push B, Pull A, Legs A).
-- Rolling rotation (e.g. Push → Pull → Legs → Rest): the next workout follows the last one completed. It appears automatically in the day and the briefing.
+- Rolling rotation, default: Push 1 → Pull 1 → Cardio → Rest → Legs + Abs 1 → Push 2 → Pull 2 → Cardio → Rest → Legs + Abs 2 (legs always come off a rest day; cardio never on sore legs). The next workout follows the last one completed and appears in the day and the briefing.
 - Workout mode: tick off sets and log weight/reps, with last session's numbers shown beside each exercise.
 - Weight history per exercise over time.
 - Progression hints (e.g. all reps hit → suggest +2.5 kg).
