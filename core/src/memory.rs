@@ -32,6 +32,10 @@ pub fn context_block(m: &Memory) -> String {
         if w.likes_rain { "they like rain" } else { "they do not especially like rain" },
         if w.avoid_sunburn { "they want to avoid sunburn (suggest sun cream or shade when UV is high)" } else { "sunburn is not a particular concern" },
     ));
+    s.push_str(&format!(
+        "  - Temperature outranks rain: if the day's high is above {} C it is hot for them (too hot above {} C), even when it rains; never call a hot rainy day pleasant or the kind of weather they like (say muggy, sticky, too warm instead).\n",
+        w.hot_above, w.too_hot_above,
+    ));
     let k = &m.work;
     if k.enabled {
         s.push_str(&format!(

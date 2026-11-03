@@ -52,6 +52,8 @@ pub fn context_line(info: &DayInfo, label: &str) -> String {
 enum Feel {
     Snow,
     Rain,
+    /// rain, but above the "hot" threshold: muggy, not the cosy rain they enjoy
+    HotRain,
     TooHot,
     Hot,
     Warm,
@@ -68,6 +70,8 @@ fn feel(w: &Weather, p: &WeatherPrefs) -> Feel {
     let t = w.temp_max as f64;
     if w.summary.to_lowercase().contains("snow") {
         Feel::Snow
+    } else if is_rainy(w) && t > p.hot_above {
+        Feel::HotRain
     } else if is_rainy(w) {
         Feel::Rain
     } else if t > p.too_hot_above {
@@ -134,6 +138,14 @@ pub fn weather_comment_template(w: &Weather, mem: &Memory, items: &[Occurrence],
             format!("A wet one today, {t} degrees at most, so keep an umbrella close."),
             format!("Rain on the way and {t} degrees at best, so not the nicest of days outside."),
         ]),
+        Feel::HotRain if t as f64 > p.too_hot_above => v(vec![
+            format!("Rain about, but it's still {t} degrees, which is too hot for you, so expect it to be sticky rather than cosy. Keep cool and keep an umbrella handy."),
+            format!("A hot, muggy one: {t} degrees with showers around, well past what you find comfortable. Light clothes, water close, and an umbrella."),
+        ]),
+        Feel::HotRain => v(vec![
+            format!("Showers today, but warm with it at {t} degrees, more than you like, so it'll feel muggy rather than cosy."),
+            format!("Rain around and {t} degrees, warmer than your comfort zone, so dress light and keep an umbrella close."),
+        ]),
         Feel::TooHot => v(vec![
             format!("It's a hot one, {t} degrees, which is past what you find comfortable. Keep water close and take it slowly in the afternoon."),
             format!("Properly hot today at {t} degrees, more than you enjoy, so go easy on yourself and keep cool."),
@@ -160,11 +172,12 @@ pub fn weather_comment_template(w: &Weather, mem: &Memory, items: &[Occurrence],
         })
     } else {
         match (&pl, f) {
-            (Plans::Outdoor(t), Feel::Rain | Feel::Snow) => Some(format!("Maybe plan {t} around the weather, or take a proper coat.")),
+            (Plans::Outdoor(t), Feel::Rain | Feel::Snow | Feel::HotRain) => Some(format!("Maybe plan {t} around the weather, or take a proper coat.")),
             (Plans::Outdoor(t), Feel::TooHot | Feel::Hot) => Some(format!("Do {t} early or late, away from the heat.")),
             (Plans::Outdoor(t), _) => Some(format!("A good backdrop for {t}.")),
             (Plans::Office, Feel::Rain) if p.likes_rain => Some("Nice to listen to from your desk, though take an umbrella for the commute.".into()),
             (Plans::Office, Feel::Rain | Feel::Snow) => Some("Take an umbrella and a coat for the commute.".into()),
+            (Plans::Office, Feel::HotRain) => Some("Take an umbrella for the commute and keep a bottle of water on your desk.".into()),
             (Plans::Office, Feel::TooHot | Feel::Hot) => Some("Sounds like an office day, so keep a bottle of water on your desk.".into()),
             (Plans::Office, _) => Some("Easy weather for the office commute.".into()),
             (Plans::Desk, Feel::Rain) if p.likes_rain => Some("A cosy backdrop for the work you have on.".into()),
@@ -172,7 +185,7 @@ pub fn weather_comment_template(w: &Weather, mem: &Memory, items: &[Occurrence],
             (Plans::Off, Feel::Rain | Feel::Snow) => Some("A lovely excuse for a slow day off.".into()),
             (Plans::Off, Feel::TooHot | Feel::Hot) => Some("Good day off for staying cool and doing very little.".into()),
             (Plans::Off, _) => Some("A nice backdrop for a day off.".into()),
-            (Plans::Gym, Feel::TooHot | Feel::Hot) => Some("Drink plenty before the gym.".into()),
+            (Plans::Gym, Feel::TooHot | Feel::Hot | Feel::HotRain) => Some("Drink plenty before the gym.".into()),
             (Plans::Gym, Feel::Rain) => Some("At least the rain gives the gym an easy excuse to be the main outing.".into()),
             (_, Feel::Rain) if p.likes_rain => Some("Cosy if you're home, and nice to listen to from the window.".into()),
             _ => None,

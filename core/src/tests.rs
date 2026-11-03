@@ -897,3 +897,17 @@ fn skip_advances_past_a_workout_or_rest_without_logging() {
     a.post("/api/gym/skip", json!({}));
     assert_eq!(a.get("/api/gym/next")["name"], "Legs + Abs 1");
 }
+
+#[test]
+fn hot_rain_is_never_the_kind_of_weather_they_like() {
+    let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
+    let w = crate::model::Weather { summary: "Light rain".into(), temp_max: 27, temp_min: 20, precip_prob: Some(80), uv_max: Some(2.0) };
+    for i in 0..10 {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 11, 1 + i).unwrap();
+        let info = crate::tasks::DayInfo::default();
+        let c = crate::digest::weather_comment_template(&w, &st.memory, &[], &None, &info, d);
+        assert!(!c.contains("you like") && !c.contains("suits you") && !c.contains("don't mind"), "{c}");
+        assert!(c.contains("27"), "{c}");
+    }
+    assert!(crate::memory::context_block(&st.memory).contains("Temperature outranks rain"));
+}
