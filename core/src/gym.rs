@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 #[derive(Deserialize)]
 pub struct ExerciseIn {
     name: String,
+    #[serde(default)]
+    assisted: Option<bool>,
 }
 
 fn exercise_name_ok(name: &str) -> Res<&str> {
@@ -37,7 +39,7 @@ pub fn create_exercise(env: &mut Env, b: ExerciseIn) -> Res<Exercise> {
     if name_taken(env.st, &name, None) {
         return Err(ApiErr::bad("an exercise with that name already exists"));
     }
-    let e = Exercise { id: env.st.new_id(), name };
+    let e = Exercise { id: env.st.new_id(), name, assisted: b.assisted.unwrap_or(false) };
     env.st.gym.exercises.push(e.clone());
     env.changed = true;
     Ok(e)
@@ -53,6 +55,9 @@ pub fn update_exercise(env: &mut Env, id: i64, b: ExerciseIn) -> Res<Exercise> {
     }
     let e = env.st.gym.exercises.iter_mut().find(|e| e.id == id).unwrap();
     e.name = name.clone();
+    if let Some(a) = b.assisted {
+        e.assisted = a;
+    }
     let out = e.clone();
     for t in env.st.gym.templates.iter_mut() {
         for te in t.exercises.iter_mut().filter(|te| te.exercise_id == id) {
@@ -87,13 +92,30 @@ pub struct TemplateExerciseIn {
     sets: i64,
     rep_min: i64,
     rep_max: i64,
+    #[serde(default)]
+    start_weight: Option<f64>,
+    #[serde(default)]
+    note: Option<String>,
+    /// Also sets the (shared) exercise's assisted flag when given.
+    #[serde(default)]
+    assisted: Option<bool>,
 }
 
 #[derive(Deserialize)]
 pub struct TemplateIn {
     name: String,
     #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
     exercises: Vec<TemplateExerciseIn>,
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(default)]
+    minutes_min: Option<i64>,
+    #[serde(default)]
+    minutes_max: Option<i64>,
 }
 
 fn find_or_create_exercise(st: &mut State, name: &str) -> i64 {
@@ -101,7 +123,7 @@ fn find_or_create_exercise(st: &mut State, name: &str) -> i64 {
         return e.id;
     }
     let id = st.new_id();
-    st.gym.exercises.push(Exercise { id, name: name.to_string() });
+    st.gym.exercises.push(Exercise { id, name: name.to_string(), assisted: false });
     id
 }
 
@@ -110,6 +132,9 @@ fn build_template_exercises(st: &mut State, list: &[TemplateExerciseIn]) -> Res<
     for e in list {
         if e.sets < 1 || e.rep_min < 1 || e.rep_max < e.rep_min {
             return Err(ApiErr::bad("sets and reps must be positive and rep_min <= rep_max"));
+        }
+        if e.start_weight.is_some_and(|w| !w.is_finite() || w < 0.0) {
+            return Err(ApiErr::bad("start_weight must be a non-negative number"));
         }
         match (e.exercise_id, e.name.as_deref().map(str::trim).filter(|n| !n.is_empty())) {
             (Some(id), _) => {
@@ -128,37 +153,73 @@ fn build_template_exercises(st: &mut State, list: &[TemplateExerciseIn]) -> Res<
             (None, Some(n)) => find_or_create_exercise(st, n),
             _ => unreachable!(),
         };
+        if let Some(a) = e.assisted {
+            if let Some(x) = st.gym.exercises.iter_mut().find(|x| x.id == id) {
+                x.assisted = a;
+            }
+        }
         let name = st.gym.exercises.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
-        out.push(TemplateExercise { exercise_id: id, name, sets: e.sets, rep_min: e.rep_min, rep_max: e.rep_max });
+        out.push(TemplateExercise {
+            exercise_id: id,
+            name,
+            sets: e.sets,
+            rep_min: e.rep_min,
+            rep_max: e.rep_max,
+            start_weight: e.start_weight,
+            note: e.note.as_deref().unwrap_or("").trim().to_string(),
+        });
     }
     Ok(out)
 }
 
-pub fn create_template(env: &mut Env, b: TemplateIn) -> Res<Template> {
+/// Validated fields shared by create and update (everything but the id).
+fn build_template(st: &mut State, id: i64, b: &TemplateIn) -> Res<Template> {
     if b.name.trim().is_empty() {
         return Err(ApiErr::bad("template name cannot be empty"));
     }
-    let exercises = build_template_exercises(env.st, &b.exercises)?;
-    let t = Template { id: env.st.new_id(), name: b.name.trim().to_string(), exercises };
+    let kind = b.kind.as_deref().map(str::trim).filter(|k| !k.is_empty()).unwrap_or("strength").to_string();
+    if kind != "strength" && kind != "cardio" {
+        return Err(ApiErr::bad("kind must be strength or cardio"));
+    }
+    let note = b.note.as_deref().unwrap_or("").trim().to_string();
+    if kind == "cardio" {
+        let mut options: Vec<String> = vec![];
+        for o in b.options.iter().map(|o| o.trim()).filter(|o| !o.is_empty()) {
+            if !options.iter().any(|x| x.eq_ignore_ascii_case(o)) {
+                options.push(o.to_string());
+            }
+        }
+        if options.is_empty() {
+            return Err(ApiErr::bad("a cardio template needs at least one option"));
+        }
+        let (lo, hi) = (b.minutes_min.unwrap_or(20), b.minutes_max.unwrap_or(40));
+        if lo < 1 || hi < lo || hi > 600 {
+            return Err(ApiErr::bad("minutes must be positive and minutes_min <= minutes_max"));
+        }
+        return Ok(Template { id, name: b.name.trim().to_string(), kind, note, exercises: vec![], options, minutes_min: Some(lo), minutes_max: Some(hi) });
+    }
+    let exercises = build_template_exercises(st, &b.exercises)?;
+    Ok(Template { id, name: b.name.trim().to_string(), kind, note, exercises, options: vec![], minutes_min: None, minutes_max: None })
+}
+
+pub fn create_template(env: &mut Env, b: TemplateIn) -> Res<Template> {
+    let id = env.st.next_id;
+    let t = build_template(env.st, id, &b)?;
+    env.st.new_id();
     env.st.gym.templates.push(t.clone());
     env.changed = true;
     Ok(t)
 }
 
 pub fn update_template(env: &mut Env, id: i64, b: TemplateIn) -> Res<Template> {
-    if b.name.trim().is_empty() {
-        return Err(ApiErr::bad("template name cannot be empty"));
-    }
     if !env.st.gym.templates.iter().any(|t| t.id == id) {
         return Err(ApiErr::not_found("template not found"));
     }
-    let exercises = build_template_exercises(env.st, &b.exercises)?;
+    let nt = build_template(env.st, id, &b)?;
     let t = env.st.gym.templates.iter_mut().find(|t| t.id == id).unwrap();
-    t.name = b.name.trim().to_string();
-    t.exercises = exercises;
-    let out = t.clone();
+    *t = nt.clone();
     env.changed = true;
-    Ok(out)
+    Ok(nt)
 }
 
 pub fn delete_template(env: &mut Env, id: i64) -> Res<Value> {
@@ -253,6 +314,9 @@ pub struct PlanExercise {
     pub last: Option<Last>,
     pub suggested_weight: Option<f64>,
     pub hint: Option<String>,
+    pub assisted: bool,
+    pub start_weight: Option<f64>,
+    pub note: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -260,7 +324,18 @@ pub struct WorkoutPlan {
     pub rest: bool,
     pub template_id: Option<i64>,
     pub name: String,
+    pub kind: String,
+    pub note: String,
     pub exercises: Vec<PlanExercise>,
+    pub options: Vec<String>,
+    pub minutes_min: Option<i64>,
+    pub minutes_max: Option<i64>,
+}
+
+impl WorkoutPlan {
+    pub fn is_cardio(&self) -> bool {
+        self.kind == "cardio"
+    }
 }
 
 pub fn fmt_w(w: f64) -> String {
@@ -285,9 +360,17 @@ fn last_for(st: &State, exercise_id: i64, before: Option<&str>) -> Option<Last> 
 }
 
 /// Progression rule: all sets at the same weight W with reps >= rep_max -> W + 2.5, else W.
-pub fn suggest(last: &Last, rep_max: i64) -> (f64, String) {
+/// Assisted (counterweight) exercises go the other way: W - 2.5 (never below 0).
+pub fn suggest(last: &Last, rep_max: i64, assisted: bool) -> (f64, String) {
     let w = last.sets.iter().map(|s| s.weight).fold(0.0, f64::max);
     let all_hit = !last.sets.is_empty() && last.sets.iter().all(|s| (s.weight - w).abs() < 1e-9 && s.reps >= rep_max);
+    if assisted {
+        if all_hit && w > 0.0 {
+            let down = (w - 2.5).max(0.0);
+            return (down, "You hit every rep last time, try 2.5 kg less counterweight".to_string());
+        }
+        return (w, format!("Stay at {} kg counterweight and aim for {} reps on every set", fmt_w(w), rep_max));
+    }
     if all_hit {
         let up = w + 2.5;
         (up, format!("You hit {} reps on every set last time, try {} kg", rep_max, fmt_w(up)))
@@ -297,7 +380,7 @@ pub fn suggest(last: &Last, rep_max: i64) -> (f64, String) {
 }
 
 pub fn rest_plan() -> WorkoutPlan {
-    WorkoutPlan { rest: true, template_id: None, name: "Rest day".into(), exercises: vec![] }
+    WorkoutPlan { rest: true, template_id: None, name: "Rest day".into(), kind: "strength".into(), note: String::new(), exercises: vec![], options: vec![], minutes_min: None, minutes_max: None }
 }
 
 pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<WorkoutPlan> {
@@ -305,12 +388,14 @@ pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<W
     let mut exercises = vec![];
     for e in &t.exercises {
         let last = last_for(st, e.exercise_id, before);
-        let (sw, hint) = match &last {
-            Some(l) => {
-                let (w, h) = suggest(l, e.rep_max);
+        let assisted = st.gym.exercises.iter().any(|x| x.id == e.exercise_id && x.assisted);
+        let (sw, hint) = match (&last, e.start_weight) {
+            (Some(l), _) => {
+                let (w, h) = suggest(l, e.rep_max, assisted);
                 (Some(w), Some(h))
             }
-            None => (None, None),
+            (None, Some(w)) => (Some(w), Some(format!("Starting weight: {} kg", fmt_w(w)))),
+            (None, None) => (None, None),
         };
         exercises.push(PlanExercise {
             exercise_id: e.exercise_id,
@@ -321,9 +406,22 @@ pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<W
             last,
             suggested_weight: sw,
             hint,
+            assisted,
+            start_weight: e.start_weight,
+            note: e.note.clone(),
         });
     }
-    Some(WorkoutPlan { rest: false, template_id: Some(tid), name: t.name.clone(), exercises })
+    Some(WorkoutPlan {
+        rest: false,
+        template_id: Some(tid),
+        name: t.name.clone(),
+        kind: t.kind.clone(),
+        note: t.note.clone(),
+        exercises,
+        options: t.options.clone(),
+        minutes_min: t.minutes_min,
+        minutes_max: t.minutes_max,
+    })
 }
 
 fn plan_for_item(st: &State, it: &RotItem, before: Option<&str>) -> WorkoutPlan {
@@ -337,6 +435,29 @@ fn plan_for_item(st: &State, it: &RotItem, before: Option<&str>) -> WorkoutPlan 
 pub fn completed_session_on(st: &State, d: NaiveDate) -> Option<(i64, Option<i64>, String)> {
     let ds = fmt_date(d);
     st.gym.sessions.iter().filter(|s| s.date == ds && s.completed).max_by_key(|s| s.id).map(|s| (s.id, s.template_id, s.name.clone()))
+}
+
+/// The cardio record of the latest completed session on a date, if it was a cardio one.
+pub fn cardio_done_on(st: &State, d: NaiveDate) -> Option<Cardio> {
+    let ds = fmt_date(d);
+    st.gym.sessions.iter().filter(|s| s.date == ds && s.completed).max_by_key(|s| s.id).and_then(|s| s.cardio.clone())
+}
+
+/// A natural phrase for a cardio session: "a swim", "40 minutes on the rowing machine".
+pub fn cardio_phrase(c: &Cardio) -> String {
+    let a = c.activity.trim().to_lowercase();
+    let m = c.minutes;
+    if a.starts_with("swim") {
+        "a swim".to_string()
+    } else if a.contains("walk") || a.contains("hik") {
+        format!("{m} minutes of intense walking")
+    } else if a.contains("machine") {
+        format!("{m} minutes on the {a}")
+    } else if a.is_empty() {
+        format!("{m} minutes of cardio")
+    } else {
+        format!("{m} minutes of {a}")
+    }
 }
 
 /// Workout projection per day (None for past days or when no rotation is set up).
@@ -401,21 +522,30 @@ pub fn session_create(env: &mut Env, b: SessionIn) -> Res<Session> {
         return Ok(s.clone());
     }
     let plan = plan_for_template(env.st, t.id, Some(&td)).ok_or_else(|| ApiErr::bad("template does not exist"))?;
+    if t.kind == "cardio" {
+        let (lo, hi) = (t.minutes_min.unwrap_or(1), t.minutes_max.unwrap_or(600));
+        let cardio = Cardio { activity: String::new(), minutes: 30.clamp(lo, hi.max(lo)) };
+        let s = Session { id: env.st.new_id(), template_id: Some(t.id), name: t.name, date: td, completed: false, sets: vec![], cardio: Some(cardio) };
+        env.st.gym.sessions.push(s.clone());
+        env.changed = true;
+        return Ok(s);
+    }
     let mut sets = vec![];
     for e in &plan.exercises {
         for n in 1..=e.sets {
             let (w, reps) = match (&e.last, e.suggested_weight) {
                 (Some(l), Some(sw)) => {
                     let last_w = l.sets.iter().map(|s| s.weight).fold(0.0, f64::max);
-                    let reps = if sw > last_w { e.rep_min } else { l.sets.get((n - 1) as usize).or(l.sets.last()).map(|s| s.reps).unwrap_or(e.rep_min) };
+                    let reps = if (sw - last_w).abs() > 1e-9 { e.rep_min } else { l.sets.get((n - 1) as usize).or(l.sets.last()).map(|s| s.reps).unwrap_or(e.rep_min) };
                     (sw, reps)
                 }
+                (None, Some(sw)) => (sw, e.rep_min),
                 _ => (0.0, e.rep_min),
             };
             sets.push(SetRec { exercise_id: e.exercise_id, set_no: n, weight: w, reps, done: false });
         }
     }
-    let s = Session { id: env.st.new_id(), template_id: Some(t.id), name: t.name, date: td, completed: false, sets };
+    let s = Session { id: env.st.new_id(), template_id: Some(t.id), name: t.name, date: td, completed: false, sets, cardio: None };
     env.st.gym.sessions.push(s.clone());
     env.changed = true;
     Ok(s)
@@ -449,8 +579,36 @@ pub fn session_sets(env: &mut Env, id: i64, b: SetsIn) -> Res<Session> {
     Ok(s.clone())
 }
 
+#[derive(Deserialize)]
+pub struct CardioIn {
+    #[serde(default)]
+    activity: String,
+    minutes: i64,
+}
+
+pub fn session_cardio(env: &mut Env, id: i64, b: CardioIn) -> Res<Session> {
+    let s = session_get(env.st, id)?;
+    if s.cardio.is_none() {
+        return Err(ApiErr::bad("this is not a cardio session"));
+    }
+    let activity = b.activity.trim().to_string();
+    if activity.chars().count() > 80 {
+        return Err(ApiErr::bad("activity is too long"));
+    }
+    if !(1..=600).contains(&b.minutes) {
+        return Err(ApiErr::bad("minutes must be between 1 and 600"));
+    }
+    let s = env.st.gym.sessions.iter_mut().find(|s| s.id == id).unwrap();
+    s.cardio = Some(Cardio { activity, minutes: b.minutes });
+    env.changed = true;
+    Ok(s.clone())
+}
+
 pub fn session_complete(env: &mut Env, id: i64) -> Res<Session> {
     let s = session_get(env.st, id)?;
+    if s.cardio.as_ref().is_some_and(|c| c.activity.trim().is_empty()) && !s.completed {
+        return Err(ApiErr::bad("pick what you did first"));
+    }
     if !s.completed {
         env.st.gym.sessions.iter_mut().find(|x| x.id == id).unwrap().completed = true;
         // advance the rotation past this template (searching forward from the current position)
@@ -471,9 +629,11 @@ pub fn session_complete(env: &mut Env, id: i64) -> Res<Session> {
 #[derive(Serialize, Clone, Debug)]
 pub struct HistoryPoint {
     pub date: String,
+    /// For assisted exercises this is the LOWEST counterweight of the session (the best one).
     pub top_weight: f64,
     pub best_reps: i64,
-    pub est_1rm: f64,
+    /// null for assisted exercises (a 1RM estimate makes no sense there).
+    pub est_1rm: Option<f64>,
 }
 
 pub fn exercise_history(st: &State, id: i64) -> Res<Vec<HistoryPoint>> {
@@ -492,6 +652,7 @@ pub fn history(st: &State, id: i64, from: Option<&str>, to: Option<&str>) -> Vec
         .filter(|s| s.completed && from.is_none_or(|f| s.date.as_str() >= f) && to.is_none_or(|t| s.date.as_str() <= t))
         .collect();
     sessions.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
+    let assisted = st.gym.exercises.iter().any(|e| e.id == id && e.assisted);
     let mut out = vec![];
     for s in sessions {
         let mut sets: Vec<&SetRec> = s.sets.iter().filter(|x| x.exercise_id == id && x.done).collect();
@@ -499,40 +660,42 @@ pub fn history(st: &State, id: i64, from: Option<&str>, to: Option<&str>) -> Vec
             continue;
         }
         sets.sort_by_key(|x| x.set_no);
-        let mut p: Option<HistoryPoint> = None;
+        let mut p: Option<(HistoryPoint, f64)> = None;
         for x in sets {
             let e1 = x.weight * (1.0 + x.reps as f64 / 30.0);
             match p.as_mut() {
-                None => p = Some(HistoryPoint { date: s.date.clone(), top_weight: x.weight, best_reps: x.reps, est_1rm: e1 }),
-                Some(p) => {
-                    if x.weight > p.top_weight {
+                None => p = Some((HistoryPoint { date: s.date.clone(), top_weight: x.weight, best_reps: x.reps, est_1rm: None }, e1)),
+                Some((p, best)) => {
+                    let better = if assisted { x.weight < p.top_weight } else { x.weight > p.top_weight };
+                    if better {
                         p.top_weight = x.weight;
                         p.best_reps = x.reps;
                     } else if (x.weight - p.top_weight).abs() < 1e-9 && x.reps > p.best_reps {
                         p.best_reps = x.reps;
                     }
-                    p.est_1rm = p.est_1rm.max(e1);
+                    *best = best.max(e1);
                 }
             }
         }
-        if let Some(mut p) = p {
-            p.est_1rm = (p.est_1rm * 10.0).round() / 10.0;
+        if let Some((mut p, best)) = p {
+            p.est_1rm = if assisted { None } else { Some((best * 10.0).round() / 10.0) };
             out.push(p);
         }
     }
     out
 }
 
-/// Completed sessions in [from, to] as (date, name).
-pub fn sessions_between(st: &State, from: NaiveDate, to: NaiveDate) -> Vec<(String, String)> {
+/// Completed sessions in [from, to] as (date, name, cardio).
+pub fn sessions_between(st: &State, from: NaiveDate, to: NaiveDate) -> Vec<(String, String, Option<Cardio>)> {
     let (f, t) = (fmt_date(from), fmt_date(to));
     let mut v: Vec<&Session> = st.gym.sessions.iter().filter(|s| s.completed && s.date >= f && s.date <= t).collect();
     v.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
-    v.into_iter().map(|s| (s.date.clone(), s.name.clone())).collect()
+    v.into_iter().map(|s| (s.date.clone(), s.name.clone(), s.cardio.clone())).collect()
 }
 
 /// Exercises with a new best top weight during [from, to] versus everything before `from`.
-pub fn weekly_prs(st: &State, from: NaiveDate, to: NaiveDate) -> Vec<(String, f64, f64)> {
+/// Each entry is (name, now, was, assisted); for assisted exercises "better" means a lower counterweight.
+pub fn weekly_prs(st: &State, from: NaiveDate, to: NaiveDate) -> Vec<(String, f64, f64, bool)> {
     let (f, t) = (fmt_date(from), fmt_date(to));
     let mut exs: Vec<&Exercise> = st
         .gym
@@ -543,11 +706,15 @@ pub fn weekly_prs(st: &State, from: NaiveDate, to: NaiveDate) -> Vec<(String, f6
     exs.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = vec![];
     for e in exs {
-        let this = history(st, e.id, Some(&f), Some(&t)).iter().map(|p| p.top_weight).fold(0.0, f64::max);
-        let prev_to = fmt_date(from - Duration::days(1));
-        let prev = history(st, e.id, None, Some(&prev_to)).iter().map(|p| p.top_weight).fold(0.0, f64::max);
-        if prev > 0.0 && this > prev {
-            out.push((e.name.clone(), this, prev));
+        let best = |pts: Vec<HistoryPoint>| -> Option<f64> {
+            let ws = pts.iter().map(|p| p.top_weight);
+            if e.assisted { ws.reduce(f64::min) } else { ws.reduce(f64::max) }
+        };
+        let (Some(this), prev_to) = (best(history(st, e.id, Some(&f), Some(&t))), fmt_date(from - Duration::days(1))) else { continue };
+        let Some(prev) = best(history(st, e.id, None, Some(&prev_to))) else { continue };
+        let improved = if e.assisted { this < prev } else { prev > 0.0 && this > prev };
+        if improved {
+            out.push((e.name.clone(), this, prev, e.assisted));
         }
     }
     out

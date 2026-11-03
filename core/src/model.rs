@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 1;
+pub const STATE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -168,6 +168,9 @@ pub struct Memory {
 pub struct Exercise {
     pub id: i64,
     pub name: String,
+    /// Counterweighted / assisted machine: a HIGHER weight is EASIER, so progression goes down.
+    #[serde(default)]
+    pub assisted: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -177,14 +180,35 @@ pub struct TemplateExercise {
     pub sets: i64,
     pub rep_min: i64,
     pub rep_max: i64,
+    /// Suggested weight (kg) while the exercise has no history.
+    #[serde(default)]
+    pub start_weight: Option<f64>,
+    #[serde(default)]
+    pub note: String,
+}
+
+fn strength() -> String {
+    "strength".into()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Template {
     pub id: i64,
     pub name: String,
+    /// "strength" (default) or "cardio"
+    #[serde(default = "strength")]
+    pub kind: String,
+    #[serde(default)]
+    pub note: String,
     #[serde(default)]
     pub exercises: Vec<TemplateExercise>,
+    /// Cardio only: the activities to choose from.
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub minutes_min: Option<i64>,
+    #[serde(default)]
+    pub minutes_max: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -214,6 +238,14 @@ pub struct SetRec {
     pub done: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Cardio {
+    #[serde(default)]
+    pub activity: String,
+    #[serde(default)]
+    pub minutes: i64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Session {
     pub id: i64,
@@ -225,6 +257,9 @@ pub struct Session {
     pub completed: bool,
     #[serde(default)]
     pub sets: Vec<SetRec>,
+    /// Cardio sessions: what was done and for how long.
+    #[serde(default)]
+    pub cardio: Option<Cardio>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

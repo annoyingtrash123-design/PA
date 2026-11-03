@@ -62,13 +62,21 @@ export interface WorkoutExercise {
   last?: { date: string; sets: { weight: number; reps: number }[] } | null;
   suggested_weight?: number | null;
   hint?: string | null;
+  assisted?: boolean;
+  start_weight?: number | null;
+  note?: string;
 }
 
 export interface WorkoutPlan {
   rest: boolean;
   template_id?: number;
   name?: string;
+  kind?: TemplateKind;
+  note?: string;
   exercises?: WorkoutExercise[];
+  options?: string[];
+  minutes_min?: number | null;
+  minutes_max?: number | null;
 }
 
 export interface Day {
@@ -99,9 +107,13 @@ export interface Memory {
   notes: { id: number; text: string }[];
 }
 
+export type TemplateKind = "strength" | "cardio";
+
 export interface Exercise {
   id: number;
   name: string;
+  /** Counterweighted / assisted machine: a higher weight is easier. */
+  assisted?: boolean;
 }
 export interface TemplateExercise {
   exercise_id: number;
@@ -109,11 +121,20 @@ export interface TemplateExercise {
   sets: number;
   rep_min: number;
   rep_max: number;
+  start_weight?: number | null;
+  note?: string;
+  /** Write-only convenience for the template body: sets the shared exercise flag. */
+  assisted?: boolean;
 }
 export interface Template {
   id: number;
   name: string;
+  kind?: TemplateKind;
+  note?: string;
   exercises: TemplateExercise[];
+  options?: string[];
+  minutes_min?: number | null;
+  minutes_max?: number | null;
 }
 export interface Rotation {
   items: { template_id?: number; rest?: boolean }[];
@@ -133,12 +154,13 @@ export interface Session {
   date: string;
   completed: boolean;
   sets: SessionSet[];
+  cardio?: { activity: string; minutes: number } | null;
 }
 export interface HistoryPoint {
   date: string;
   top_weight: number;
   best_reps?: number;
-  est_1rm?: number;
+  est_1rm?: number | null;
 }
 
 export interface Weather {

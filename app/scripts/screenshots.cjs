@@ -68,10 +68,35 @@ const forecast = () => {
   await page.goto(BASE + "#/gym");
   await page.waitForSelector(".card");
   await shot("gym");
+  await shot("gym-full", true);
   await page.getByRole("button", { name: /(Start|Continue) workout/ }).click();
   await shot("workout");
+  await shot("workout-full", true);
   await page.getByRole("button", { name: /Back \(keeps/ }).click();
   for (const seg of ["Rotation", "Templates", "Progress"]) { await page.getByRole("tab", { name: seg }).click(); await shot(`gym-${seg.toLowerCase()}`); }
+  await shot("gym-templates-full", true);
+  await page.getByRole("tab", { name: "Templates" }).click();
+  await page.locator("button.card.goal", { hasText: "Pull 1" }).click();
+  await shot("template-edit");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.goto(BASE + "#/gym");
+  // finish Push 2, Pull 2 and Legs + Abs 2 (nothing ticked) so that Cardio is next
+  await page.getByRole("tab", { name: "Today" }).click();
+  for (let i = 0; i < 3; i++) {
+    await page.getByRole("button", { name: /(Start|Continue) workout/ }).click();
+    await page.getByRole("button", { name: "Finish workout" }).click();
+    await page.getByRole("button", { name: "Yay" }).click();
+  }
+  await page.waitForSelector("text=Next workout: Cardio");
+  await shot("gym-cardio");
+  await page.getByRole("button", { name: /(Start|Continue) workout/ }).click();
+  await page.getByRole("button", { name: "Swimming" }).click();
+  await shot("workout-cardio");
+  // assisted progress chart
+  await page.getByRole("button", { name: /Back \(keeps/ }).click();
+  await page.getByRole("tab", { name: "Progress" }).click();
+  await page.locator("select").selectOption({ label: "Counterweighted pull-up, wide grip" });
+  await shot("gym-progress-assisted");
 
   await page.goto(BASE + "#/review");
   await page.waitForSelector(".summary p");

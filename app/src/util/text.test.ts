@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtWeight, paragraphs, parseNum, speechChunks } from "./text";
+import { fmtWeight, paragraphs, parseNum, speechChunks, fmtSetsReps, fmtRepRange } from "./text";
 
 describe("paragraphs", () => {
   it("keeps existing paragraph breaks", () => {
@@ -53,5 +53,14 @@ describe("number helpers", () => {
     expect(fmtWeight(60)).toBe("60");
     expect(fmtWeight(62.5)).toBe("62.5");
     expect(fmtWeight(null)).toBe("");
+  });
+});
+
+describe("sets and reps labels", () => {
+  it("collapses equal min and max reps", () => {
+    expect(fmtSetsReps(4, 10, 10)).toBe("4 × 10");
+    expect(fmtSetsReps(3, 8, 12)).toBe("3 × 8–12");
+    expect(fmtRepRange(10, 10)).toBe("10");
+    expect(fmtRepRange(8, 12)).toBe("8–12");
   });
 });

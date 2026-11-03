@@ -57,12 +57,16 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 1);
+    assert_eq!(st.version, 2);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
-    assert_eq!(st.gym.templates.len(), 6);
+    let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Push 1", "Push 2", "Pull 1", "Pull 2", "Legs + Abs 1", "Legs + Abs 2", "Cardio"]);
     assert_eq!(st.gym.rotation.items.len(), 8);
+    let rot: Vec<&str> = st.gym.rotation.items.iter().map(|i| st.gym.templates.iter().find(|t| Some(t.id) == i.template_id).unwrap().name.as_str()).collect();
+    assert_eq!(rot, ["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio"]);
+    assert!(st.gym.templates.iter().filter(|t| t.kind == "strength").all(|t| t.exercises.iter().all(|e| e.sets == 4 && e.rep_min == 10 && e.rep_max == 10)));
     assert!(st.tasks.is_empty() && st.goals.is_empty() && st.gym.sessions.is_empty() && st.memory.notes.is_empty());
     assert_eq!(st.settings.location_name, "Sydney");
     assert_eq!(st.memory.work.holiday_region, "AU-NSW");
@@ -212,50 +216,194 @@ fn stats_guard() {
     assert!(!has_stats("Bench went from 60 to 62.5 kilos, one of the best."));
 }
 
+fn tpl(a: &App, name: &str) -> crate::model::Template {
+    a.st().gym.templates.iter().find(|t| t.name == name).unwrap().clone()
+}
+fn ex_id(a: &App, name: &str) -> i64 {
+    a.st().gym.exercises.iter().find(|e| e.name == name).unwrap().id
+}
+fn plan_ex(plan: &Value, name: &str) -> Value {
+    plan["exercises"].as_array().unwrap().iter().find(|e| e["name"] == name).unwrap_or_else(|| panic!("{name} not in plan")).clone()
+}
+
 #[test]
-fn gym_projection_and_progression_hint() {
+fn gym_projection_over_the_eight_item_cycle() {
     let mut a = App::with_sample(TODAY);
-    let days = a.get("/api/days?start=2026-11-01&days=4");
+    // sample data: Push 1, Pull 1, Legs + Abs 1, Cardio done => today is Push 2
+    let days = a.get("/api/days?start=2026-11-01&days=10");
     assert!(days[0]["workout"].is_null(), "past days have no workout");
-    assert_eq!(days[1]["workout"]["name"], "Push B");
-    assert_eq!(days[2]["workout"]["name"], "Pull B");
-    assert_eq!(days[3]["workout"]["name"], "Legs B");
-    // Incline DB Press: last time 22.5 kg x 12,12,12 and rep_max is 12 -> go up by 2.5
-    let inc = days[1]["workout"]["exercises"].as_array().unwrap().iter().find(|e| e["name"] == "Incline DB Press").unwrap().clone();
-    assert_eq!(inc["suggested_weight"], 25.0);
-    assert_eq!(inc["hint"], "You hit 12 reps on every set last time, try 25 kg");
-    assert_eq!(inc["last"]["sets"].as_array().unwrap().len(), 3);
-    // Dips: no history -> null
-    let dips = days[1]["workout"]["exercises"].as_array().unwrap().iter().find(|e| e["name"] == "Dips").unwrap().clone();
-    assert!(dips["suggested_weight"].is_null() && dips["hint"].is_null() && dips["last"].is_null());
-    // next
-    assert_eq!(a.get("/api/gym/next")["name"], "Push B");
-    // Pull A deadlift: reps 8,7,6 vs rep_max 8 -> stay at the weight
-    let (tid, ex) = {
-        let st = a.st();
-        (st.gym.templates.iter().find(|t| t.name == "Pull A").unwrap().id, st.gym.exercises.iter().find(|e| e.name == "Deadlift").unwrap().id)
-    };
-    let _ = tid;
-    let hist = a.get(&format!("/api/exercises/{ex}/history"));
-    assert_eq!(hist[0]["top_weight"], 100.0);
-    assert_eq!(hist[0]["best_reps"], 8);
-    assert_eq!(hist[0]["est_1rm"], 126.7);
+    let names: Vec<&str> = (1..10).map(|i| days[i]["workout"]["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Push 2", "Pull 2", "Legs + Abs 2", "Cardio", "Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2"]);
+    assert_eq!(days[4]["workout"]["kind"], "cardio");
+    assert_eq!(a.get("/api/gym/next")["name"], "Push 2");
+}
+
+#[test]
+fn progression_up_for_normal_and_down_for_assisted() {
+    let mut a = App::with_sample(TODAY);
+    let days = a.get("/api/days?start=2026-11-02&days=2");
+    let push2 = &days[0]["workout"];
+    // incline press: 15 kg 4x10 with rep_max 10 -> 17.5 (shared with Push 1)
+    let inc = plan_ex(push2, "Incline dumbbell chest press");
+    assert_eq!(inc["suggested_weight"], 17.5);
+    assert_eq!(inc["hint"], "You hit 10 reps on every set last time, try 17.5 kg");
+    assert_eq!(inc["last"]["sets"].as_array().unwrap().len(), 4);
+    // assisted pull-up wide grip: hit every rep at 68 -> 65.5 and the hint says less counterweight
+    let wide = a.post("/api/sessions", json!({"template_id": tpl(&a, "Pull 1").id}));
+    let w = wide["sets"].as_array().unwrap().iter().find(|x| x["exercise_id"] == ex_id(&a, "Counterweighted pull-up, wide grip")).unwrap().clone();
+    assert_eq!(w["weight"], 65.5);
+    assert_eq!(w["reps"], 10);
+    let plan = a.get("/api/gym/next");
+    assert_eq!(plan["name"], "Push 2");
+    let nxt = a.get("/api/days?start=2026-11-02&days=7");
+    let pull1_plan = nxt.as_array().unwrap().iter().map(|d| &d["workout"]).find(|w| w["name"] == "Pull 1").unwrap();
+    let pu = plan_ex(pull1_plan, "Counterweighted pull-up, wide grip");
+    assert_eq!(pu["assisted"], true);
+    assert_eq!(pu["suggested_weight"], 65.5);
+    assert_eq!(pu["hint"], "You hit every rep last time, try 2.5 kg less counterweight");
+    // history: lowest counterweight is the best, no 1RM
+    let h = a.get(&format!("/api/exercises/{}/history", ex_id(&a, "Counterweighted pull-up, wide grip")));
+    assert_eq!(h[0]["top_weight"], 68.0);
+    assert!(h[0]["est_1rm"].is_null());
+    // a normal lift still has a 1RM
+    let h2 = a.get(&format!("/api/exercises/{}/history", ex_id(&a, "Flat barbell chest press")));
+    assert!(h2[0]["est_1rm"].is_number());
+}
+
+#[test]
+fn assisted_stays_when_a_rep_is_missed_and_floors_at_zero() {
+    use crate::gym::suggest;
+    use crate::gym::{Last, LastSet};
+    let mk = |w: f64, reps: &[i64]| Last { date: "x".into(), sets: reps.iter().map(|r| LastSet { weight: w, reps: *r }).collect() };
+    assert_eq!(suggest(&mk(40.0, &[10, 10, 10, 9]), 10, true).0, 40.0);
+    assert_eq!(suggest(&mk(40.0, &[10, 10, 10, 10]), 10, true).0, 37.5);
+    assert_eq!(suggest(&mk(1.0, &[10, 10, 10, 10]), 10, true).0, 0.0);
+    assert_eq!(suggest(&mk(0.0, &[10, 10, 10, 10]), 10, true).0, 0.0);
+    assert_eq!(suggest(&mk(40.0, &[10, 10, 10, 10]), 10, false).0, 42.5);
+}
+
+#[test]
+fn start_weight_is_the_suggestion_without_history() {
+    let mut a = App::new(TODAY);
+    let plan = a.get("/api/gym/next");
+    assert_eq!(plan["name"], "Push 1");
+    assert_eq!(plan["note"], "Chest + Triceps + Front Deltoid");
+    let inc = plan_ex(&plan, "Incline dumbbell chest press");
+    assert_eq!(inc["suggested_weight"], 15.0);
+    assert_eq!(inc["hint"], "Starting weight: 15 kg");
+    assert!(inc["last"].is_null());
+    assert_eq!(plan_ex(&plan, "Tricep cable pushdown (two-handed)")["note"], "Bar or rope");
+    let dip = plan_ex(&plan, "Counterweighted dip");
+    assert_eq!(dip["suggested_weight"], 37.5);
+    assert_eq!(dip["assisted"], true);
+    // a session pre-fills 4 rows of 10 reps at the start weight
+    let s = a.post("/api/sessions", json!({"template_id": tpl(&a, "Push 1").id}));
+    let sets = s["sets"].as_array().unwrap();
+    assert_eq!(sets.len(), 28);
+    let inc_sets: Vec<&Value> = sets.iter().filter(|x| x["exercise_id"] == ex_id(&a, "Incline dumbbell chest press")).collect();
+    assert_eq!(inc_sets.len(), 4);
+    assert!(inc_sets.iter().all(|x| x["weight"] == 15.0 && x["reps"] == 10 && x["done"] == false));
+    // no start weight and no history: nothing suggested
+    let p2 = a.get("/api/days?start=2026-11-06&days=1");
+    let cross = plan_ex(&p2[0]["workout"], "High-to-low cable crossover");
+    assert!(cross["suggested_weight"].is_null() && cross["hint"].is_null());
+    // Knee lifts are bodyweight
+    let legs = tpl(&a, "Legs + Abs 1");
+    assert!(legs.exercises.iter().find(|e| e.name == "Knee lifts").unwrap().start_weight.is_none());
+}
+
+#[test]
+fn exercises_are_shared_by_name_so_history_carries_over() {
+    let mut a = App::new(TODAY);
+    let (p1, p2) = (tpl(&a, "Pull 1"), tpl(&a, "Pull 2"));
+    let row = ex_id(&a, "Seated cable machine row");
+    assert!(p1.exercises.iter().any(|e| e.exercise_id == row) && p2.exercises.iter().any(|e| e.exercise_id == row));
+    assert_eq!(a.st().gym.exercises.iter().filter(|e| e.name == "Seated cable machine row").count(), 1);
+    assert_eq!(ex_id(&a, "Incline dumbbell chest press"), tpl(&a, "Push 2").exercises[0].exercise_id);
+    // log the row in Pull 1 at 20 kg, all 10 reps
+    let s = a.post("/api/sessions", json!({"template_id": p1.id}));
+    let sets: Vec<Value> = s["sets"].as_array().unwrap().iter().map(|x| {
+        let mut x = x.clone();
+        if x["exercise_id"] == row {
+            x["weight"] = json!(20.0);
+            x["reps"] = json!(10);
+        }
+        x["done"] = json!(x["exercise_id"] == row);
+        x
+    }).collect();
+    a.req("PUT", &format!("/api/sessions/{}/sets", s["id"]), json!({"sets": sets}));
+    a.post(&format!("/api/sessions/{}/complete", s["id"]), json!({}));
+    // Pull 2 now knows about it: last time + progression to 22.5
+    let days = a.get("/api/days?start=2026-11-02&days=8");
+    let pull2 = days.as_array().unwrap().iter().map(|d| &d["workout"]).find(|w| w["name"] == "Pull 2").unwrap();
+    let r = plan_ex(pull2, "Seated cable machine row");
+    assert_eq!(r["last"]["sets"][0]["weight"], 20.0);
+    assert_eq!(r["suggested_weight"], 22.5);
+}
+
+#[test]
+fn cardio_session_flow() {
+    let mut a = App::with_sample(TODAY);
+    let cardio = tpl(&a, "Cardio");
+    assert_eq!(cardio.kind, "cardio");
+    assert_eq!(cardio.options, ["Swimming", "Rowing machine", "Stair machine", "Intense walking/hiking"]);
+    assert_eq!((cardio.minutes_min, cardio.minutes_max), (Some(20), Some(40)));
+    let plan = a.get("/api/days?start=2026-11-05&days=1");
+    assert_eq!(plan[0]["workout"]["kind"], "cardio");
+    assert_eq!(plan[0]["workout"]["note"], "Do one of the following for 20\u{2013}40 mins");
+    assert_eq!(plan[0]["workout"]["options"].as_array().unwrap().len(), 4);
+    let s = a.post("/api/sessions", json!({"template_id": cardio.id}));
+    assert_eq!(s["cardio"], json!({"activity": "", "minutes": 30}));
+    assert_eq!(s["sets"].as_array().unwrap().len(), 0);
+    let sid = s["id"].as_i64().unwrap();
+    // cannot finish before picking something
+    assert_eq!(a.req("POST", &format!("/api/sessions/{sid}/complete"), json!({})).0, 400);
+    assert_eq!(a.req("PUT", &format!("/api/sessions/{sid}/cardio"), json!({"activity": "Swimming", "minutes": 0})).0, 400);
+    let u = a.req("PUT", &format!("/api/sessions/{sid}/cardio"), json!({"activity": "Swimming", "minutes": 35}));
+    assert_eq!(u.0, 200);
+    assert_eq!(u.1["cardio"], json!({"activity": "Swimming", "minutes": 35}));
+    let rot_before = a.get("/api/rotation")["next_index"].as_i64().unwrap();
+    let c = a.post(&format!("/api/sessions/{sid}/complete"), json!({}));
+    assert_eq!(c["completed"], true);
+    assert_eq!(c["cardio"]["activity"], "Swimming");
+    // the first Cardio item at/after next_index (index 7, since next is Push 2 at 4) was passed
+    assert_eq!(rot_before, 4);
+    assert_eq!(a.get("/api/rotation")["next_index"], 0);
+    // a strength session is not a cardio one
+    let push = a.post("/api/sessions", json!({"template_id": tpl(&a, "Push 1").id}));
+    assert_eq!(a.req("PUT", &format!("/api/sessions/{}/cardio", push["id"]), json!({"activity": "x", "minutes": 5})).0, 400);
+    // cardio templates need options; validation on create
+    let bad = a.req("POST", "/api/templates", json!({"name": "C2", "kind": "cardio", "options": []}));
+    assert_eq!(bad.0, 400);
+    assert_eq!(a.req("POST", "/api/templates", json!({"name": "C3", "kind": "yoga"})).0, 400);
+}
+
+#[test]
+fn cardio_is_mentioned_naturally_in_the_week_and_evening() {
+    let mut a = App::with_sample("2026-11-08"); // a Sunday; sample sessions at -8 (Oct 31), -6, -4 and cardio at -3 (Nov 5)
+    let t = a.get("/api/briefing?kind=weekly&date=2026-11-08&ai=false");
+    let text = t["template_text"].as_str().unwrap();
+    assert!(text.contains("30 minutes on the rowing machine") || text.contains("rowing machine"), "{text}");
+    let up = t["user_prompt"].as_str().unwrap();
+    assert!(up.contains("Cardio completed this week"), "{up}");
+    assert!(up.contains("30 minutes on the rowing machine"), "{up}");
+    assert_eq!(crate::gym::cardio_phrase(&crate::model::Cardio { activity: "Swimming".into(), minutes: 30 }), "a swim");
+    assert_eq!(crate::gym::cardio_phrase(&crate::model::Cardio { activity: "Rowing machine".into(), minutes: 40 }), "40 minutes on the rowing machine");
 }
 
 #[test]
 fn gym_session_flow_advances_rotation() {
     let mut a = App::with_sample(TODAY);
-    let push_b = a.st().gym.templates.iter().find(|t| t.name == "Push B").unwrap().id;
-    let s = a.post("/api/sessions", json!({"template_id": push_b}));
+    let push2 = tpl(&a, "Push 2").id;
+    let s = a.post("/api/sessions", json!({"template_id": push2}));
     assert_eq!(s["completed"], false);
     assert_eq!(s["date"], TODAY);
     let sets = s["sets"].as_array().unwrap().clone();
-    assert_eq!(sets.len(), 15);
-    // pre-filled with the suggested weight (25 kg) and rep_min reps for the progressed exercise
-    let inc = sets.iter().find(|x| x["weight"] == 25.0).unwrap();
-    assert_eq!(inc["reps"], 8);
-    // asking again returns the same session
-    assert_eq!(a.post("/api/sessions", json!({"template_id": push_b}))["id"], s["id"]);
+    assert_eq!(sets.len(), 32); // 8 exercises x 4 sets
+    // pre-filled: incline press progressed to 17.5 kg, back to rep_min (10)
+    let inc = sets.iter().find(|x| x["weight"] == 17.5).unwrap();
+    assert_eq!(inc["reps"], 10);
+    assert_eq!(a.post("/api/sessions", json!({"template_id": push2}))["id"], s["id"]);
     let mut upd = sets.clone();
     upd[0]["done"] = json!(true);
     let s2 = a.req("PUT", &format!("/api/sessions/{}/sets", s["id"]), json!({"sets": upd}));
@@ -264,13 +412,114 @@ fn gym_session_flow_advances_rotation() {
     let c = a.post(&format!("/api/sessions/{}/complete", s["id"]), json!({}));
     assert_eq!(c["completed"], true);
     assert_eq!(a.get("/api/rotation")["next_index"], 5);
-    // today now shows the completed session's template and tomorrow continues
     let days = a.get("/api/days?start=2026-11-02&days=2");
-    assert_eq!(days[0]["workout"]["name"], "Push B");
-    assert_eq!(days[1]["workout"]["name"], "Pull B");
-    // rest handling: rotation next is Pull B, not a rest
+    assert_eq!(days[0]["workout"]["name"], "Push 2");
+    assert_eq!(days[1]["workout"]["name"], "Pull 2");
+    // no rest items in the default rotation
     assert_eq!(a.req("POST", "/api/gym/rest", json!({})).0, 400);
     assert_eq!(a.get("/api/sessions?limit=2").as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn template_and_exercise_editing_with_new_fields() {
+    let mut a = App::new(TODAY);
+    let t = a.post("/api/templates", json!({"name": "Mine", "note": " hello ", "exercises": [
+        {"name": "Sled push", "sets": 4, "rep_min": 10, "rep_max": 10, "start_weight": 20, "note": "alt: prowler"},
+        {"name": "Assisted chin", "sets": 4, "rep_min": 10, "rep_max": 10, "assisted": true}]}));
+    assert_eq!(t["kind"], "strength");
+    assert_eq!(t["note"], "hello");
+    assert_eq!(t["exercises"][0]["start_weight"], 20.0);
+    assert_eq!(t["exercises"][0]["note"], "alt: prowler");
+    assert!(t["exercises"][1]["start_weight"].is_null());
+    let chin = a.st().gym.exercises.iter().find(|e| e.name == "Assisted chin").unwrap().clone();
+    assert!(chin.assisted);
+    let e = a.req("PUT", &format!("/api/exercises/{}", chin.id), json!({"name": "Assisted chin", "assisted": false}));
+    assert_eq!(e.1["assisted"], false);
+    let c = a.post("/api/templates", json!({"name": "Spin", "kind": "cardio", "note": "n", "options": ["Bike", "bike", "Run"], "minutes_min": 15, "minutes_max": 45}));
+    assert_eq!(c["options"], json!(["Bike", "Run"]));
+    assert_eq!(c["minutes_max"], 45);
+    assert_eq!(a.req("POST", "/api/templates", json!({"name": "x", "exercises": [{"name": "y", "sets": 3, "rep_min": 5, "rep_max": 8, "start_weight": -1}]})).0, 400);
+}
+
+fn v1_state_with_old_defaults(with_sessions: bool) -> String {
+    let mut v: Value = serde_json::from_str(&init_state(TODAY)).unwrap();
+    let names = ["Push A", "Pull A", "Legs A", "Push B", "Pull B", "Legs B"];
+    let exs = ["Bench Press", "Deadlift", "Squat", "Dips", "Lat Pulldown", "Hip Thrust"];
+    let mut exercises = vec![];
+    let mut templates = vec![];
+    for i in 0..6 {
+        exercises.push(json!({"id": i + 1, "name": exs[i]}));
+        templates.push(json!({"id": i + 11, "name": names[i], "exercises": [{"exercise_id": i + 1, "name": exs[i], "sets": 3, "rep_min": 6, "rep_max": 10}]}));
+    }
+    let items: Vec<Value> = (0..6).map(|i| json!({"template_id": i + 11})).collect();
+    let sessions = if with_sessions {
+        json!([{"id": 50, "template_id": 11, "name": "Push A", "date": "2026-10-30", "completed": true, "sets": [{"exercise_id": 1, "set_no": 1, "weight": 60, "reps": 10, "done": true}]}])
+    } else {
+        json!([])
+    };
+    v["version"] = json!(1);
+    v["gym"] = json!({"exercises": exercises, "templates": templates, "rotation": {"items": items, "next_index": 2}, "sessions": sessions});
+    v.to_string()
+}
+
+#[test]
+fn migration_replaces_untouched_v1_defaults_and_returns_state() {
+    for with_sessions in [false, true] {
+        let mut a = App::new(TODAY);
+        a.state = v1_state_with_old_defaults(with_sessions);
+        // any call returns the migrated state
+        let raw = call(&a.state, "GET", "/api/templates", "{}", &a.ctx());
+        let r: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(r["status"], 200);
+        assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
+        assert_eq!(r["state"]["version"], 2);
+        a.state = r["state"].to_string();
+        let st = a.st();
+        let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Push 1", "Push 2", "Pull 1", "Pull 2", "Legs + Abs 1", "Legs + Abs 2", "Cardio"]);
+        assert_eq!(st.gym.rotation.items.len(), 8);
+        assert_eq!(st.gym.rotation.next_index, 0);
+        assert!(st.gym.sessions.is_empty(), "sessions of the old defaults are dropped");
+        assert!(st.gym.exercises.iter().all(|e| e.name != "Bench Press"));
+        // ids do not clash with anything else
+        assert!(st.next_id > st.max_id());
+        // second call: nothing more to migrate
+        let again: Value = serde_json::from_str(&call(&a.state, "GET", "/api/templates", "{}", &a.ctx())).unwrap();
+        assert!(again["state"].is_null());
+        // the explicit endpoint works as well
+        let m = a.get("/api/state/migrate");
+        assert_eq!(m["version"], 2);
+    }
+}
+
+#[test]
+fn migration_endpoint_on_v1_state_and_customised_state() {
+    // explicit endpoint migrates and returns the state
+    let mut a = App::new(TODAY);
+    a.state = v1_state_with_old_defaults(false);
+    let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
+    assert_eq!(r["body"]["version"], 2);
+    assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
+    // customised: a renamed template -> keep everything, only bump the version
+    let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
+    v["gym"]["templates"][0]["name"] = json!("My Push");
+    a.state = v.to_string();
+    let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
+    assert_eq!(r["state"]["version"], 2);
+    let g = &r["state"]["gym"];
+    assert_eq!(g["templates"].as_array().unwrap().len(), 6);
+    assert_eq!(g["templates"][0]["name"], "My Push");
+    assert_eq!(g["templates"][0]["kind"], "strength");
+    assert_eq!(g["exercises"][0]["assisted"], false);
+    assert_eq!(g["sessions"].as_array().unwrap().len(), 1);
+    // an old template/session still works
+    a.state = r["state"].to_string();
+    assert_eq!(a.get("/api/gym/next")["name"], "Legs A");
+    // importing a v1 backup migrates it too
+    let mut b = App::new(TODAY);
+    let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
+    assert_eq!(imp["version"], 2);
+    assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
 #[test]
@@ -378,8 +627,9 @@ fn sample_data_is_relative_to_today_and_idempotent() {
     a.post("/api/sample-data", json!({}));
     assert_eq!(a.st().tasks.len(), n);
     assert_eq!(a.st().goals.len(), 3);
-    assert_eq!(a.st().gym.sessions.len(), 3);
+    assert_eq!(a.st().gym.sessions.len(), 4);
     assert_eq!(a.st().gym.sessions[0].date, "2027-03-02");
+    assert!(a.st().gym.sessions.iter().any(|s| s.cardio.as_ref().is_some_and(|c| c.activity == "Rowing machine" && c.minutes == 30)));
     assert!(a.st().tasks.iter().any(|t| t.date.as_deref() == Some("2027-03-09")), "yesterday's leftover");
 }
 

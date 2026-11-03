@@ -24,7 +24,7 @@ pub use briefing::has_stats;
 pub use model::{Ctx, State};
 pub use router::{call_typed, Response};
 
-/// A fresh State with defaults only (categories, PPL templates and rotation; no tasks/goals/sessions).
+/// A fresh State with defaults only (categories, Push/Pull/Legs/Cardio routine and rotation; no tasks/goals/sessions).
 pub fn init_state(today: &str) -> String {
     serde_json::to_string(&seed::init_state(today)).unwrap_or_else(|_| "{}".into())
 }

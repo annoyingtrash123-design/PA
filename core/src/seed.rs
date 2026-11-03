@@ -18,16 +18,138 @@ pub const CATEGORY_DEFAULTS: [(&str, &str); 10] = [
     ("Other", "#8C847D"),
 ];
 
-type Ex = (&'static str, i64, i64, i64);
-const TEMPLATES: [(&str, [Ex; 5]); 6] = [
-    ("Push A", [("Bench Press", 3, 6, 10), ("Overhead Press", 3, 8, 12), ("Incline DB Press", 3, 8, 12), ("Lateral Raise", 3, 12, 15), ("Tricep Pushdown", 3, 10, 15)]),
-    ("Pull A", [("Deadlift", 3, 5, 8), ("Pull-ups", 3, 6, 10), ("Barbell Row", 3, 8, 12), ("Face Pull", 3, 12, 15), ("Bicep Curl", 3, 10, 12)]),
-    ("Legs A", [("Squat", 3, 6, 10), ("Romanian Deadlift", 3, 8, 12), ("Leg Press", 3, 10, 12), ("Leg Curl", 3, 10, 15), ("Calf Raise", 3, 12, 15)]),
-    ("Push B", [("Incline DB Press", 3, 8, 12), ("Dips", 3, 8, 12), ("Seated DB Shoulder Press", 3, 8, 12), ("Cable Fly", 3, 12, 15), ("Overhead Tricep Extension", 3, 10, 15)]),
-    ("Pull B", [("Lat Pulldown", 3, 8, 12), ("Seated Cable Row", 3, 8, 12), ("Chin-ups", 3, 6, 10), ("Rear Delt Fly", 3, 12, 15), ("Hammer Curl", 3, 10, 12)]),
-    ("Legs B", [("Front Squat", 3, 6, 10), ("Hip Thrust", 3, 8, 12), ("Walking Lunges", 3, 10, 12), ("Leg Extension", 3, 10, 15), ("Seated Calf Raise", 3, 12, 15)]),
-];
-const ROTATION: [&str; 8] = ["Push A", "Pull A", "Legs A", "", "Push B", "Pull B", "Legs B", ""];
+/// One exercise of a default template.
+struct Def {
+    name: &'static str,
+    start: Option<f64>,
+    note: &'static str,
+    assisted: bool,
+}
+
+fn ex(name: &'static str, start: Option<f64>) -> Def {
+    Def { name, start, note: "", assisted: false }
+}
+
+impl Def {
+    fn note(mut self, n: &'static str) -> Def {
+        self.note = n;
+        self
+    }
+    fn assisted(mut self) -> Def {
+        self.assisted = true;
+        self
+    }
+}
+
+/// Every strength exercise is 4 sets of 10.
+const SETS: i64 = 4;
+const REPS: i64 = 10;
+
+const CARDIO_OPTIONS: [&str; 4] = ["Swimming", "Rowing machine", "Stair machine", "Intense walking/hiking"];
+const OLD_DEFAULT_NAMES: [&str; 6] = ["Push A", "Push B", "Pull A", "Pull B", "Legs A", "Legs B"];
+const ROTATION: [&str; 8] = ["Push 1", "Pull 1", "Legs + Abs 1", "Cardio", "Push 2", "Pull 2", "Legs + Abs 2", "Cardio"];
+
+fn strength_templates() -> Vec<(&'static str, &'static str, Vec<Def>)> {
+    vec![
+        ("Push 1", "Chest + Triceps + Front Deltoid", vec![
+            ex("Incline dumbbell chest press", Some(15.0)),
+            ex("Flat barbell chest press", Some(5.0)),
+            ex("Counterweighted dip", Some(37.5)).assisted(),
+            ex("Pectoral fly", Some(40.0)),
+            ex("Seated dumbbell shoulder press", Some(17.5)),
+            ex("Dumbbell shoulder raises", Some(5.0)),
+            ex("Tricep cable pushdown (two-handed)", Some(12.5)).note("Bar or rope"),
+        ]),
+        ("Push 2", "", vec![
+            ex("Incline dumbbell chest press", Some(15.0)),
+            ex("Flat machine chest press", Some(10.0)),
+            ex("High-to-low cable crossover", None),
+            ex("Incline seated dumbbell pectoral fly", Some(5.0)).note("Or cable fly / cable crossover"),
+            ex("Machine shoulder press", Some(15.0)),
+            ex("Machine shoulder raises", Some(20.0)),
+            ex("Cable shoulder raises", Some(5.0)),
+            ex("Post-cranial seated tricep dumbbell lift", Some(15.0)),
+        ]),
+        ("Pull 1", "Back + Biceps + Rear Deltoid", vec![
+            ex("Counterweighted pull-up, wide grip", Some(68.0)).assisted(),
+            ex("Seated cable pulldown, normal width", Some(35.0)),
+            ex("Seated cable machine row", Some(17.5)),
+            ex("Seated rear deltoid", Some(40.0)),
+            ex("Face pulls", Some(25.0)),
+            ex("Two-handed cable bicep curl", Some(15.0)),
+        ]),
+        ("Pull 2", "Other options: T-bar row", vec![
+            ex("Counterweighted pull-up, narrow grip", Some(61.0)).assisted(),
+            ex("Seated cable pulldown, wide or narrow grip", None),
+            ex("Seated cable machine row", Some(17.5)),
+            ex("Lying incline dumbbell rear deltoid", None),
+            ex("Incline standing rear deltoid fly machine", Some(33.0)),
+            ex("Dumbbell bicep curl", Some(7.0)).note("Or barbell bicep curl, 17.5 kg"),
+            ex("Forward-facing dumbbell lift", Some(6.0)),
+        ]),
+        ("Legs + Abs 1", "", vec![
+            ex("Incline leg press", Some(50.0)),
+            ex("Leg curl", Some(40.0)),
+            ex("Leg extension", Some(33.0)),
+            ex("Glute hip bridge", Some(10.0)),
+            ex("Calf press", Some(40.0)),
+            ex("Weighted ab curls", Some(40.0)),
+            ex("Knee lifts", None),
+        ]),
+        ("Legs + Abs 2", "", vec![
+            ex("Flat leg press", Some(50.0)).note("Or goblet squat"),
+            ex("Leg curl", Some(40.0)),
+            ex("Leg extension", Some(33.0)),
+            ex("Romanian dumbbell deadlift", Some(10.0)),
+            ex("Hip adduction (inwards)", Some(61.0)),
+            ex("Hip abduction (outwards)", Some(75.0)),
+            ex("Weighted ab curls", Some(40.0)),
+            ex("Knee lifts", None),
+        ]),
+    ]
+}
+
+/// The owner's routine: exercises, templates (shared exercises by name) and the 8-item rotation.
+/// Ids come from `next`.
+pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
+    let mut gym = Gym::default();
+    let mut templates: Vec<(&str, &str, Vec<Def>)> = strength_templates();
+    // the cardio template goes in the 4th slot of the rotation, but templates list order is free
+    for (name, note, list) in templates.drain(..) {
+        let mut exercises = vec![];
+        for d in list {
+            let id = match gym.exercises.iter_mut().find(|e| e.name == d.name) {
+                Some(e) => {
+                    e.assisted |= d.assisted;
+                    e.id
+                }
+                None => {
+                    let id = next();
+                    gym.exercises.push(Exercise { id, name: d.name.to_string(), assisted: d.assisted });
+                    id
+                }
+            };
+            exercises.push(TemplateExercise { exercise_id: id, name: d.name.to_string(), sets: SETS, rep_min: REPS, rep_max: REPS, start_weight: d.start, note: d.note.to_string() });
+        }
+        gym.templates.push(Template { id: next(), name: name.to_string(), kind: "strength".into(), note: note.to_string(), exercises, options: vec![], minutes_min: None, minutes_max: None });
+    }
+    gym.templates.push(Template {
+        id: next(),
+        name: "Cardio".into(),
+        kind: "cardio".into(),
+        note: "Do one of the following for 20\u{2013}40 mins".into(),
+        exercises: vec![],
+        options: CARDIO_OPTIONS.iter().map(|s| s.to_string()).collect(),
+        minutes_min: Some(20),
+        minutes_max: Some(40),
+    });
+    for n in ROTATION {
+        let tid = gym.templates.iter().find(|t| t.name == n).map(|t| t.id);
+        gym.rotation.items.push(RotItem { template_id: tid, rest: false });
+    }
+    gym.rotation.next_index = 0;
+    gym
+}
 
 /// A real fresh start: defaults only (no tasks, goals or sessions).
 pub fn init_state(_today: &str) -> State {
@@ -35,32 +157,61 @@ pub fn init_state(_today: &str) -> State {
     for (i, (n, c)) in CATEGORY_DEFAULTS.iter().enumerate() {
         st.categories.push(Category { id: i as i64 + 1, name: n.to_string(), color: c.to_string() });
     }
-    let mut ex_id = 0i64;
-    for (ti, (name, list)) in TEMPLATES.iter().enumerate() {
-        let mut exercises = vec![];
-        for (en, sets, lo, hi) in list {
-            let id = match st.gym.exercises.iter().find(|e| e.name == *en) {
-                Some(e) => e.id,
-                None => {
-                    ex_id += 1;
-                    st.gym.exercises.push(Exercise { id: ex_id, name: en.to_string() });
-                    ex_id
-                }
-            };
-            exercises.push(TemplateExercise { exercise_id: id, name: en.to_string(), sets: *sets, rep_min: *lo, rep_max: *hi });
-        }
-        st.gym.templates.push(Template { id: ti as i64 + 1, name: name.to_string(), exercises });
-    }
-    for n in ROTATION {
-        if n.is_empty() {
-            st.gym.rotation.items.push(RotItem { template_id: None, rest: true });
-        } else {
-            let tid = st.gym.templates.iter().find(|t| t.name == n).map(|t| t.id);
-            st.gym.rotation.items.push(RotItem { template_id: tid, rest: false });
-        }
-    }
-    st.gym.rotation.next_index = 0;
+    let mut n = 0i64;
+    st.gym = default_gym(|| {
+        n += 1;
+        n
+    });
+    st.next_id = st.next_id.max(n + 1);
     st
+}
+
+/// Bring an older State up to `STATE_VERSION`. Returns true when something changed.
+/// v1 -> v2: a gym section still holding exactly the six old generic templates (never customised)
+/// is replaced by the owner's routine; anything else only gains the new fields (serde defaults).
+pub fn migrate(st: &mut State) -> bool {
+    if st.version >= STATE_VERSION {
+        return false;
+    }
+    let mut names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
+    names.sort_unstable();
+    let mut old: Vec<&str> = OLD_DEFAULT_NAMES.to_vec();
+    old.sort_unstable();
+    if names == old {
+        st.next_id = st.next_id.max(st.max_id() + 1);
+        let old_ids: Vec<i64> = st.gym.templates.iter().map(|t| t.id).collect();
+        let all_old = st.gym.sessions.iter().all(|s| s.template_id.is_some_and(|t| old_ids.contains(&t)));
+        let kept_sessions = if all_old { vec![] } else { std::mem::take(&mut st.gym.sessions) };
+        let kept_ex: Vec<Exercise> = if all_old {
+            vec![]
+        } else {
+            st.gym.exercises.iter().filter(|e| kept_sessions.iter().any(|s| s.sets.iter().any(|x| x.exercise_id == e.id))).cloned().collect()
+        };
+        let mut next = st.next_id;
+        let mut gym = default_gym(|| {
+            next += 1;
+            next - 1
+        });
+        st.next_id = next;
+        // keep history for exercises that sessions still reference (merged by name where possible)
+        let mut sessions = kept_sessions;
+        for e in kept_ex {
+            if let Some(new) = gym.exercises.iter().find(|n| n.name.eq_ignore_ascii_case(&e.name)) {
+                let nid = new.id;
+                for s in sessions.iter_mut() {
+                    for x in s.sets.iter_mut().filter(|x| x.exercise_id == e.id) {
+                        x.exercise_id = nid;
+                    }
+                }
+            } else {
+                gym.exercises.push(e);
+            }
+        }
+        gym.sessions = sessions;
+        st.gym = gym;
+    }
+    st.version = STATE_VERSION;
+    true
 }
 
 struct T<'a> {
@@ -74,7 +225,7 @@ struct T<'a> {
     steps: &'a [&'a str],
 }
 
-type Log = (&'static str, f64, [i64; 3]);
+type Log = (&'static str, f64, [i64; 4]);
 
 /// Load the old seed's demo tasks, goals and sessions, relative to `today`. Skips what is already there.
 pub fn sample_data(env: &mut Env) -> Value {
@@ -123,32 +274,39 @@ pub fn sample_data(env: &mut Env) -> Value {
         added_tasks += 1;
     }
 
-    // Push A (-8d), Pull A (-6d), Legs A (-4d) done, rest taken (-3d) => today is Push B.
-    let sessions: [(&str, i64, Vec<Log>); 3] = [
-        ("Push A", -8, vec![
-            ("Bench Press", 60.0, [10, 9, 8]),
-            ("Overhead Press", 40.0, [10, 9, 8]),
-            ("Incline DB Press", 22.5, [12, 12, 12]),
-            ("Lateral Raise", 10.0, [15, 14, 12]),
-            ("Tricep Pushdown", 30.0, [13, 12, 11]),
-        ]),
-        ("Pull A", -6, vec![
-            ("Deadlift", 100.0, [8, 7, 6]),
-            ("Pull-ups", 0.0, [8, 7, 6]),
-            ("Barbell Row", 55.0, [10, 10, 9]),
-            ("Face Pull", 20.0, [15, 15, 14]),
-            ("Bicep Curl", 14.0, [12, 11, 10]),
-        ]),
-        ("Legs A", -4, vec![
-            ("Squat", 80.0, [8, 8, 7]),
-            ("Romanian Deadlift", 70.0, [10, 10, 9]),
-            ("Leg Press", 140.0, [12, 12, 12]),
-            ("Leg Curl", 35.0, [12, 11, 10]),
-            ("Calf Raise", 50.0, [15, 15, 13]),
-        ]),
+    // Push 1 (-8d), Pull 1 (-6d), Legs + Abs 1 (-4d) and Cardio (-3d) done => today is Push 2.
+    // Push 1 hits every rep on the incline press at 15 kg (hint: 17.5); the assisted pull-up hits every rep at 68 (hint: 65.5).
+    let sessions: [(&str, i64, Vec<Log>, Option<(&str, i64)>); 4] = [
+        ("Push 1", -8, vec![
+            ("Incline dumbbell chest press", 15.0, [10, 10, 10, 10]),
+            ("Flat barbell chest press", 5.0, [10, 10, 9, 8]),
+            ("Counterweighted dip", 37.5, [10, 10, 9, 8]),
+            ("Pectoral fly", 40.0, [10, 10, 10, 9]),
+            ("Seated dumbbell shoulder press", 17.5, [10, 9, 9, 8]),
+            ("Dumbbell shoulder raises", 5.0, [10, 10, 10, 10]),
+            ("Tricep cable pushdown (two-handed)", 12.5, [10, 10, 10, 9]),
+        ], None),
+        ("Pull 1", -6, vec![
+            ("Counterweighted pull-up, wide grip", 68.0, [10, 10, 10, 10]),
+            ("Seated cable pulldown, normal width", 35.0, [10, 10, 9, 9]),
+            ("Seated cable machine row", 17.5, [10, 10, 10, 10]),
+            ("Seated rear deltoid", 40.0, [10, 9, 9, 8]),
+            ("Face pulls", 25.0, [10, 10, 10, 10]),
+            ("Two-handed cable bicep curl", 15.0, [10, 10, 9, 8]),
+        ], None),
+        ("Legs + Abs 1", -4, vec![
+            ("Incline leg press", 50.0, [10, 10, 10, 10]),
+            ("Leg curl", 40.0, [10, 10, 9, 9]),
+            ("Leg extension", 33.0, [10, 10, 10, 9]),
+            ("Glute hip bridge", 10.0, [10, 10, 10, 10]),
+            ("Calf press", 40.0, [10, 10, 10, 8]),
+            ("Weighted ab curls", 40.0, [10, 10, 9, 9]),
+            ("Knee lifts", 0.0, [10, 10, 10, 10]),
+        ], None),
+        ("Cardio", -3, vec![], Some(("Rowing machine", 30))),
     ];
     let mut added_sessions = 0;
-    for (tpl, off, logs) in &sessions {
+    for (tpl, off, logs, cardio) in &sessions {
         let Some(tid) = env.st.gym.templates.iter().find(|t| t.name == *tpl).map(|t| t.id) else { continue };
         let date = day(*off);
         if env.st.gym.sessions.iter().any(|s| s.template_id == Some(tid) && s.date == date) {
@@ -160,7 +318,7 @@ pub fn sample_data(env: &mut Env) -> Value {
                 Some(e) => e.id,
                 None => {
                     let id = env.st.new_id();
-                    env.st.gym.exercises.push(Exercise { id, name: en.to_string() });
+                    env.st.gym.exercises.push(Exercise { id, name: en.to_string(), assisted: false });
                     id
                 }
             };
@@ -169,16 +327,16 @@ pub fn sample_data(env: &mut Env) -> Value {
             }
         }
         let id = env.st.new_id();
-        env.st.gym.sessions.push(Session { id, template_id: Some(tid), name: tpl.to_string(), date, completed: true, sets });
+        let cardio = cardio.map(|(a, m)| Cardio { activity: a.to_string(), minutes: m });
+        env.st.gym.sessions.push(Session { id, template_id: Some(tid), name: tpl.to_string(), date, completed: true, sets, cardio });
         added_sessions += 1;
     }
     if added_sessions > 0 {
-        // the default rotation is Push A, Pull A, Legs A, Rest, Push B, ...: next is Push B
-        let len = env.st.gym.rotation.items.len();
-        if len > 4 {
-            env.st.gym.rotation.next_index = 4;
+        // the default rotation is Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, ...: next is Push 2
+        if let Some(i) = env.st.gym.rotation.items.iter().position(|it| it.template_id == env.st.gym.templates.iter().find(|t| t.name == "Push 2").map(|t| t.id)) {
+            env.st.gym.rotation.next_index = i;
         }
-        env.st.gym.rest_taken_date = Some(day(-3));
+        env.st.gym.rest_taken_date = None;
     }
 
     let goals: [(&str, &str, Option<i64>, &str); 3] = [

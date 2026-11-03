@@ -1,9 +1,9 @@
 import { api, ApiError, getState, today } from "../core";
 import { icon } from "../icons";
-import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, segmented, select, textInput, toast } from "../ui";
+import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, segmented, select, textInput, toast, toggle } from "../ui";
 import { axisTicks } from "../util/chart";
-import { fmtWeight, parseNum } from "../util/text";
-import type { Exercise, HistoryPoint, Rotation, Session, Template, TemplateExercise, WorkoutPlan } from "../types";
+import { fmtRepRange, fmtSetsReps, fmtWeight, parseNum } from "../util/text";
+import type { Exercise, HistoryPoint, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutPlan } from "../types";
 
 type Sub = "today" | "rotation" | "templates" | "progress";
 const SUBS: [Sub, string][] = [["today", "Today"], ["rotation", "Rotation"], ["templates", "Templates"], ["progress", "Progress"]];
@@ -41,11 +41,20 @@ function rToday(draw: () => void): HTMLElement[] {
     }, { icon: "check" }))];
   }
   const p = plan;
+  const cardio = p.kind === "cardio";
   const out: HTMLElement[] = [h("h2", { class: "title-md" }, `Next workout: ${p.name}`)];
+  if (p.note) out.push(h("p", { class: "muted tpl-note" }, p.note));
+  if (cardio) {
+    out.push(card("compact stack",
+      h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, "Pick one"), chip(`${p.minutes_min ?? 20}–${p.minutes_max ?? 40} min`)),
+      h("div", { class: "chip-row" }, ...(p.options ?? []).map((o) => chip(o, { tone: "raised" })))));
+  }
   for (const ex of p.exercises ?? []) {
-    const lines: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, ex.name), chip(`${ex.sets} x ${ex.rep_min}-${ex.rep_max}`))];
+    const lines: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, ex.name), chip(fmtSetsReps(ex.sets, ex.rep_min, ex.rep_max)))];
+    if (ex.note) lines.push(h("p", { class: "muted small ex-note" }, ex.note));
+    if (ex.assisted) lines.push(h("p", { class: "muted small" }, "Counterweight machine: lower is stronger"));
     if (ex.last) lines.push(h("p", { class: "muted" }, `Last time (${ex.last.date}): ${ex.last.sets.map((s) => `${fmtWeight(s.weight)}kg x ${s.reps}`).join(", ")}`));
-    else lines.push(h("p", { class: "muted" }, "No history yet. Pick a weight that feels right."));
+    else if (!ex.hint) lines.push(h("p", { class: "muted" }, "No history yet. Pick a weight that feels right."));
     if (ex.hint) lines.push(h("div", { class: "hint" }, icon("trend", 16), h("span", null, ex.hint)));
     out.push(card("compact stack", ...lines));
   }
@@ -56,9 +65,47 @@ function rToday(draw: () => void): HTMLElement[] {
   return out;
 }
 
+// ---------- cardio workout ----------
+function rCardio(draw: () => void): HTMLElement[] {
+  const s = session!;
+  const tpl = getState().gym.templates.find((t) => t.id === s.template_id);
+  const options = tpl?.options?.length ? tpl.options : plan?.options ?? [];
+  const lo = tpl?.minutes_min ?? 20, hi = tpl?.minutes_max ?? 40;
+  const c = s.cardio ?? { activity: "", minutes: 30 };
+  const chips = h("div", { class: "chip-row" });
+  const minutes = h("input", { class: "input", type: "text", inputmode: "numeric", value: String(c.minutes), "aria-label": "Minutes" });
+  const save = (): boolean => {
+    const m = Math.round(parseNum(minutes.value, c.minutes));
+    c.minutes = m >= 1 ? m : c.minutes;
+    minutes.value = String(c.minutes);
+    try { session = api<Session>("PUT", `/api/sessions/${s.id}/cardio`, { activity: c.activity, minutes: c.minutes }); return true; } catch (e) { toast((e as Error).message); return false; }
+  };
+  minutes.onchange = () => { save(); };
+  const drawChips = () => clear(chips, ...options.map((o) => h("button", { type: "button", class: `chip chip-${c.activity === o ? "solid" : "raised"} chip-btn`, "aria-pressed": String(c.activity === o), onclick: () => { c.activity = o; drawChips(); save(); } }, o)));
+  drawChips();
+  const out: HTMLElement[] = [h("div", { class: "row between" }, h("h2", { class: "title-md" }, s.name), chip("In progress", { icon: "timer" }))];
+  if (tpl?.note) out.push(h("p", { class: "muted tpl-note" }, tpl.note));
+  out.push(card("compact stack", h("h3", { class: "title-sm" }, "What did you do?"), chips, field(`Minutes (usually ${lo}–${hi})`, h("div", { class: "input-suffix" }, minutes, h("span", null, "min")))));
+  out.push(bigBtn("Finish workout", "flag", () => {
+    if (!c.activity) { toast("Pick what you did first"); return; }
+    if (!save()) return;
+    try {
+      const done = api<Session>("POST", `/api/sessions/${s.id}/complete`);
+      session = null;
+      const m = openModal("Workout done!", h("p", null, `Lovely: ${done.cardio?.minutes ?? c.minutes} minutes of ${(done.cardio?.activity ?? c.activity).toLowerCase()} logged. Go get a snack and be proud of yourself!`), [button("Yay", () => m.close())], { onclose: draw });
+    } catch (e) { toast((e as Error).message); }
+  }));
+  out.push(button("Back (keeps the workout)", () => { save(); session = null; draw(); }, { kind: "text", cls: "btn-wide" }));
+  return out;
+}
+
 // ---------- workout mode ----------
 function rWorkout(draw: () => void): HTMLElement[] {
   const s = session!;
+  if (s.cardio) return rCardio(draw);
+  const tplNow = getState().gym.templates.find((t) => t.id === s.template_id);
+  const assisted = new Set(getState().gym.exercises.filter((x) => x.assisted).map((x) => x.id));
+  const tplEx = new Map((tplNow?.exercises ?? []).map((e) => [e.exercise_id, e]));
   const names = new Map(getState().gym.exercises.map((x) => [x.id, x.name]));
   const planEx = new Map((plan?.exercises ?? []).map((e) => [e.exercise_id, e]));
   const order: number[] = [];
@@ -82,9 +129,13 @@ function rWorkout(draw: () => void): HTMLElement[] {
   };
 
   const out: HTMLElement[] = [h("div", { class: "row between" }, h("h2", { class: "title-md" }, s.name), chip("In progress", { icon: "timer" }))];
+  if (tplNow?.note) out.push(h("p", { class: "muted tpl-note" }, tplNow.note));
   for (const exid of order) {
     const pe = planEx.get(exid);
-    const col: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, names.get(exid) ?? pe?.name ?? `Exercise ${exid}`), pe ? h("span", { class: "muted small" }, `${pe.rep_min}-${pe.rep_max} reps`) : null)];
+    const col: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, names.get(exid) ?? pe?.name ?? `Exercise ${exid}`), pe ?? tplEx.get(exid) ? h("span", { class: "muted small" }, `${fmtRepRange((pe ?? tplEx.get(exid))!.rep_min, (pe ?? tplEx.get(exid))!.rep_max)} reps`) : null)];
+    const exNote = pe?.note ?? tplEx.get(exid)?.note;
+    if (exNote) col.push(h("p", { class: "muted small ex-note" }, exNote));
+    if (assisted.has(exid)) col.push(h("p", { class: "muted small" }, "Counterweight: lower is stronger"));
     if (pe?.last) col.push(h("p", { class: "muted small" }, "Last: " + pe.last.sets.map((x) => `${fmtWeight(x.weight)}x${x.reps}`).join(", ")));
     if (pe?.hint) col.push(h("p", { class: "small", style: { color: "var(--sage)" } }, pe.hint));
     for (const st of byEx.get(exid)!) {
@@ -139,7 +190,7 @@ function rTemplates(draw: () => void): HTMLElement[] {
   const tmpls = api<Template[]>("GET", "/api/templates");
   const out: HTMLElement[] = [h("div", { class: "row between" }, h("h2", { class: "title-md" }, "Templates"), button("New", () => editTemplate(null, draw), { kind: "tonal", icon: "add" }))];
   for (const t of tmpls) {
-    out.push(h("button", { type: "button", class: "card compact goal", onclick: () => editTemplate(t, draw) }, h("h3", { class: "title-sm" }, t.name), h("p", { class: "muted small" }, t.exercises.map((x) => `${x.name} ${x.sets}x${x.rep_min}-${x.rep_max}`).join(", ") || "No exercises yet")));
+    out.push(h("button", { type: "button", class: "card compact goal", onclick: () => editTemplate(t, draw) }, h("h3", { class: "title-sm" }, t.name), t.note ? h("p", { class: "small" }, t.note) : null, h("p", { class: "muted small" }, t.kind === "cardio" ? `Cardio, ${t.minutes_min ?? 20}–${t.minutes_max ?? 40} min: ${(t.options ?? []).join(", ")}` : t.exercises.map((x) => `${x.name} ${fmtSetsReps(x.sets, x.rep_min, x.rep_max)}`).join(", ") || "No exercises yet")));
   }
   if (!tmpls.length) out.push(muted("No templates yet."));
   return out;
@@ -148,8 +199,10 @@ function rTemplates(draw: () => void): HTMLElement[] {
 function editTemplate(t: Template | null, onDone: () => void) {
   let exercises: Exercise[];
   try { exercises = api<Exercise[]>("GET", "/api/exercises"); } catch (e) { return toast((e as Error).message); }
-  const rows: TemplateExercise[] = (t?.exercises ?? []).map((x) => ({ ...x }));
-  const name = textInput(t?.name ?? "", { placeholder: "e.g. Push A" });
+  const rows: TemplateExercise[] = (t?.exercises ?? []).map((x) => ({ ...x, assisted: exercises.find((e) => e.id === x.exercise_id)?.assisted ?? false }));
+  let kind: TemplateKind = t?.kind ?? "strength";
+  const name = textInput(t?.name ?? "", { placeholder: "e.g. Push 1" });
+  const note = textInput(t?.note ?? "", { placeholder: "e.g. Chest + Triceps" });
   const list = h("div", { class: "stack", style: { gap: "8px" } });
   const err = h("p", { class: "error-text", hidden: true });
   const num = (r: TemplateExercise, key: "sets" | "rep_min" | "rep_max", label: string) => {
@@ -157,12 +210,19 @@ function editTemplate(t: Template | null, onDone: () => void) {
     return field(label, input);
   };
   const rebuild = () => {
-    clear(list, ...rows.map((r, i) => h("div", { class: "tpl-row" },
-      h("div", { class: "row", style: { gap: "0" } }, h("span", { class: "grow", style: { fontWeight: "500" } }, r.name ?? exercises.find((x) => x.id === r.exercise_id)?.name ?? "Exercise"),
-        h("button", { type: "button", class: "icon-btn sm", "aria-label": "Move up", disabled: i === 0, onclick: () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; rebuild(); } }, icon("up", 18)),
-        h("button", { type: "button", class: "icon-btn sm", "aria-label": "Move down", disabled: i === rows.length - 1, onclick: () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; rebuild(); } }, icon("down", 18)),
-        h("button", { type: "button", class: "icon-btn sm", "aria-label": "Remove exercise", onclick: () => { rows.splice(i, 1); rebuild(); } }, icon("close", 18))),
-      h("div", { class: "triple" }, num(r, "sets", "Sets"), num(r, "rep_min", "Min reps"), num(r, "rep_max", "Max reps")))));
+    clear(list, ...rows.map((r, i) => {
+      const sw = h("input", { class: "input", type: "text", inputmode: "decimal", value: fmtWeight(r.start_weight), placeholder: "none", "aria-label": "Starting weight in kg", onchange: () => { const v = sw.value.trim(); r.start_weight = v === "" ? null : Math.max(0, parseNum(v, 0)); sw.value = fmtWeight(r.start_weight); } });
+      const exNote = h("input", { class: "input", type: "text", value: r.note ?? "", placeholder: "e.g. Or cable fly", "aria-label": "Exercise note", onchange: () => { r.note = exNote.value.trim(); } });
+      const asst = toggle("Assisted (counterweight)", !!r.assisted, (v) => { r.assisted = v; });
+      return h("div", { class: "tpl-row" },
+        h("div", { class: "row", style: { gap: "0" } }, h("span", { class: "grow", style: { fontWeight: "500" } }, r.name ?? exercises.find((x) => x.id === r.exercise_id)?.name ?? "Exercise"),
+          h("button", { type: "button", class: "icon-btn sm", "aria-label": "Move up", disabled: i === 0, onclick: () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; rebuild(); } }, icon("up", 18)),
+          h("button", { type: "button", class: "icon-btn sm", "aria-label": "Move down", disabled: i === rows.length - 1, onclick: () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; rebuild(); } }, icon("down", 18)),
+          h("button", { type: "button", class: "icon-btn sm", "aria-label": "Remove exercise", onclick: () => { rows.splice(i, 1); rebuild(); } }, icon("close", 18))),
+        h("div", { class: "triple" }, num(r, "sets", "Sets"), num(r, "rep_min", "Min reps"), num(r, "rep_max", "Max reps")),
+        h("div", { class: "pair" }, field("Start weight (kg)", sw), field("Note", exNote)),
+        asst.el);
+    }));
   };
   rebuild();
   const picker = select([["", "Add exercise..."], ...exercises.map((x): [string, string] => [String(x.id), x.name]), ["new", "+ New exercise..."]], "");
@@ -182,18 +242,32 @@ function editTemplate(t: Template | null, onDone: () => void) {
       picker.insertBefore(h("option", { value: String(ex.id) }, ex.name), picker.lastElementChild);
     } else ex = exercises.find((x) => String(x.id) === v);
     if (!ex) return;
-    rows.push({ exercise_id: ex.id, name: ex.name, sets: 3, rep_min: 8, rep_max: 12 });
+    rows.push({ exercise_id: ex.id, name: ex.name, sets: 4, rep_min: 10, rep_max: 10, start_weight: null, note: "", assisted: !!ex.assisted });
     picker.value = ""; newName.value = ""; newField.hidden = true;
     rebuild();
   };
+  const strengthBox = h("div", { class: "stack", style: { gap: "8px" } }, list, h("div", { class: "row" }, h("div", { class: "grow" }, picker), button("Add", addEx, { kind: "tonal" })), newField);
+  const optionsIn = textInput((t?.options ?? []).join(", "), { placeholder: "Swimming, Rowing machine, ..." });
+  const minLo = textInput(String(t?.minutes_min ?? 20), { inputmode: "numeric", "aria-label": "Minimum minutes" });
+  const minHi = textInput(String(t?.minutes_max ?? 40), { inputmode: "numeric", "aria-label": "Maximum minutes" });
+  const cardioBox = h("div", { class: "stack", style: { gap: "8px" } }, field("Activities to choose from", optionsIn, "Separate with commas"), h("div", { class: "pair" }, field("Min minutes", minLo), field("Max minutes", minHi)));
+  const kindSeg = h("div", { class: "row", style: { justifyContent: "center" } });
+  const showKind = () => {
+    strengthBox.hidden = kind === "cardio";
+    cardioBox.hidden = kind !== "cardio";
+    clear(kindSeg, segmented<TemplateKind>([["strength", "Strength"], ["cardio", "Cardio"]], kind, (v) => { kind = v; showKind(); }));
+  };
+  showKind();
   const save = () => {
     const nm = name.value.trim();
     if (!nm) { err.textContent = "Give the template a name."; err.hidden = false; return; }
-    const body = { name: nm, exercises: rows.map((r) => ({ exercise_id: r.exercise_id, sets: r.sets, rep_min: r.rep_min, rep_max: r.rep_max })) };
+    const body = kind === "cardio"
+      ? { name: nm, kind, note: note.value.trim(), options: optionsIn.value.split(",").map((x) => x.trim()).filter(Boolean), minutes_min: Math.round(parseNum(minLo.value, 20)), minutes_max: Math.round(parseNum(minHi.value, 40)) }
+      : { name: nm, kind, note: note.value.trim(), exercises: rows.map((r) => ({ exercise_id: r.exercise_id, sets: r.sets, rep_min: r.rep_min, rep_max: r.rep_max, start_weight: r.start_weight ?? null, note: r.note ?? "", assisted: !!r.assisted })) };
     try { t ? api("PUT", `/api/templates/${t.id}`, body) : api("POST", "/api/templates", body); } catch (e) { err.textContent = e instanceof ApiError ? e.message : String(e); err.hidden = false; return; }
     m.close(); onDone();
   };
-  const m = openModal(t ? "Edit template" : "New template", [field("Template name", name), list, h("div", { class: "row" }, h("div", { class: "grow" }, picker), button("Add", addEx, { kind: "tonal" })), newField, err], [
+  const m = openModal(t ? "Edit template" : "New template", [field("Template name", name), field("Note (optional)", note), kindSeg, strengthBox, cardioBox, err], [
     t ? button("Delete", async () => {
       if (!(await confirmDialog("Delete this template?", `"${t.name}" will be removed from your templates and cycle.`, "Delete"))) return;
       try { api("DELETE", `/api/templates/${t.id}`); } catch (e) { return toast((e as Error).message); }
@@ -212,12 +286,13 @@ function rProgress(draw: () => void): HTMLElement[] {
   if (!progressEx) return [...out, muted("Add some exercises first.")];
   const hist = api<HistoryPoint[]>("GET", `/api/exercises/${progressEx}/history`);
   if (!hist.length) return [...out, card("", muted("No sessions logged for this one yet. Go lift something!"))];
-  out.push(card("compact stack", muted("Top weight (kg)"), weightChart(hist)));
-  out.push(card("compact stack", h("h3", { class: "title-sm" }, "Entries"), ...[...hist].reverse().map((p) => h("div", { class: "entry" }, h("span", { class: "grow" }, p.date), h("strong", { style: { fontWeight: "500" } }, `${fmtWeight(p.top_weight)} kg x ${p.best_reps ?? "-"}`), h("span", { class: "muted small" }, `1RM ~${fmtWeight(p.est_1rm)}`)))));
+  const assisted = !!exercises.find((x) => String(x.id) === progressEx)?.assisted;
+  out.push(card("compact stack", muted(assisted ? "Counterweight (lower is stronger)" : "Top weight (kg)"), weightChart(hist, assisted)));
+  out.push(card("compact stack", h("h3", { class: "title-sm" }, "Entries"), ...[...hist].reverse().map((p) => h("div", { class: "entry" }, h("span", { class: "grow" }, p.date), h("strong", { style: { fontWeight: "500" } }, `${fmtWeight(p.top_weight)} kg x ${p.best_reps ?? "-"}`), assisted || p.est_1rm == null ? null : h("span", { class: "muted small" }, `1RM ~${fmtWeight(p.est_1rm)}`)))));
   return out;
 }
 
-function weightChart(hist: HistoryPoint[]): SVGElement {
+function weightChart(hist: HistoryPoint[], assisted = false): SVGElement {
   const W = 340, H = 200, L = 38, R = 12, T = 10, B = 26;
   const ws = hist.map((p) => p.top_weight);
   const { yMin, yMax, ticks } = axisTicks(Math.min(...ws), Math.max(...ws));
@@ -228,7 +303,7 @@ function weightChart(hist: HistoryPoint[]): SVGElement {
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("class", "chart");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", `Top weight per session, from ${fmtWeight(ws[0])} to ${fmtWeight(ws[ws.length - 1])} kilograms`);
+  svg.setAttribute("aria-label", `${assisted ? "Counterweight (lower is stronger)" : "Top weight"} per session, from ${fmtWeight(ws[0])} to ${fmtWeight(ws[ws.length - 1])} kilograms`);
   const line = hist.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(p.top_weight).toFixed(1)}`).join(" ");
   const area = `${line} L${x(hist.length - 1).toFixed(1)} ${H - B} L${x(0).toFixed(1)} ${H - B} Z`;
   const step = Math.max(1, Math.ceil(hist.length / 4));

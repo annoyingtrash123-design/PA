@@ -217,7 +217,11 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
             "Nothing is planned today, so it's a wide-open day. Use it for something you keep putting off, or leave it empty on purpose.".to_string()
         };
         if let Some(w) = workout.as_ref().filter(|w| !w.rest) {
-            s.push_str(&format!(" The gym has {} lined up if you fancy it.", w.name));
+            if w.is_cardio() {
+                s.push_str(" Some cardio is lined up if you fancy it.");
+            } else {
+                s.push_str(&format!(" The gym has {} lined up if you fancy it.", w.name));
+            }
         }
         return lead(s);
     }
@@ -310,7 +314,7 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
     }
     if let Some(w) = workout.as_ref().filter(|w| !w.rest) {
         if out.len() < 4 {
-            out.push(format!("{} is on at the gym too.", w.name));
+            out.push(if w.is_cardio() { "A bit of cardio is on the cards too.".to_string() } else { format!("{} is on at the gym too.", w.name) });
         }
     }
     out.join(" ")

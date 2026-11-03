@@ -25,7 +25,7 @@ const TPL: [string, number[]][] = [
 
 export function init_state(today: string): string {
   const s: Any = {
-    version: 1, next_id: 100,
+    version: 2, next_id: 100,
     settings: { assistant_name: "Sunny", user_name: "", voice: "", location_name: "Sydney", latitude: -33.8688, longitude: 151.2093, timezone: "Australia/Sydney" },
     categories: CATS.map(([name, color], i) => ({ id: i + 1, name, color })),
     tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, days_off: [], goals: [],
@@ -36,11 +36,12 @@ export function init_state(today: string): string {
       notes: [],
     },
     gym: {
-      exercises: EX.map((name, i) => ({ id: i + 1, name })),
-      templates: TPL.map(([name, ids], i) => ({
-        id: i + 1, name, exercises: ids.map((id) => ({ exercise_id: id, name: EX[id - 1], sets: 3, rep_min: 6, rep_max: 10 })),
-      })),
-      rotation: { items: [{ template_id: 1 }, { template_id: 3 }, { template_id: 5 }, { rest: true }, { template_id: 2 }, { template_id: 4 }, { template_id: 6 }, { rest: true }], next_index: 0 },
+      exercises: EX.map((name, i) => ({ id: i + 1, name, assisted: false })),
+      templates: [...TPL.map(([name, ids], i) => ({
+        id: i + 1, name, kind: "strength", note: "", options: [], minutes_min: null, minutes_max: null,
+        exercises: ids.map((id) => ({ exercise_id: id, name: EX[id - 1], sets: 4, rep_min: 10, rep_max: 10, start_weight: null, note: "" })),
+      })), { id: 7, name: "Cardio", kind: "cardio", note: "Do one of the following for 20–40 mins", exercises: [], options: ["Swimming", "Rowing machine", "Stair machine", "Intense walking/hiking"], minutes_min: 20, minutes_max: 40 }],
+      rotation: { items: [{ template_id: 1 }, { template_id: 3 }, { template_id: 5 }, { template_id: 7 }, { template_id: 2 }, { template_id: 4 }, { template_id: 6 }, { template_id: 7 }], next_index: 0 },
       sessions: [],
     },
   };
@@ -120,7 +121,7 @@ function planFor(s: Any, item: Any): Any {
   const t = s.gym.templates.find((x: Any) => x.id === item.template_id);
   if (!t) return { rest: true };
   return {
-    rest: false, template_id: t.id, name: t.name,
+    rest: false, template_id: t.id, name: t.name, kind: t.kind ?? "strength", note: t.note ?? "", options: t.options ?? [], minutes_min: t.minutes_min ?? null, minutes_max: t.minutes_max ?? null,
     exercises: t.exercises.map((e: Any) => {
       const last = lastFor(s, e.exercise_id);
       let sug: number | null = null, hint: string | null = null;
@@ -130,7 +131,8 @@ function planFor(s: Any, item: Any): Any {
         sug = all ? w + 2.5 : w;
         hint = all ? `You hit ${e.rep_max} reps on every set last time, try ${sug} kg` : null;
       }
-      return { exercise_id: e.exercise_id, name: e.name, sets: e.sets, rep_min: e.rep_min, rep_max: e.rep_max, last, suggested_weight: sug, hint };
+      if (!last && e.start_weight != null) { sug = e.start_weight; hint = `Starting weight: ${sug} kg`; }
+      return { exercise_id: e.exercise_id, name: e.name, sets: e.sets, rep_min: e.rep_min, rep_max: e.rep_max, last, suggested_weight: sug, hint, assisted: false, start_weight: e.start_weight ?? null, note: e.note ?? "" };
     }),
   };
 }
@@ -270,12 +272,12 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
     }));
   }
   if (p === "/api/templates") {
-    if (is("POST")) { const t = { id: id(), name: body.name, exercises: (body.exercises || []).map((e: Any) => ({ ...e, name: s.gym.exercises.find((x: Any) => x.id === e.exercise_id)?.name })) }; s.gym.templates.push(t); return mut(t); }
+    if (is("POST")) { const t = { id: id(), name: body.name, kind: body.kind ?? "strength", note: body.note ?? "", options: body.options ?? [], minutes_min: body.minutes_min ?? null, minutes_max: body.minutes_max ?? null, exercises: (body.exercises || []).map((e: Any) => ({ ...e, name: s.gym.exercises.find((x: Any) => x.id === e.exercise_id)?.name })) }; s.gym.templates.push(t); return mut(t); }
     return ro(s.gym.templates);
   }
   if (M(/^\/api\/templates\/(\d+)$/)) {
     const i = s.gym.templates.findIndex((x: Any) => x.id === +m![1]); if (i < 0) throw nf();
-    if (is("PUT")) { s.gym.templates[i] = { id: s.gym.templates[i].id, name: body.name, exercises: body.exercises.map((e: Any) => ({ ...e, name: s.gym.exercises.find((x: Any) => x.id === e.exercise_id)?.name })) }; return mut(s.gym.templates[i]); }
+    if (is("PUT")) { s.gym.templates[i] = { id: s.gym.templates[i].id, name: body.name, kind: body.kind ?? "strength", note: body.note ?? "", options: body.options ?? [], minutes_min: body.minutes_min ?? null, minutes_max: body.minutes_max ?? null, exercises: body.exercises.map((e: Any) => ({ ...e, name: s.gym.exercises.find((x: Any) => x.id === e.exercise_id)?.name })) }; return mut(s.gym.templates[i]); }
     if (is("DELETE")) { s.gym.templates.splice(i, 1); s.gym.rotation.items = s.gym.rotation.items.filter((x: Any) => x.rest || x.template_id !== +m![1]); return mut({}); }
   }
   if (p === "/api/rotation") {
@@ -289,10 +291,13 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
     const plan = planFor(s, { template_id: body.template_id }); if (plan.rest) throw nf("template not found");
     const sets: Any[] = [];
     for (const e of plan.exercises) for (let n = 1; n <= e.sets; n++) sets.push({ exercise_id: e.exercise_id, set_no: n, weight: e.suggested_weight ?? 0, reps: e.rep_max, done: false });
-    const sess = { id: id(), template_id: plan.template_id, name: plan.name, date: ctx.today, completed: false, sets };
+    const sess: Any = { id: id(), template_id: plan.template_id, name: plan.name, date: ctx.today, completed: false, sets };
+    if (plan.kind === "cardio") sess.cardio = { activity: "", minutes: 30 };
     s.gym.sessions.push(sess); return mut(sess);
   }
   if (M(/^\/api\/sessions\/(\d+)\/sets$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.sets = body.sets; return mut(x); }
+  if (M(/^\/api\/sessions\/(\d+)\/cardio$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.cardio = { activity: body.activity, minutes: body.minutes }; return mut(x); }
+  if (is("GET") && p === "/api/state/migrate") return ro({ version: 2 });
   if (M(/^\/api\/sessions\/(\d+)\/complete$/) && is("POST")) {
     const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.completed = true;
     const r = s.gym.rotation; const n = r.items.length;

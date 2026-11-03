@@ -74,28 +74,41 @@ Rollover rule: when today is requested, any one-off task with `date < today` and
 
 ## Gym
 ```json
-Exercise = {"id":1,"name":"Bench Press"}
-Template = {"id":1,"name":"Push A","exercises":[{"exercise_id":1,"name":"Bench Press","sets":3,"rep_min":6,"rep_max":10}]}
+Exercise = {"id":1,"name":"Counterweighted dip","assisted":true}   // assisted: a HIGHER weight is EASIER (counterweight machines)
+Template = {"id":1,"name":"Push 1","kind":"strength","note":"Chest + Triceps + Front Deltoid",
+  "exercises":[{"exercise_id":1,"name":"Incline dumbbell chest press","sets":4,"rep_min":10,"rep_max":10,
+                "start_weight":15,"note":""}],            // start_weight: kg or null (bodyweight / unknown); note: shown under the name
+  "options":[], "minutes_min":null, "minutes_max":null}
+CardioTemplate = {"id":7,"name":"Cardio","kind":"cardio","note":"Do one of the following for 20\u201340 mins","exercises":[],
+  "options":["Swimming","Rowing machine","Stair machine","Intense walking/hiking"],"minutes_min":20,"minutes_max":40}
 Rotation = {"items":[{"template_id":1}, {"template_id":2}, {"template_id":3}, {"rest":true}], "next_index": 0}
-WorkoutPlan = {"rest": false, "template_id":1, "name":"Push A",
-  "exercises":[{"exercise_id":1,"name":"Bench Press","sets":3,"rep_min":6,"rep_max":10,
-                "last":{"date":"2026-10-30","sets":[{"weight":60,"reps":10}]} | null,
-                "suggested_weight": 62.5, "hint": "You hit 10 reps on every set last time, try 62.5 kg"}]}
-Session = {"id":1,"template_id":1,"name":"Push A","date":"2026-11-02","completed":false,
-  "sets":[{"exercise_id":1,"set_no":1,"weight":60,"reps":10,"done":true}]}
+WorkoutPlan = {"rest": false, "template_id":1, "name":"Push 1", "kind":"strength"|"cardio", "note":"...",
+  "exercises":[{"exercise_id":1,"name":"Incline dumbbell chest press","sets":4,"rep_min":10,"rep_max":10,
+                "last":{"date":"2026-10-30","sets":[{"weight":15,"reps":10}]} | null,
+                "suggested_weight": 17.5, "hint": "You hit 10 reps on every set last time, try 17.5 kg",
+                "assisted": false, "start_weight": 15, "note": ""}],
+  "options":[], "minutes_min":null, "minutes_max":null}      // options/minutes_*: cardio only
+Session = {"id":1,"template_id":1,"name":"Push 1","date":"2026-11-02","completed":false,
+  "sets":[{"exercise_id":1,"set_no":1,"weight":15,"reps":10,"done":true}],
+  "cardio": null | {"activity":"Swimming","minutes":30}}      // cardio sessions have no sets
 ```
-`GET/POST /api/exercises`, `PUT/DELETE /api/exercises/{id}`
-`GET/POST /api/templates`, `PUT/DELETE /api/templates/{id}`
-`GET /api/rotation` → Rotation; `PUT /api/rotation` body `{"items":[...]}`
-`GET /api/gym/next` → WorkoutPlan (the next item in the rotation)
-`POST /api/gym/rest` → marks the current rest item as taken, advancing the rotation → Rotation
-`POST /api/sessions` body `{"template_id":1}` → Session (today, pre-filled with suggested weights, sets not done). If an uncompleted session for today exists, return it.
-`PUT /api/sessions/{id}/sets` body `{"sets":[...]}` → Session
-`POST /api/sessions/{id}/complete` → Session; advances rotation past this template.
-`GET /api/exercises/{id}/history` → `[{"date":"...","top_weight":62.5,"best_reps":8,"est_1rm":79.2}]`
+`GET/POST /api/exercises` (body `{name, assisted?}`), `PUT/DELETE /api/exercises/{id}` (`assisted` optional, unchanged when omitted)
+`GET/POST /api/templates`, `PUT/DELETE /api/templates/{id}`: body `{name, kind?:"strength"|"cardio", note?, exercises:[{exercise_id | name, sets, rep_min, rep_max, start_weight?, note?, assisted?}], options?, minutes_min?, minutes_max?}`.
+A template exercise's `assisted`, when given, sets the flag on the (shared) exercise. Cardio templates need at least one option (names are de-duplicated; minutes default 20-40) and ignore `exercises`.
+Exercises are shared by name across templates (the same `exercise_id`), so history carries over: "Seated cable machine row" in Pull 1 and Pull 2 is ONE exercise.
+`GET /api/rotation` -> Rotation; `PUT /api/rotation` body `{"items":[...]}`
+`GET /api/gym/next` -> WorkoutPlan (the next item in the rotation)
+`POST /api/gym/rest` -> marks the current rest item as taken, advancing the rotation -> Rotation
+`POST /api/sessions` body `{"template_id":1}` -> Session (today, pre-filled with suggested weights, sets not done; the start weight when the exercise has no history). If an uncompleted session for today exists, return it. For a cardio template: no sets, `cardio` = `{"activity":"","minutes":30}` (30 clamped into the template's range).
+`PUT /api/sessions/{id}/sets` body `{"sets":[...]}` -> Session
+`PUT /api/sessions/{id}/cardio` body `{"activity":"Swimming","minutes":35}` -> Session (cardio sessions only; minutes 1..600)
+`POST /api/sessions/{id}/complete` -> Session; advances rotation past this template. A cardio session needs an activity first (400 otherwise).
+`GET /api/exercises/{id}/history` -> `[{"date":"...","top_weight":62.5,"best_reps":8,"est_1rm":79.2}]`. For assisted exercises `top_weight` is the LOWEST counterweight of the session (the best one) and `est_1rm` is null.
 
-Rotation projection for `/api/days`: today gets the next rotation item, each following day gets the following item (wrapping), unless a session was already completed today (then today shows that session, and projection continues from next).
-Progression: if every set of an exercise last time was done with `reps >= rep_max` at the same weight W, suggest W + 2.5; otherwise suggest W. No history → null.
+Rotation projection for `/api/days`: today gets the next rotation item, each following day gets the following item (wrapping), unless a session was already completed today (then today shows that session, and projection continues from next). The default rotation is Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, Pull 2, Legs + Abs 2, Cardio.
+Progression: if every set of an exercise last time was done with `reps >= rep_max` at the same weight W, suggest W + 2.5; otherwise suggest W. No history -> the template exercise's `start_weight` with hint `"Starting weight: 15 kg"`, or null when it has none.
+Assisted exercises go the other way: every set hit -> suggest W - 2.5 (not below 0) with hint "You hit every rep last time, try 2.5 kg less counterweight"; otherwise stay at W. Weekly progress (PRs) counts a lower counterweight as better.
+Briefings and the weekly overview mention cardio sessions naturally ("a swim", "40 minutes on the rowing machine").
 
 ## Goals
 ```json

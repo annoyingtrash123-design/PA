@@ -47,8 +47,10 @@ struct Week {
     slid_titles: Vec<String>,
     /// completed gym sessions (template names, in order)
     sessions: Vec<String>,
-    /// exercises whose top weight rose: (name, now, was)
-    prs: Vec<(String, f64, f64)>,
+    /// completed cardio sessions as natural phrases ("a swim", "40 minutes on the rowing machine")
+    cardio: Vec<String>,
+    /// exercises that improved: (name, now, was, assisted)
+    prs: Vec<(String, f64, f64, bool)>,
     /// notable things next week: (weekday, title)
     next_items: Vec<(String, String)>,
     next_workouts: Vec<String>,
@@ -64,6 +66,8 @@ struct Ctx {
     items: Vec<Occurrence>,
     workout: Option<WorkoutPlan>,
     gym_done: Option<String>,
+    /// set when the session done today was a cardio one: a natural phrase
+    cardio_done: Option<String>,
     tomorrow: Option<(String, Vec<Occurrence>, Option<WorkoutPlan>)>,
     /// the days after tomorrow (weekday, items), for a glance further ahead
     ahead: Vec<(String, Vec<Occurrence>)>,
@@ -91,6 +95,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
         items: vec![],
         workout: None,
         gym_done: None,
+        cardio_done: None,
         tomorrow: None,
         ahead: vec![],
         week: None,
@@ -116,6 +121,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
             ctx.workout = first.workout;
             if kind == Kind::Evening {
                 ctx.gym_done = gym::completed_session_on(env.st, date).map(|(_, _, name)| name);
+                ctx.cardio_done = gym::cardio_done_on(env.st, date).map(|c| gym::cardio_phrase(&c));
             }
             if !days.is_empty() {
                 let t = days.remove(0);
@@ -132,7 +138,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
             let monday = date - Duration::days(date.weekday().num_days_from_monday() as i64);
             let days = tasks::build_days(env, monday, 14);
             let (this, next) = days.split_at(7);
-            let mut w = Week { total: 0, done: 0, done_titles: vec![], slid_titles: vec![], sessions: vec![], prs: vec![], next_items: vec![], next_workouts: vec![] };
+            let mut w = Week { total: 0, done: 0, done_titles: vec![], slid_titles: vec![], sessions: vec![], cardio: vec![], prs: vec![], next_items: vec![], next_workouts: vec![] };
             let mut routine_done: Vec<String> = vec![];
             for d in this {
                 w.total += d.items.len();
@@ -160,7 +166,13 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
                     w.done_titles.push(t);
                 }
             }
-            w.sessions = gym::sessions_between(env.st, monday, monday + Duration::days(6)).into_iter().map(|(_, n)| n).collect();
+            for (_, n, c) in gym::sessions_between(env.st, monday, monday + Duration::days(6)) {
+                match c {
+                    Some(c) if !c.activity.trim().is_empty() => w.cardio.push(gym::cardio_phrase(&c)),
+                    Some(_) => {}
+                    None => w.sessions.push(n),
+                }
+            }
             w.prs = gym::weekly_prs(env.st, monday, monday + Duration::days(6));
             for d in next {
                 for o in d.items.iter().filter(|o| !o.recurring) {
@@ -186,13 +198,25 @@ fn hint_sentence(p: &WorkoutPlan) -> Option<String> {
     for e in &p.exercises {
         if let (Some(l), Some(sw)) = (&e.last, e.suggested_weight) {
             let last_w = l.sets.iter().map(|s| s.weight).fold(0.0, f64::max);
-            if sw > last_w {
+            if e.assisted && sw < last_w {
+                return Some(format!("Last time you hit every rep on {}, so try {} kilos of counterweight today.", e.name, gym::fmt_w(sw)));
+            }
+            if !e.assisted && sw > last_w {
                 return Some(format!("Last time you hit every rep on {}, so go for {} kilos today.", e.name, gym::fmt_w(sw)));
             }
             fallback.get_or_insert(format!("Last time you lifted {} kilos on {}, so see if you can beat those reps.", gym::fmt_w(sw), e.name));
         }
     }
     fallback
+}
+
+fn join_or(v: &[String]) -> String {
+    match v {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} or {b}"),
+        _ => format!("{} or {}", v[..v.len() - 1].join(", "), v[v.len() - 1]),
+    }
 }
 
 fn workout_sentence(p: &WorkoutPlan, d: NaiveDate) -> String {
@@ -206,6 +230,15 @@ fn workout_sentence(p: &WorkoutPlan, d: NaiveDate) -> String {
             5,
         )
         .to_string();
+    }
+    if p.is_cardio() {
+        let opts: Vec<String> = p.options.iter().map(|o| o.to_lowercase()).collect();
+        let mins = match (p.minutes_min, p.minutes_max) {
+            (Some(a), Some(b)) if a != b => format!(" for {a} to {b} minutes"),
+            (Some(a), _) => format!(" for {a} minutes"),
+            _ => String::new(),
+        };
+        return if opts.is_empty() { format!("Today is a cardio day{mins}.") } else { format!("Today is a cardio day: pick {}{mins}.", join_or(&opts)) };
     }
     let names: Vec<String> = p.exercises.iter().map(|e| e.name.clone()).collect();
     let mut s = format!("On the gym front, today is {}.", p.name);
@@ -235,12 +268,14 @@ fn next_up(items: &[Occurrence], date: NaiveDate, today: NaiveDate, now: &str) -
 /// Short grounded line about the week, used as the weekly "affirmation" (no numbers).
 fn week_line(w: &Week) -> String {
     let tasks: Vec<String> = w.done_titles.iter().take(2).cloned().collect();
-    if tasks.is_empty() && w.sessions.is_empty() {
+    if tasks.is_empty() && w.sessions.is_empty() && w.cardio.is_empty() {
         "A quiet week, and next week is a fresh page.".into()
     } else if !tasks.is_empty() {
         format!("A week with {} in it, and some good momentum to carry forward.", join(&tasks))
-    } else {
+    } else if !w.sessions.is_empty() {
         format!("A week with {} at the gym, and that counts for a lot.", join(&w.sessions))
+    } else {
+        format!("A week with {}, and that counts for a lot.", join(&w.cardio))
     }
 }
 
@@ -643,7 +678,11 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             }
             let mut link_texts: Vec<(String, String)> = Vec::new();
             if let Some(g) = &c.gym_done {
-                parts.push(format!("And you got your {g} session in, which is fantastic."));
+                if let Some(cp) = &c.cardio_done {
+                    parts.push(format!("And you fitted in {cp} today, which is fantastic."));
+                } else {
+                    parts.push(format!("And you got your {g} session in, which is fantastic."));
+                }
                 link_texts.push((format!("that {g} session"), format!("gym session {g}")));
             } else if let Some(p) = &c.workout {
                 if p.rest {
@@ -708,10 +747,10 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 1 => format!("Hi there{n}, {a} here. Let's take a moment to look back at your week."),
                 _ => format!("Hi again{n}! It's {a}, and I've got your week in review."),
             });
-            let quiet = w.done_titles.is_empty() && w.sessions.is_empty();
+            let quiet = w.done_titles.is_empty() && w.sessions.is_empty() && w.cardio.is_empty();
             // goal connection: first goal that relates to something done or trained
             let mut texts: Vec<(String, String)> = Vec::new();
-            for (nm, _, _) in w.prs.iter() {
+            for (nm, _, _, _) in w.prs.iter() {
                 texts.push((format!("the progress on {nm}"), format!("{nm} gym lift")));
             }
             for sn in w.sessions.iter() {
@@ -742,8 +781,11 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 }
                 let mut hl: Vec<String> = vec![];
                 if !titles.is_empty() {
-                    let take: Vec<String> = titles.iter().take(if w.sessions.is_empty() { 3 } else { 2 }).cloned().collect();
+                    let take: Vec<String> = titles.iter().take(if w.sessions.is_empty() && w.cardio.is_empty() { 3 } else { 2 }).cloned().collect();
                     hl.push(format!("got {} done", join(&take)));
+                }
+                if !w.cardio.is_empty() {
+                    hl.push(format!("fitted in cardio too, with {}", join(&w.cardio)));
                 }
                 if !w.sessions.is_empty() {
                     let mut names: Vec<String> = vec![];
@@ -754,8 +796,12 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                     }
                     hl.push(format!("made it to the gym for {}", join(&names)));
                 }
-                if let Some((nm, now, was)) = w.prs.first() {
-                    hl.push(format!("moved {nm} up from {} to {} kilos", gym::fmt_w(*was), gym::fmt_w(*now)));
+                if let Some((nm, now, was, assisted)) = w.prs.first() {
+                    if *assisted {
+                        hl.push(format!("brought the counterweight on {nm} down from {} to {} kilos", gym::fmt_w(*was), gym::fmt_w(*now)));
+                    } else {
+                        hl.push(format!("moved {nm} up from {} to {} kilos", gym::fmt_w(*was), gym::fmt_w(*now)));
+                    }
                 }
                 hl.truncate(3);
                 let lead = pick(&["The bits that stood out: you", "Looking back, you", "A few things I loved: you"], d, 41);
@@ -863,6 +909,9 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
         if p.rest {
             return "rest day".into();
         }
+        if p.is_cardio() {
+            return format!("{}: cardio, choose one of {} ({}-{} minutes)", p.name, p.options.join(", "), p.minutes_min.unwrap_or(20), p.minutes_max.unwrap_or(40));
+        }
         let ex: Vec<String> = p
             .exercises
             .iter()
@@ -888,7 +937,10 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 s.push_str(&format!("Suggested key task to name as the one to watch: {}\n", item_phrase(k)));
             }
             match (&c.workout, &c.gym_done) {
-                (_, Some(g)) => s.push_str(&format!("Workout: completed {g} today\n")),
+                (_, Some(g)) => match &c.cardio_done {
+                    Some(cp) => s.push_str(&format!("Workout: completed cardio today ({cp})\n")),
+                    None => s.push_str(&format!("Workout: completed {g} today\n")),
+                },
                 (Some(p), None) => s.push_str(&format!("Workout today: {}\n", plan(p))),
                 _ => s.push_str("Workout today: none planned\n"),
             }
@@ -905,8 +957,13 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
             s.push_str(&format!("Things done this week (Mon-Sun): {}\n", vl(&w.done_titles)));
             s.push_str(&format!("Planned but slid, not done (mention gently, no guilt): {}\n", vl(&w.slid_titles)));
             s.push_str(&format!("Gym sessions completed this week: {}\n", vl(&w.sessions)));
-            for (n, now, was) in &w.prs {
-                s.push_str(&format!("Progression: {n} top weight went up from {} to {} kilos\n", gym::fmt_w(*was), gym::fmt_w(*now)));
+            s.push_str(&format!("Cardio completed this week (mention naturally, e.g. 'a swim'): {}\n", vl(&w.cardio)));
+            for (n, now, was, assisted) in &w.prs {
+                if *assisted {
+                    s.push_str(&format!("Progression: {n} counterweight (lower is stronger) went down from {} to {} kilos\n", gym::fmt_w(*was), gym::fmt_w(*now)));
+                } else {
+                    s.push_str(&format!("Progression: {n} top weight went up from {} to {} kilos\n", gym::fmt_w(*was), gym::fmt_w(*now)));
+                }
             }
             let next: Vec<String> = w.next_items.iter().map(|(wd, t)| format!("{t} on {wd}")).collect();
             s.push_str(&format!("Next week's notable things: {}\n", vl(&next)));

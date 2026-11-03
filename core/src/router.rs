@@ -128,6 +128,7 @@ fn export_import(env: &mut Env, b: &Value) -> Res<Value> {
     } else {
         st.gym.rotation.next_index = 0;
     }
+    seed::migrate(&mut st);
     *env.st = st;
     env.changed = true;
     Ok(serde_json::to_value(&*env.st).unwrap_or(Value::Null))
@@ -175,6 +176,7 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         ("POST", ["sessions"]) => ok(gym::session_create(env, parse(body)?)?),
         ("GET", ["sessions", id]) => ok(gym::session_get(env.st, id_of(id)?)?),
         ("PUT", ["sessions", id, "sets"]) => ok(gym::session_sets(env, id_of(id)?, parse(body)?)?),
+        ("PUT", ["sessions", id, "cardio"]) => ok(gym::session_cardio(env, id_of(id)?, parse(body)?)?),
         ("POST", ["sessions", id, "complete"]) => ok(gym::session_complete(env, id_of(id)?)?),
         // goals
         ("GET", ["goals"]) => Ok(goals::list(env)),
@@ -216,6 +218,7 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
             let code: i64 = q.get("code").and_then(|c| c.trim().parse::<f64>().ok()).map(|c| c as i64).ok_or_else(|| ApiErr::bad("code must be a number"))?;
             Ok(json!({"summary": weather::wmo_summary(code), "icon": weather::wmo_icon(code)}))
         }
+        ("GET", ["state", "migrate"]) => Ok(json!({"version": env.st.version})),
         ("POST", ["sample-data"]) => Ok(seed::sample_data(env)),
         ("GET", ["export"]) => Ok(serde_json::to_value(&*env.st).unwrap_or(Value::Null)),
         ("POST", ["import"]) => export_import(env, body),
@@ -226,7 +229,7 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
 /// Endpoints that never look at the date context.
 fn needs_today(method: &str, path: &str) -> bool {
     let p = path.strip_prefix("/api").unwrap_or(path).trim_matches('/');
-    !matches!((method, p), ("GET", "weather-summary") | ("POST", "holidays/filter") | ("GET", "export") | ("POST", "import") | ("GET", "settings") | ("GET", "categories") | ("GET", "memory"))
+    !matches!((method, p), ("GET", "weather-summary") | ("POST", "holidays/filter") | ("GET", "export") | ("POST", "import") | ("GET", "settings") | ("GET", "categories") | ("GET", "memory") | ("GET", "state/migrate"))
 }
 
 /// Typed entry point; [`crate::call`] wraps it into a JSON string.
@@ -265,7 +268,9 @@ pub fn call_typed(state: &str, method: &str, path: &str, body: &str, ctx: &str) 
         None if !needs_today(&method, path_only) => NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         None => return err_response(ApiErr::bad("ctx.today must be YYYY-MM-DD")),
     };
-    let mut env = Env { st: &mut st, ctx: &ctx_v, today, changed: false };
+    // old states are upgraded on any call, and the upgraded state is returned so the UI persists it
+    let migrated = !importing && seed::migrate(&mut st);
+    let mut env = Env { st: &mut st, ctx: &ctx_v, today, changed: migrated };
     match handle(&mut env, &method, path_only, &q, &body_v) {
         Ok(v) => {
             let changed = env.changed;

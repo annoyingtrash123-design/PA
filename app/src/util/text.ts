@@ -60,3 +60,13 @@ export function fmtWeight(w: number | null | undefined): string {
   if (!Number.isFinite(n)) return String(w);
   return String(n);
 }
+
+/** "4 × 10" when min and max reps are equal, else "3 × 8–12". */
+export function fmtSetsReps(sets: number, min: number, max: number): string {
+  return min === max ? `${sets} × ${min}` : `${sets} × ${min}–${max}`;
+}
+
+/** "10" or "8–12". */
+export function fmtRepRange(min: number, max: number): string {
+  return min === max ? String(min) : `${min}–${max}`;
+}

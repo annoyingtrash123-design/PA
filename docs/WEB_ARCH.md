@@ -23,7 +23,7 @@ AI-generated texts are cached by the UI in IndexedDB (`pa-ai-cache`, keyed by th
 
 ```json
 State = {
-  "version": 1,
+  "version": 2,
   "next_id": 100,
   "settings": {"assistant_name":"Sunny","user_name":"","voice":"", "location_name":"Sydney",
                "latitude":-33.8688,"longitude":151.2093,"timezone":"Australia/Sydney"},
@@ -90,5 +90,13 @@ The core cannot call the network, so these return everything the UI needs to do 
 ### init_state defaults (a real fresh start, no demo tasks)
 Settings as above (Sydney); the 10 default categories (API.md); Memory defaults (weather 18/22/25,
 likes_rain, avoid_sunburn; work Mon–Fri 10:00–17:00, lunch 60, region AU-NSW; rhythm 06:00–07:00 / 23:00–00:00;
-no notes); gym: the six PPL templates (Push A/B, Pull A/B, Legs A/B) and rotation Push A, Pull A, Legs A, Rest,
-Push B, Pull B, Legs B, Rest; no sessions, tasks or goals.
+no notes); gym: the owner's routine (Push 1/2, Pull 1/2, Legs + Abs 1/2, Cardio; 4 x 10 for strength moves, start weights, assisted
+counterweight machines) and rotation Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, Pull 2, Legs + Abs 2, Cardio; no sessions, tasks or goals.
+
+### State versions and migration
+`State.version` is 2. Every `call` first upgrades an older state (`seed::migrate`) and, when it did, returns the upgraded state
+in `state` even for a GET, so the UI persists it; `startCore` additionally calls `GET /api/state/migrate` (body `{"version":2}`) once
+for a stored v1 state. v1 -> v2: if the gym templates are exactly the six old generic ones (Push A, Push B, Pull A, Pull B, Legs A,
+Legs B; never customised) the whole gym section is replaced by the new defaults (sessions are dropped when all belong to those
+templates; otherwise they are kept with the exercises they reference). Any other state only gains the new fields (serde defaults).
+`POST /api/import` migrates the imported backup the same way.
