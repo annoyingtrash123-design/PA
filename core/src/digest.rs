@@ -344,7 +344,8 @@ overview: 2 to 4 short sentences in plain prose organising the day: its shape (w
 pub fn weather_line(w: &Option<Weather>, quote_hint: &str) -> String {
     match w {
         Some(w) => {
-            let mut s = format!("Weather: {}, high {} C, low {} C", w.summary, w.temp_max, w.temp_min);
+            // the summary is a label, not a sentence: tell the model so it never says "it was thunderstorm"
+            let mut s = format!("Weather (the summary is only a label, so say it naturally, for example 'a thunderstorm' or 'some rain', never 'it was thunderstorm'): {}, high {} C, low {} C", w.summary, w.temp_max, w.temp_min);
             if let Some(p) = w.precip_prob {
                 s.push_str(&format!(", rain chance {} ({quote_hint})", if p >= 70 { "high" } else if p >= 40 { "moderate" } else { "low" }));
             }

@@ -398,6 +398,50 @@ impl WorkoutPlan {
     }
 }
 
+/// What a workout trains in plain words, derived from its name, note and exercise names (generic, not tied to
+/// particular templates): "chest, shoulders and triceps". None for a rest day or when nothing matches.
+pub fn trains(p: &WorkoutPlan) -> Option<String> {
+    if p.rest {
+        return None;
+    }
+    let words_of = |t: &str| -> Vec<String> { t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(String::from).collect() };
+    let has = |w: &[String], ks: &[&str]| w.iter().any(|x| ks.iter().any(|k| x.starts_with(k)));
+    let head = words_of(&format!("{} {}", p.name, p.note));
+    let ex = words_of(&p.exercises.iter().map(|e| e.name.as_str()).collect::<Vec<_>>().join(" "));
+    let mut groups: Vec<&str> = vec![];
+    for (w, strict) in [(&head, true), (&ex, false)] {
+        if !groups.is_empty() {
+            break;
+        }
+        if p.is_cardio() || (strict && has(w, &["cardio", "swim", "jog", "cycl", "bike", "aerobic", "hiit"])) {
+            groups.push("heart, lungs and endurance");
+        }
+        if has(w, &["leg", "squat", "lunge", "glute", "lower", "deadlift", "calf"]) {
+            groups.push("legs, glutes and core");
+        } else if has(w, &["abs", "core", "plank"]) {
+            groups.push("core");
+        }
+        if has(w, &["pull", "row", "lat", "chin", "curl"]) {
+            groups.push("back, biceps and rear delts");
+        }
+        if has(w, &["push", "bench", "chest", "press", "fly", "dip", "tricep"]) {
+            groups.push("chest, shoulders and triceps");
+        }
+        if groups.is_empty() && has(w, &["upper"]) {
+            groups.push("chest, back and arms");
+        }
+        if groups.len() > 1 && !strict {
+            groups.truncate(1);
+        }
+    }
+    groups.dedup();
+    match groups.len() {
+        0 => None,
+        1 => Some(groups[0].to_string()),
+        _ => Some(groups.join(", and also ")),
+    }
+}
+
 pub fn fmt_w(w: f64) -> String {
     if (w - w.round()).abs() < 1e-9 {
         format!("{}", w.round() as i64)

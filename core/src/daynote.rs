@@ -215,7 +215,7 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
 
 pub const SYSTEM: &str = concat!(spoken_rule!(), "You write a single short note shown on the home screen of a personal planner app, about ONE specific day. \
 Output 1 to 2 sentences, at most 40 words, plain text. No markdown, no emojis, no quotation marks, no lists. \
-Sound like a chatty, warm friend who knows the person, not a report. Be grounded and specific: name the key task, say roughly where the busy stretch is, and where there is a breather or slack. \
+Sound like a chatty, warm friend who knows the person, not a report, and feel free to say 'we' as in 'what we've got on'. Be grounded and specific: name the key task, say roughly where the busy stretch is, and where there is a breather or slack. \
 NEVER state raw counts, fractions or percentages (no '5 tasks', 'three things', '0 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few' are fine, but naming the actual tasks is better. \
 If one of the goals given plausibly relates to a task today, you may tie them together in a few words; never force a link, and mention a goal deadline only if it is close and relevant. \
 Never use clichés or generic affirmations like 'you've got this', 'believe in yourself', 'one step at a time' or 'you are enough'. \

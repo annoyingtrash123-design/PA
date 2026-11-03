@@ -25,6 +25,7 @@ pub mod news;
 pub mod router;
 pub mod seed;
 pub mod tasks;
+pub mod taskvoice;
 pub mod util;
 pub mod weather;
 

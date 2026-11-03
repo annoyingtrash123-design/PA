@@ -701,7 +701,7 @@ fn morning_template_word_count_on_sample_data() {
             }
             let text = morning(&mut a, &day);
             let n = words_in(&text);
-            assert!((360..=540).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
+            assert!((360..=720).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
             assert!(!has_stats(&text), "{day}: {text}");
         }
     }
@@ -771,7 +771,7 @@ fn morning_template_prefers_meaningful_fixed_points() {
     }
     assert!(text.contains("looking after yourself") || text.contains("routine side"), "{text}");
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
-    assert_eq!(b["max_words"], 520);
+    assert_eq!(b["max_words"], 760);
     assert!(b["cache_key"].as_str().unwrap().starts_with("briefing:morning:2026-11-02:"));
     assert!(b["user_prompt"].as_str().unwrap().contains("Plan tomorrow"));
     assert_eq!(b["stats"]["total"], 7);
@@ -1102,6 +1102,7 @@ const FINITE: &[&str] = &[
     "enjoy", "finish", "head", "plan", "pick", "book", "pay", "call", "bring", "grab", "give", "come", "comes", "stay", "rest", "wrap", "catch", "begin", "stack", "counts", "feeds", "ties",
     "helps", "opens", "carries", "wait", "fitted", "made", "hit", "leave", "left", "use", "put", "dim", "ease", "eases", "settle", "protect", "build", "run", "clear", "shout", "sleep", "sorted",
     "did", "know", "wrapped", "rise", "say", "happen", "stood", "loved", "mean", "means", "hope", "think", "choose", "drink", "dress", "layer", "listen", "go", "doing", "getting", "ended", "remember",
+    "stayed", "snowed", "poured", "going",
 ];
 const CONTRACTION_BASES: &[&str] = &["it", "that", "there", "here", "what", "let", "he", "she", "who", "today", "tomorrow", "everything", "nothing", "one"];
 
@@ -1785,4 +1786,145 @@ fn news_select_endpoint_returns_prompts_and_refresh_avoids_the_recorded_stories(
     }
     let (s, _) = a.req("POST", "/api/news/record", json!({"kind": "morning", "items": []}));
     assert_eq!(s, 400);
+}
+
+// ------------------------------------------------------------ per-task talk
+
+/// A fresh app with five generic one-off tasks tomorrow and today (varied size, notes, steps, a timed one).
+fn five_task_app() -> (App, Vec<&'static str>) {
+    let mut a = App::new(TODAY);
+    a.req("PUT", "/api/settings", json!({"user_name": "Alex"}));
+    let titles = vec!["Renew car registration", "Sort the garden shed", "Call the plumber", "Write the quarterly report", "Dentist check-up"];
+    for day in [TODAY, "2026-11-03"] {
+        a.post("/api/tasks", json!({"title": titles[0], "date": day, "notes": "Reminder letter is in the drawer."}));
+        a.post("/api/tasks", json!({"title": titles[1], "date": day, "part_of_day": "afternoon"}));
+        a.post("/api/tasks", json!({"title": titles[2], "date": day}));
+        a.post("/api/tasks", json!({"title": titles[3], "date": day, "checklist": [{"text": "Gather last quarter's numbers"}, {"text": "Draft the summary"}]}));
+        a.post("/api/tasks", json!({"title": titles[4], "date": day, "time": "15:30"}));
+    }
+    (a, titles)
+}
+
+#[test]
+fn templates_walk_through_every_task_with_we_phrasing() {
+    let (mut a, titles) = five_task_app();
+    a.weather = json!({ TODAY: {"summary": "Thunderstorm", "temp_max": 22, "temp_min": 16, "precip_prob": 90, "uv_max": 2.0} });
+    for kind in ["evening", "morning"] {
+        let t = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"))["template_text"].as_str().unwrap().to_string();
+        println!("{kind}: {t}\n");
+        for title in &titles {
+            assert!(t.contains(title), "{kind}: missing {title}\n{t}");
+        }
+        assert!(!t.contains("plus a few more") && !t.contains("a few more,"), "{t}");
+        assert!(t.contains("we've got") || t.contains("we have") || t.contains("for us"), "{t}");
+        assert!(t.contains("Reminder letter is in the drawer"), "notes missing\n{t}");
+        assert!(t.contains("checklist starts with gather last quarter's numbers"), "checklist step missing\n{t}");
+        assert!(t.contains("half hour") && t.contains("ten minutes"), "size hints missing\n{t}");
+        assert!(!has_stats(&t));
+        assert_spoken(kind, &t);
+        if kind == "evening" {
+            assert!(t.contains("Alex"), "{t}");
+            assert!(t.contains("tomorrow"), "{t}");
+            assert!(t.contains("Nothing else") || t.contains("nothing else") || t.contains("Nothing more"), "{t}");
+            assert!(t.contains("thunderstorm rolled through") && !t.contains("was thunderstorm"), "{t}");
+            let n = words_in(&t);
+            assert!((300..=900).contains(&n), "{n} words");
+        }
+    }
+}
+
+#[test]
+fn many_tasks_name_the_extras_in_one_sentence() {
+    let mut a = App::new(TODAY);
+    let titles: Vec<String> = (1..=9).map(|i| format!("Errand number {i}")).collect();
+    for t in &titles {
+        a.post("/api/tasks", json!({"title": t, "date": "2026-11-03"}));
+    }
+    let t = a.get("/api/briefing?kind=evening")["template_text"].as_str().unwrap().to_string();
+    for title in &titles {
+        assert!(t.contains(title.as_str()), "missing {title}\n{t}");
+    }
+    assert!(t.contains("The smaller bits are"), "{t}");
+    assert!(!t.contains("plus a few more"), "{t}");
+}
+
+#[test]
+fn weather_phrases_are_grammatical_in_both_tenses() {
+    let mut seen = std::collections::HashSet::new();
+    for code in [0, 1, 2, 3, 45, 51, 53, 55, 56, 61, 63, 65, 66, 71, 73, 75, 77, 80, 81, 82, 85, 95, 96, 99, 123] {
+        let summary = crate::weather::wmo_summary(code);
+        for past in [true, false] {
+            let p = crate::weather::natural_sentence(summary, past);
+            let low = summary.to_lowercase();
+            // the label is a noun phrase for most codes ("thunderstorm"): never "it was thunderstorm"
+            if !["foggy", "overcast"].contains(&low.as_str()) {
+                let pl = format!("{} ", p.to_lowercase().replace('.', " "));
+                assert!(!pl.contains(&format!("it was {low} ")) && !pl.contains(&format!("going to be {low} ")), "{p}");
+            }
+            assert!(p.ends_with('.') && p.contains("today"), "{p}");
+            assert_spoken("weather", &p);
+            if past {
+                assert!(!p.contains("going to") && !p.contains("There'll"), "{p}");
+            }
+            seen.insert(p);
+        }
+    }
+    assert!(seen.contains("Pretty wild weather today, wasn't it? A thunderstorm rolled through."));
+    assert!(seen.contains("It stayed sunny today."));
+}
+
+#[test]
+fn gym_line_says_what_the_workout_trains() {
+    let base = App::with_sample(TODAY).state;
+    let mut seen: Vec<String> = vec![];
+    for off in 0..10 {
+        let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+        let next = fmt_date(d(&day) + chrono::Duration::days(1));
+        let mut a = App { state: base.clone(), today: day.clone(), holidays: json!([]), weather: json!({}), news: json!([]), news_at: String::new() };
+        // (briefing kind, the day whose workout it talks about)
+        for (kind, target) in [("morning", day.clone()), ("evening", next)] {
+            let w = a.get(&format!("/api/days?start={target}&days=1"))[0]["workout"].clone();
+            if w.is_null() || w["rest"] == true {
+                continue;
+            }
+            let name = w["name"].as_str().unwrap().to_string();
+            let lower = name.to_lowercase();
+            let expect = if lower.contains("push") {
+                "chest, shoulders and triceps"
+            } else if lower.contains("pull") {
+                "back, biceps and rear delts"
+            } else if lower.contains("leg") {
+                "legs, glutes and core"
+            } else if lower.contains("cardio") {
+                "heart, lungs and endurance"
+            } else {
+                continue;
+            };
+            let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
+            assert!(t.contains(expect), "{kind} {name}: {t}");
+            if w["kind"] != "cardio" {
+                let first = w["exercises"][0]["name"].as_str().unwrap();
+                assert!(t.contains(first), "{kind} {name}: key lift {first} missing\n{t}");
+            }
+            seen.push(name);
+        }
+    }
+    seen.sort();
+    seen.dedup();
+    assert!(seen.len() >= 2, "{seen:?}");
+}
+
+#[test]
+fn trains_covers_the_usual_workout_names_generically() {
+    let plan = |name: &str, kind: &str| crate::gym::WorkoutPlan { rest: false, template_id: None, name: name.into(), kind: kind.into(), note: String::new(), exercises: vec![], options: vec![], minutes_min: None, minutes_max: None };
+    let t = |n: &str, k: &str| crate::gym::trains(&plan(n, k));
+    assert_eq!(t("Push 1", "strength").unwrap(), "chest, shoulders and triceps");
+    assert_eq!(t("Pull 2", "strength").unwrap(), "back, biceps and rear delts");
+    assert_eq!(t("Legs + Abs", "strength").unwrap(), "legs, glutes and core");
+    assert_eq!(t("Cardio", "cardio").unwrap(), "heart, lungs and endurance");
+    assert_eq!(t("Core", "strength").unwrap(), "core");
+    assert!(t("Mystery", "strength").is_none());
+    let mut rest = plan("Rest", "strength");
+    rest.rest = true;
+    assert!(crate::gym::trains(&rest).is_none());
 }
