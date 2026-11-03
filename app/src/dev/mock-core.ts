@@ -31,7 +31,7 @@ export function init_state(today: string): string {
     tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, missed: {}, days_off: [], goals: [],
     memory: {
       weather: { comfortable_max: 18, hot_above: 22, too_hot_above: 25, likes_rain: true, avoid_sunburn: true },
-      work: { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60 },
+      work: { enabled: true, days: [0, 1, 2, 3, 4], start: "10:00", end: "17:00", holiday_region: "AU-NSW", lunch_minutes: 60, lunch_window_start: "12:00", lunch_window_end: "14:00" },
       rhythm: { wake_from: "06:00", wake_to: "07:00", sleep_from: "23:00", sleep_to: "00:00" },
       notes: [],
     },

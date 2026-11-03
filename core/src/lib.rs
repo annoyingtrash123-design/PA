@@ -4,6 +4,12 @@
 //! returns the new state if it changed; nothing here reads the clock or does I/O. The REST semantics
 //! of `docs/API.md` are exposed through [`call`]; endpoints that would need the network return
 //! "prepare" responses (prompts, cache keys, template text) for the UI to use. See `docs/WEB_ARCH.md`.
+/// The shared "everything is read aloud" rule for every Gemini system prompt (a literal, so it can sit in `concat!`).
+macro_rules! spoken_rule {
+    () => {
+        "Everything you write will be read aloud by a voice. Write every part in complete, natural spoken sentences, the way a warm person talks to a friend: a subject and a verb in every sentence, with flowing connectives (so, and, which means, before, after). Never use clipped headline fragments or lists (not 'Hot and muggy today, 27 degrees.' but 'It's going to be hot and muggy today, getting up to 27 degrees.'; not 'Light clothes, water close.' but 'I'd wear something light and keep some water with you.'). Write numbers and times the way they would be said aloud ('10:15 AM' is fine, 'ten fifteen in the morning' is fine); avoid symbols like °, %, / and &. "
+    };
+}
 pub mod briefing;
 pub mod daynote;
 pub mod digest;

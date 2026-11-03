@@ -1043,3 +1043,156 @@ fn morning_template_mentions_a_missed_appointment() {
     let mut c = App::new(TODAY);
     assert!(!c.get("/api/briefing?kind=morning")["template_text"].as_str().unwrap().contains("waiting for"));
 }
+
+// ------------------------------------------------------------ spoken-prose heuristics
+
+const FINITE: &[&str] = &[
+    "is", "are", "was", "were", "will", "have", "has", "had", "got", "do", "does", "did", "can", "could", "should", "would", "might", "may", "be", "been",
+    "start", "take", "keep", "wear", "make", "try", "go", "get", "see", "need", "land", "lands", "fit", "fits", "look", "looks", "feel", "feels", "sounds", "waiting", "rolled", "moved", "let",
+    "enjoy", "finish", "head", "plan", "pick", "book", "pay", "call", "bring", "grab", "give", "come", "comes", "stay", "rest", "wrap", "catch", "begin", "stack", "counts", "feeds", "ties",
+    "helps", "opens", "carries", "wait", "fitted", "made", "hit", "leave", "left", "use", "put", "dim", "ease", "eases", "settle", "protect", "build", "run", "clear", "shout", "sleep", "sorted",
+    "did", "know", "wrapped", "rise", "say", "happen", "stood", "loved", "mean", "means", "hope", "think", "choose", "drink", "dress", "layer", "listen", "go", "doing", "getting", "ended", "remember",
+];
+const CONTRACTION_BASES: &[&str] = &["it", "that", "there", "here", "what", "let", "he", "she", "who", "today", "tomorrow", "everything", "nothing", "one"];
+
+fn has_finite_verb(sentence: &str) -> bool {
+    sentence.to_lowercase().split(|c: char| !(c.is_alphanumeric() || c == '\'')).any(|t| {
+        FINITE.contains(&t)
+            || t.strip_suffix("es").is_some_and(|b| FINITE.contains(&b))
+            || t.strip_suffix('s').is_some_and(|b| FINITE.contains(&b))
+            || t.ends_with("n't")
+            || ["'re", "'ve", "'ll", "'d", "'m"].iter().any(|s| t.ends_with(s))
+            || t.strip_suffix("'s").is_some_and(|b| CONTRACTION_BASES.contains(&b))
+    })
+}
+
+fn sentences(text: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '\n' {
+            out.push(std::mem::take(&mut cur));
+            continue;
+        }
+        cur.push(*c);
+        if matches!(c, '.' | '!' | '?') && chars.get(i + 1).map_or(true, |n| n.is_whitespace()) {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    out.push(cur);
+    out.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+}
+
+/// Greetings and sign-offs ("Good morning, Sam!") are fine as short interjections.
+fn is_interjection(s: &str) -> bool {
+    let l = s.to_lowercase();
+    s.split_whitespace().count() <= 4 && ["good ", "morning", "hey", "hi ", "hi,", "sleep ", "goodnight", "rest up"].iter().any(|p| l.starts_with(p))
+}
+
+fn assert_spoken(label: &str, text: &str) {
+    for bad in ["°", "%", " / ", "&"] {
+        assert!(!text.contains(bad), "{label}: {bad:?} in {text}");
+    }
+    for s in sentences(text) {
+        if s.split_whitespace().count() >= 3 && !is_interjection(&s) {
+            assert!(has_finite_verb(&s), "{label}: fragment {s:?} in\n{text}");
+        }
+    }
+}
+
+#[test]
+fn heuristic_catches_headline_fragments() {
+    for frag in ["Hot and muggy today, 27 degrees.", "Light clothes, water close, and an umbrella.", "A good backdrop for the walk.", "Lovely and cool today, 14 degrees at most."] {
+        assert!(!has_finite_verb(frag), "{frag}");
+    }
+    for ok in ["It's going to be hot and muggy today, getting up to 27 degrees.", "I'd wear something light and keep some water with you.", "It should be a nice day for the walk."] {
+        assert!(has_finite_verb(ok), "{ok}");
+    }
+}
+
+#[test]
+fn all_template_parts_are_complete_spoken_sentences() {
+    let weathers = [
+        ("Light rain", 14, 8),
+        ("Light rain", 28, 20),
+        ("Clear sky", 15, 8),
+        ("Clear sky", 20, 12),
+        ("Clear sky", 24, 15),
+        ("Clear sky", 31, 22),
+        ("Snow", 1, -3),
+        ("Clear sky", 4, 0),
+    ];
+    for fresh in [false, true] {
+        for (wi, (summary, hi, lo)) in weathers.iter().enumerate() {
+            let mut a = if fresh { App::new(TODAY) } else { App::with_sample(TODAY) };
+            a.holidays = json!([{"date": "2026-11-04", "name": "Test Holiday"}]);
+            a.post("/api/days-off", json!({"date": "2026-11-05"}));
+            if fresh {
+                // a missed item and a quiet week
+                let appt = cat_id(&mut a, "Appointments");
+                a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "category_id": appt}));
+            }
+            for off in 0..14 {
+                let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+                a.today = day.clone();
+                a.weather = json!({ day.clone(): {"summary": summary, "temp_max": hi, "temp_min": lo, "precip_prob": 10, "uv_max": 5.0} });
+                let label = format!("fresh={fresh} {day} {summary} {hi}");
+                let m = a.get(&format!("/api/briefing?kind=morning&date={day}"));
+                for k in ["greeting", "weather_comment", "affirmation", "briefing"] {
+                    assert_spoken(&format!("{label} morning.{k}"), m["template_parts"][k].as_str().unwrap_or(""));
+                }
+                assert_spoken(&format!("{label} affirmation"), m["affirmation"].as_str().unwrap());
+                if wi % 3 == 0 {
+                    for kind in ["evening", "weekly"] {
+                        let b = a.get(&format!("/api/briefing?kind={kind}&date={day}"));
+                        assert_spoken(&format!("{label} {kind}"), b["template_text"].as_str().unwrap());
+                        assert_spoken(&format!("{label} {kind} affirmation"), b["affirmation"].as_str().unwrap());
+                    }
+                    let dg = a.get(&format!("/api/digest?date={day}"));
+                    assert_spoken(&format!("{label} overview"), dg["overview"].as_str().unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn morning_template_suggests_a_midday_slot_softly_without_the_times() {
+    let mut a = App::with_sample(TODAY);
+    let mut seen = 0;
+    for off in 0..14 {
+        let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+        a.today = day.clone();
+        let b = a.get(&format!("/api/briefing?kind=morning&date={day}"));
+        let body = b["template_parts"]["briefing"].as_str().unwrap().to_string();
+        if body.contains("working from") {
+            seen += 1;
+            assert!(body.contains("middle of the day"), "{day}: {body}");
+            assert!(!body.contains("between 12") && !body.contains("lunch break, sometime") && !body.contains("12 and 2"), "{day}: {body}");
+        }
+        let up = b["user_prompt"].as_str().unwrap();
+        assert!(up.contains("usually sometime between 12 and 2") && up.contains("never state or recite"), "{up}");
+    }
+    assert!(seen > 3);
+}
+
+#[test]
+fn lunch_window_defaults_validates_and_saves() {
+    let mut a = App::new(TODAY);
+    let w = a.get("/api/memory")["work"].clone();
+    assert_eq!((w["lunch_window_start"].as_str(), w["lunch_window_end"].as_str()), (Some("12:00"), Some("14:00")));
+    // an old state without the fields gets the defaults
+    let mut st: Value = serde_json::from_str(&a.state).unwrap();
+    st["memory"]["work"].as_object_mut().unwrap().remove("lunch_window_start");
+    st["memory"]["work"].as_object_mut().unwrap().remove("lunch_window_end");
+    a.state = st.to_string();
+    assert_eq!(a.st().memory.work.lunch_window_end, "14:00");
+    assert_eq!(a.req("PUT", "/api/memory/work", json!({"lunch_window_start": "14:00", "lunch_window_end": "13:00"})).0, 400);
+    assert_eq!(a.req("PUT", "/api/memory/work", json!({"lunch_window_start": "noon"})).0, 400);
+    let (s, b) = a.req("PUT", "/api/memory/work", json!({"lunch_window_start": "11:30", "lunch_window_end": "13:30"}));
+    assert_eq!(s, 200);
+    assert_eq!(b["work"]["lunch_window_start"], "11:30");
+    let up = a.get("/api/briefing?kind=morning")["user_prompt"].as_str().unwrap().to_string();
+    assert!(up.contains("between 11:30 and 1:30"), "{up}");
+}

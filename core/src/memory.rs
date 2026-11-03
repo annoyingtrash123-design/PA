@@ -44,7 +44,7 @@ pub fn context_block(m: &Memory) -> String {
             k.end,
             k.days.iter().map(|d| DAY_NAMES[(*d as usize) % 7]).collect::<Vec<_>>().join(", ")
         ));
-        s.push_str(&format!("  - Lunch break on work days: about {} minutes, at a flexible time (good for a quick call, a bill, booking an appointment or a quick shop; never assume a fixed time).\n", k.lunch_minutes));
+        s.push_str(&format!("  - Lunch break on work days: a flexible lunch break of about {} minutes, usually sometime {}. This is private background: never state or recite these times. If a short task would fit, suggest it softly and optionally, such as \"if you get a moment in the middle of the day, X would fit nicely\" or \"X could fit in around lunch if you have time\" (good for a quick call, a bill, booking an appointment or a quick shop); never an instruction like \"do X at lunch\", and never assume a fixed time).\n", k.lunch_minutes, lunch_window(&k.lunch_window_start, &k.lunch_window_end)));
     }
     let r = &m.rhythm;
     s.push_str(&format!("  - Usually wakes between {} and {} and goes to sleep between {} and {}; keep evening suggestions finishing comfortably before bedtime, and nudge toward winding down in time for sleep in the evening.\n", r.wake_from, r.wake_to, r.sleep_from, r.sleep_to));
@@ -121,6 +121,8 @@ pub struct WorkIn {
     end: Option<String>,
     holiday_region: Option<String>,
     lunch_minutes: Option<u32>,
+    lunch_window_start: Option<String>,
+    lunch_window_end: Option<String>,
 }
 
 pub fn put_work(env: &mut Env, b: WorkIn) -> Res<Memory> {
@@ -132,6 +134,8 @@ pub fn put_work(env: &mut Env, b: WorkIn) -> Res<Memory> {
         end: b.end.unwrap_or(cur.end),
         holiday_region: b.holiday_region.map(|s| s.trim().to_string()).unwrap_or(cur.holiday_region),
         lunch_minutes: b.lunch_minutes.unwrap_or(cur.lunch_minutes),
+        lunch_window_start: b.lunch_window_start.unwrap_or(cur.lunch_window_start),
+        lunch_window_end: b.lunch_window_end.unwrap_or(cur.lunch_window_end),
     };
     if w.lunch_minutes > 240 {
         return Err(ApiErr::bad("lunch_minutes must be between 0 and 240"));
@@ -143,6 +147,9 @@ pub fn put_work(env: &mut Env, b: WorkIn) -> Res<Memory> {
     w.days.dedup();
     if hm("start", &w.start)? >= hm("end", &w.end)? {
         return Err(ApiErr::bad("start must be before end"));
+    }
+    if hm("lunch_window_start", &w.lunch_window_start)? >= hm("lunch_window_end", &w.lunch_window_end)? {
+        return Err(ApiErr::bad("lunch_window_start must be before lunch_window_end"));
     }
     if w.holiday_region.len() > 20 || !w.holiday_region.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(ApiErr::bad("holiday_region must look like AU-NSW (or empty for none)"));

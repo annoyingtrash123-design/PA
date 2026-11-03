@@ -30,6 +30,26 @@ pub fn say_time(t: &str) -> String {
     }
 }
 
+/// "12:00" -> "12", "14:00" -> "2", "13:30" -> "1:30": a bare hour for ranges like "between 12 and 2".
+pub fn say_hour(t: &str) -> String {
+    let h: u32 = t.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(12);
+    let m: u32 = t.get(3..5).and_then(|x| x.parse().ok()).unwrap_or(0);
+    let h12 = match h % 12 {
+        0 => 12,
+        x => x,
+    };
+    if m == 0 {
+        format!("{h12}")
+    } else {
+        format!("{h12}:{m:02}")
+    }
+}
+
+/// "between 12 and 2" for the usual lunch window.
+pub fn lunch_window(start: &str, end: &str) -> String {
+    format!("between {} and {}", say_hour(start), say_hour(end))
+}
+
 /// Minutes since midnight for "HH:MM" (12:00 when unparseable).
 pub fn minutes(t: &str) -> u32 {
     let h: u32 = t.get(0..2).and_then(|x| x.parse().ok()).unwrap_or(12);

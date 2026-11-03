@@ -108,7 +108,7 @@ pub fn template_note(items: &[Occurrence], d: NaiveDate, goals: &[Goal]) -> Stri
         let gr = goals::goal_ref(g);
         let tail = match idx(d, 41, 3) {
             0 => format!(" {task} is a small step toward {gr}."),
-            1 => format!(" Handy, since {task} feeds into {gr}."),
+            1 => format!(" That's handy, since {task} feeds into {gr}."),
             _ => format!(" {task} counts toward {gr}."),
         };
         t.push_str(&tail);
@@ -123,16 +123,16 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
 
     if total == 0 {
         return v(vec![
-            "Nothing scheduled today. Use the space for something you keep putting off, or leave it empty on purpose.".into(),
-            "Nothing scheduled today. A good day to get ahead on one small thing, or to have an unhurried one.".into(),
-            "Nothing scheduled today. Pick one small thing you have been avoiding and let that be the whole agenda.".into(),
+            "There's nothing scheduled today, so use the space for something you keep putting off, or leave it empty on purpose.".into(),
+            "There's nothing scheduled today, so it's a good day to get ahead on one small thing, or to have an unhurried one.".into(),
+            "There's nothing scheduled today, so pick one small thing you have been avoiding and let that be the whole agenda.".into(),
         ]);
     }
     let key = key_task(items).unwrap();
     if done == total {
         return v(vec![
-            format!("Everything on the list is already ticked off, {} included. The rest of the day is yours.", key.title),
-            format!("The list is clear, {} and all. Anything else today is a bonus.", key.title),
+            format!("Everything on the list is already ticked off, {} included, so the rest of the day is yours.", key.title),
+            format!("The list is clear, {} and all, so anything else you do today is a bonus.", key.title),
         ]);
     }
 
@@ -146,29 +146,29 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
     }
     let kp = phrase(key);
     let second = second_task(items, key);
-    let then_second = second.map(|s| format!(" Then {}.", phrase(s))).unwrap_or_default();
+    let then_second = second.map(|s| format!(" After that, {} is next.", phrase(s))).unwrap_or_default();
     // the first part of the day with nothing in it, for a breather
     let gap = PARTS.iter().enumerate().find(|(i, _)| parts[*i] == 0).map(|(_, p)| *p);
     let (busiest, bmax) = parts.iter().enumerate().max_by_key(|(i, c)| (**c, std::cmp::Reverse(*i))).map(|(i, c)| (i, *c)).unwrap();
 
     if total >= 6 {
-        let where_ = if anytime > bmax { "most of it has no set time".to_string() } else { format!("the {} carries the most", PARTS[busiest]) };
+        let where_ = if anytime > bmax { "most of it has no set time".to_string() } else { format!("most of it lands in the {}", PARTS[busiest]) };
         return v(vec![
-            format!("A full day, and {where_}. The one to watch is {kp}. Take a proper break between stretches rather than pushing straight through."),
-            format!("There's quite a bit on today, and {where_}. Begin with {kp}, then pace it: a real break halfway beats a rushed finish."),
+            format!("It's a full day today, and {where_}. The one to watch is {kp}, so take a proper break between stretches rather than pushing straight through."),
+            format!("There's quite a bit on today, and {where_}. Begin with {kp}, then pace yourself, because a real break halfway beats a rushed finish."),
         ]);
     }
     if total <= 2 {
         return if total == 1 {
             v(vec![
-                format!("A light day with just one thing: {kp}. Get it out of the way early and the rest of the day is yours."),
-                format!("Only {kp} on the list today. Do it when it suits you and spend the spare time on something you chose."),
+                format!("It's a light day with just one thing, which is {kp}. Get it out of the way early and the rest of the day is yours."),
+                format!("There's only {kp} on the list today, so do it whenever it feels right and spend the spare time on something you chose."),
             ])
         } else {
             let s = second.map(|s| s.title.clone()).unwrap_or_default();
             v(vec![
-                format!("A light day, with {} and {s}. Plenty of slack, so leave room for a proper break.", key.title),
-                format!("Just {kp}, then {s}. That leaves most of the day free, so use it deliberately."),
+                format!("It's a light day, with {} and {s} on the list. There's plenty of slack, so leave room for a proper break.", key.title),
+                format!("There's just {kp}, and then {s}. That leaves most of the day free, so use it deliberately."),
             ])
         };
     }
@@ -179,7 +179,7 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
                 let tail = if parts[1] + parts[2] + anytime == 0 { "after that the day is clear" } else { "after that it eases off" };
                 v(vec![
                     format!("{} land in the morning, and {tail}. Start with {kp} and the rest of the day gets lighter.", cap(q)),
-                    format!("The morning is the busy stretch; {tail}. Begin with {kp} and keep the afternoon for yourself."),
+                    format!("The morning is the busy stretch, and {tail}. Begin with {kp} and keep the afternoon for yourself."),
                 ])
             }
             1 => {
@@ -190,36 +190,36 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
                     format!("Get {} done in the morning so the afternoon only has to be the afternoon.", m.title)
                 };
                 v(vec![
-                    format!("The afternoon is where the day gets busy, {kp} among it. {lead}"),
-                    format!("{} stack up in the afternoon, {kp} among them. {lead}", cap(q)),
+                    format!("The afternoon is where the day gets busy, with {kp} among it. {lead}"),
+                    format!("{} stack up in the afternoon, with {kp} among them. {lead}", cap(q)),
                 ])
             }
             _ => v(vec![
-                format!("The evening carries the load, {kp} included. The daytime is lighter, so move anything flexible earlier."),
-                format!("{} wait until the evening, {kp} among them. Do what you can earlier so tonight isn't a scramble.", cap(q)),
+                format!("The evening carries the load, with {kp} included. The daytime is lighter, so move anything flexible earlier."),
+                format!("{} wait until the evening, with {kp} among them. Do what you can earlier so tonight isn't a scramble.", cap(q)),
             ]),
         };
     }
     // moderate, spread out
     let breather = match gap {
         Some(p) => format!("The {p} is empty, which makes it the natural place for a breather."),
-        None => "Leave a gap between items for a breather.".into(),
+        None => "Make sure you leave a gap between items for a breather.".into(),
     };
     v(vec![
-        format!("A steady day, spread out nicely. Start with {kp}.{then_second} {breather}"),
-        format!("Nothing crowded today. {kp} is the anchor, so begin there. {breather}"),
+        format!("It's a steady day, and it's spread out nicely. Start with {kp}.{then_second} {breather}"),
+        format!("Nothing is crowded today. {kp} is the anchor, so begin there. {breather}"),
     ])
 }
 
 // ------------------------------------------------------------------ prompts
 
-pub const SYSTEM: &str = "You write a single short note shown on the home screen of a personal planner app, about ONE specific day. \
+pub const SYSTEM: &str = concat!(spoken_rule!(), "You write a single short note shown on the home screen of a personal planner app, about ONE specific day. \
 Output 1 to 2 sentences, at most 40 words, plain text. No markdown, no emojis, no quotation marks, no lists. \
 Sound like a chatty, warm friend who knows the person, not a report. Be grounded and specific: name the key task, say roughly where the busy stretch is, and where there is a breather or slack. \
 NEVER state raw counts, fractions or percentages (no '5 tasks', 'three things', '0 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few' are fine, but naming the actual tasks is better. \
 If one of the goals given plausibly relates to a task today, you may tie them together in a few words; never force a link, and mention a goal deadline only if it is close and relevant. \
 Never use clichés or generic affirmations like 'you've got this', 'believe in yourself', 'one step at a time' or 'you are enough'. \
-Do not mention the gym or workouts. Do not invent tasks, times or numbers. Output only the note.";
+Do not mention the gym or workouts. Do not invent tasks, times or numbers. Output only the note.");
 
 fn gemini_context(items: &[Occurrence], d: NaiveDate, goals: &[Goal], mem: &Memory, info: &DayInfo) -> String {
     let mut s = format!("Date: {}, {}\n", weekday_name(d), d.format("%B %-d"));

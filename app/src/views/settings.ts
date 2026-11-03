@@ -216,13 +216,14 @@ function memoryCard(name: string): HTMLElement {
   const time = (v: string, label: string) => h("input", { class: "input", type: "time", value: v, "aria-label": label });
   const start = time(wk.start, "Work start"), end = time(wk.end, "Work end");
   const lunch = h("input", { class: "input", type: "text", inputmode: "numeric", value: String(wk.lunch_minutes), "aria-label": "Lunch break minutes" });
+  const lunchFrom = time(wk.lunch_window_start ?? "12:00", "Lunch usually from"), lunchTo = time(wk.lunch_window_end ?? "14:00", "Lunch usually until");
   const region = textInput(wk.holiday_region ?? "", { placeholder: "AU-NSW" });
   const saveWork = () => {
-    if (!HHMM.test(start.value) || !HHMM.test(end.value)) return toast("Times should look like 09:30");
+    if (!HHMM.test(start.value) || !HHMM.test(end.value) || !HHMM.test(lunchFrom.value) || !HHMM.test(lunchTo.value)) return toast("Times should look like 09:30");
     const l = Math.round(Number(lunch.value));
     if (!Number.isFinite(l)) return toast("Lunch break should be a number of minutes");
     try {
-      api("PUT", "/api/memory/work", { enabled: on.input.checked, lunch_minutes: l, days: [...days].sort(), start: start.value, end: end.value, holiday_region: region.value.trim() });
+      api("PUT", "/api/memory/work", { enabled: on.input.checked, lunch_minutes: l, lunch_window_start: lunchFrom.value, lunch_window_end: lunchTo.value, days: [...days].sort(), start: start.value, end: end.value, holiday_region: region.value.trim() });
       toast("Work hours saved");
       void refreshHolidays();
     } catch (e) { toast((e as Error).message); }
@@ -259,7 +260,7 @@ function memoryCard(name: string): HTMLElement {
     muted(`${name} uses this to write your daily digest and briefings.`),
     sub("Weather preferences"), cf.el, hot.el, tooHot.el, rain.el, sun.el, outlineBtn("Save weather preferences", saveWeather),
     h("hr", { class: "divider" }),
-    sub("Work hours"), on.el, dayRow, h("div", { class: "pair" }, field("Start", start), field("End", end)), field("Lunch break", withSuffix(lunch, "min")), field("Holiday region", region, "Public holidays are shown for this region, e.g. AU-NSW. Leave empty for none."), outlineBtn("Save work hours", saveWork),
+    sub("Work hours"), on.el, dayRow, h("div", { class: "pair" }, field("Start", start), field("End", end)), field("Lunch break", withSuffix(lunch, "min")), h("div", { class: "pair" }, field("Lunch usually between", lunchFrom), field("and", lunchTo)), field("Holiday region", region, "Public holidays are shown for this region, e.g. AU-NSW. Leave empty for none."), outlineBtn("Save work hours", saveWork),
     h("hr", { class: "divider" }),
     sub("Daily rhythm"), h("span", null, "Usually wake"), h("div", { class: "pair" }, wf, wt), h("span", null, "Usually asleep by"), h("div", { class: "pair" }, sf, st), outlineBtn("Save daily rhythm", saveRhythm),
     h("hr", { class: "divider" }),

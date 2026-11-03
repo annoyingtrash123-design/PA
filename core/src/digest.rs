@@ -22,12 +22,12 @@ pub fn item_phrase(o: &Occurrence) -> String {
 /// A warm one-liner about the work situation of a day, only when it is notable or useful.
 pub fn frame_sentence(info: &DayInfo) -> Option<String> {
     if let Some(h) = &info.holiday {
-        return Some(format!("It's a public holiday, {h}, so no work today."));
+        return Some(format!("It's a public holiday, {h}, so there's no work today."));
     }
     if info.day_off {
-        return Some("It's a day off, so no work today.".into());
+        return Some("It's a day off, so there's no work today.".into());
     }
-    info.work.as_ref().map(|w| format!("Work runs from {} to {} today.", say_time(&w.start), say_time(&w.end)))
+    info.work.as_ref().map(|w| format!("You're working from {} to {} today.", say_time(&w.start), say_time(&w.end)))
 }
 
 /// Line for Gemini contexts describing the work situation.
@@ -128,67 +128,67 @@ pub fn weather_comment_template(w: &Weather, mem: &Memory, items: &[Occurrence],
     let pl = plans(items, mem, workout, info);
     let v = |o: Vec<String>| -> String { o[idx(d, 101 + t as u64, o.len())].clone() };
     let first = match f {
-        Feel::Snow => v(vec![format!("Snow in the forecast, {t} degrees at most."), format!("It's a snowy one today, topping out at {t} degrees.")]),
+        Feel::Snow => v(vec![format!("There's snow in the forecast, and it's only getting up to {t} degrees."), format!("It's a snowy one today, and it's topping out at {t} degrees.")]),
         Feel::Rain if p.likes_rain => v(vec![
-            format!("A proper rainy one today, {t} degrees at most. Lovely and cosy."),
-            format!("Rain all day and a cool {t} degrees. A nice one to be inside for."),
-            format!("Wet and grey at {t} degrees, the soft, rainy kind of day."),
+            format!("It's a proper rainy one today, only getting up to {t} degrees, so it should be lovely and cosy."),
+            format!("It's going to rain all day, with a cool {t} degrees, so it's a nice one to be inside for."),
+            format!("It's wet and grey at {t} degrees today, which is the soft, rainy kind of day."),
         ]),
         Feel::Rain => v(vec![
-            format!("A wet one today, {t} degrees at most, so keep an umbrella close."),
-            format!("Rain on the way and {t} degrees at best, so not the nicest of days outside."),
+            format!("It's a wet one today, only getting up to {t} degrees, so keep an umbrella close."),
+            format!("There's rain on the way and it's only {t} degrees at best, so it's not the nicest day to be outside."),
         ]),
         Feel::HotRain if t as f64 > p.too_hot_above => v(vec![
-            format!("Hot and muggy today, {t} degrees with showers around. Light clothes, water close, and an umbrella."),
-            format!("A sticky {t} degrees with rain about, so keep cool and keep an umbrella handy."),
+            format!("It's going to be hot and muggy today, getting up to {t} degrees with showers around. I'd wear something light, keep some water with you, and bring an umbrella."),
+            format!("It's a sticky {t} degrees with rain about, so try to keep cool and keep an umbrella handy."),
         ]),
         Feel::HotRain => v(vec![
-            format!("Showers today, but warm with it at {t} degrees, so it'll feel a bit muggy. Dress light and keep an umbrella close."),
-            format!("Rain around and a warm {t} degrees, so lighter layers and an umbrella."),
+            format!("There are showers today, but it's warm with it at {t} degrees, so it'll feel a bit muggy. I'd dress light and keep an umbrella close."),
+            format!("There's rain around and it's a warm {t} degrees, so I'd wear lighter layers and bring an umbrella."),
         ]),
         Feel::TooHot => v(vec![
-            format!("It's a hot one, {t} degrees. Keep water close and take it slowly in the afternoon."),
-            format!("Properly hot today at {t} degrees, so go easy and stay cool where you can."),
+            format!("It's a hot one today, getting up to {t} degrees. Keep water close and take it slowly in the afternoon."),
+            format!("It's properly hot today at {t} degrees, so go easy and stay cool where you can."),
         ]),
         Feel::Hot => v(vec![
-            format!("Warm and getting hot, {t} degrees at the top, so lighter clothes and plenty of water."),
-            format!("A warm {t} degrees today, so dress light."),
+            format!("It's warm and heading toward hot today, getting up to {t} degrees, so I'd wear lighter clothes and drink plenty of water."),
+            format!("It's a warm {t} degrees today, so I'd dress light."),
         ]),
         Feel::Warm => v(vec![
-            format!("A mild, slightly warm {t} degrees today."),
-            format!("Pleasantly warm at {t} degrees, nothing to fuss about."),
+            format!("It's a mild, slightly warm {t} degrees today."),
+            format!("It's pleasantly warm at {t} degrees, so there's nothing to fuss about."),
         ]),
         Feel::Comfy => v(vec![
-            format!("Lovely and cool today, {t} degrees at most."),
-            format!("A cool, comfortable {t} degrees."),
-            format!("Nice and cool, {t} degrees at most, an easy one."),
+            format!("It's lovely and cool today, only getting up to about {t} degrees."),
+            format!("It's a cool, comfortable {t} degrees today."),
+            format!("It's nice and cool today, getting up to {t} degrees at most, so it's an easy one."),
         ]),
-        Feel::Cold => v(vec![format!("A chilly one, {t} degrees at best, so layer up."), format!("Properly cold today, just {t} degrees at the top, so wrap up well.")]),
+        Feel::Cold => v(vec![format!("It's a chilly one today, only {t} degrees at best, so layer up."), format!("It's properly cold today, just {t} degrees at the top, so wrap up well.")]),
     };
 
     let second: Option<String> = if sunny_uv {
         Some(match f {
-            Feel::TooHot | Feel::Hot => "The sun is strong too, so sun cream before you head out and shade where you can.".to_string(),
-            _ => v(vec!["The UV is up, so sun cream if you'll be outside for a while.".into(), "Sun cream is worth it today, since the UV gets high.".into()]),
+            Feel::TooHot | Feel::Hot => "The sun is strong too, so put on sun cream before you head out and find some shade where you can.".to_string(),
+            _ => v(vec!["The UV is up, so put some sun cream on if you'll be outside for a while.".into(), "Sun cream is worth it today, since the UV gets high.".into()]),
         })
     } else {
         match (&pl, f) {
             (Plans::Outdoor(t), Feel::Rain | Feel::Snow | Feel::HotRain) => Some(format!("Maybe plan {t} around the weather, or take a proper coat.")),
-            (Plans::Outdoor(t), Feel::TooHot | Feel::Hot) => Some(format!("Do {t} early or late, away from the heat.")),
-            (Plans::Outdoor(t), _) => Some(format!("A good backdrop for {t}.")),
-            (Plans::Office, Feel::Rain) if p.likes_rain => Some("Nice to listen to from your desk, though take an umbrella for the commute.".into()),
-            (Plans::Office, Feel::Rain | Feel::Snow) => Some("Take an umbrella and a coat for the commute.".into()),
-            (Plans::Office, Feel::HotRain) => Some("Take an umbrella for the commute and keep a bottle of water on your desk.".into()),
-            (Plans::Office, Feel::TooHot | Feel::Hot) => Some("Sounds like an office day, so keep a bottle of water on your desk.".into()),
-            (Plans::Office, _) => Some("Easy weather for the office commute.".into()),
-            (Plans::Desk, Feel::Rain) if p.likes_rain => Some("A cosy backdrop for the work you have on.".into()),
-            (Plans::Desk, Feel::TooHot | Feel::Hot) => Some("Keep cool while you get through your work.".into()),
-            (Plans::Off, Feel::Rain | Feel::Snow) => Some("A lovely excuse for a slow day off.".into()),
-            (Plans::Off, Feel::TooHot | Feel::Hot) => Some("Good day off for staying cool and doing very little.".into()),
-            (Plans::Off, _) => Some("A nice backdrop for a day off.".into()),
-            (Plans::Gym, Feel::TooHot | Feel::Hot | Feel::HotRain) => Some("Drink plenty before the gym.".into()),
-            (Plans::Gym, Feel::Rain) => Some("At least the rain gives the gym an easy excuse to be the main outing.".into()),
-            (_, Feel::Rain) if p.likes_rain => Some("Cosy if you're home, and nice to listen to from the window.".into()),
+            (Plans::Outdoor(t), Feel::TooHot | Feel::Hot) => Some(format!("I'd do {t} early or late, away from the heat.")),
+            (Plans::Outdoor(t), _) => Some(format!("It should be a nice day for {t}.")),
+            (Plans::Office, Feel::Rain) if p.likes_rain => Some("It's nice to listen to from your desk, though make sure you take an umbrella for the commute.".into()),
+            (Plans::Office, Feel::Rain | Feel::Snow) => Some("Make sure you take an umbrella and a coat for the commute.".into()),
+            (Plans::Office, Feel::HotRain) => Some("Make sure you take an umbrella for the commute, and keep a bottle of water on your desk.".into()),
+            (Plans::Office, Feel::TooHot | Feel::Hot) => Some("It sounds like an office day, so keep a bottle of water on your desk.".into()),
+            (Plans::Office, _) => Some("It's easy weather for the office commute.".into()),
+            (Plans::Desk, Feel::Rain) if p.likes_rain => Some("It's a cosy backdrop for the work you have on.".into()),
+            (Plans::Desk, Feel::TooHot | Feel::Hot) => Some("Try to keep cool while you get through your work.".into()),
+            (Plans::Off, Feel::Rain | Feel::Snow) => Some("It's a lovely excuse for a slow day off.".into()),
+            (Plans::Off, Feel::TooHot | Feel::Hot) => Some("It's a good day off for staying cool and doing very little.".into()),
+            (Plans::Off, _) => Some("It should be a lovely day to enjoy your day off.".into()),
+            (Plans::Gym, Feel::TooHot | Feel::Hot | Feel::HotRain) => Some("Make sure you drink plenty of water before the gym.".into()),
+            (Plans::Gym, Feel::Rain) => Some("At least the rain makes the gym an easy choice for the main outing.".into()),
+            (_, Feel::Rain) if p.likes_rain => Some("It's cosy if you're home, and it's nice to listen to from the window.".into()),
             _ => None,
         }
     };
@@ -226,13 +226,13 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
     };
     if items.is_empty() {
         let mut s = if info.work.is_some() {
-            "Nothing is planned beyond work, so before and after it are yours. A good moment for something you keep putting off, or for properly switching off.".to_string()
+            "Nothing is planned beyond work, so the time before and after it is yours. It's a good moment for something you keep putting off, or for properly switching off.".to_string()
         } else {
             "Nothing is planned today, so it's a wide-open day. Use it for something you keep putting off, or leave it empty on purpose.".to_string()
         };
         if let Some(w) = workout.as_ref().filter(|w| !w.rest) {
             if w.is_cardio() {
-                s.push_str(" Some cardio is lined up if you fancy it.");
+                s.push_str(" There's some cardio lined up if you fancy it.");
             } else {
                 s.push_str(&format!(" The gym has {} lined up if you fancy it.", w.name));
             }
@@ -282,7 +282,7 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
         if worky {
             let (busy, free) = match i {
                 0 => (format!("before work there's {}", phr(&parts[0])), "the time before work is free".to_string()),
-                1 => (format!("during work hours there's {}, ideally at lunch", phr(&parts[1])), "work fills the middle of the day".to_string()),
+                1 => (format!("during work hours there's {}, ideally around the middle of the day", phr(&parts[1])), "work fills the middle of the day".to_string()),
                 _ => (format!("after work there's {}", phr(&parts[2])), "after work is open".to_string()),
             };
             if empty(i) {
@@ -305,7 +305,7 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
     }
     let mut out: Vec<String> = vec![];
     if (0..3).all(empty) {
-        out.push(lead(format!("Nothing is pinned to a particular time today: {} can go wherever suits you.", phr(&anytime))));
+        out.push(lead(format!("Nothing is pinned to a particular time today: {} can go wherever it fits best.", phr(&anytime))));
     } else {
         let mut s = cap(&format!("{}, {}, and {}.", clauses[0], clauses[1], clauses[2]));
         if !(anytime.0.is_empty() && !anytime.1) {
@@ -336,10 +336,10 @@ pub fn overview_template(items: &[Occurrence], goals: &[Goal], workout: &Option<
 
 // ------------------------------------------------------------------ prompts
 
-pub const SYSTEM: &str = "You write two short texts for the home screen of a personal planner app, about ONE specific day, in the voice of a warm, chatty friend who knows the person. \
+pub const SYSTEM: &str = concat!(spoken_rule!(), "You write two short texts for the home screen of a personal planner app, about ONE specific day, in the voice of a warm, chatty friend who knows the person. \
 Reply with ONLY a JSON object: {\"weather_comment\": string or null, \"overview\": string}. No markdown, no code fences, no emojis. \
 weather_comment: 1 to 2 sentences on the forecast whose tone and advice are quietly shaped by the person's weather preferences (cool days get a happy tone; hot days a gentle heads-up and practical advice; sun cream or shade when UV is high and they want to avoid sunburn; rain sounds cosy if they like it and it is cool), WITHOUT ever stating or explaining those preferences and, where natural, relating it to the day's plans (an office day versus a home day, outdoor tasks, the gym). Temperatures may be said as degrees (e.g. 14 degrees), but never quote the rain probability as a percentage. Set it to null if no weather is given. Only mention an office or home context if a note or task suggests it. \
-overview: 2 to 4 short sentences in plain prose organising the day: its shape (what the morning is about, the afternoon, the evening; on a work day, before work, during work and after work, with work as a fixed block that is not a task; on a public holiday or day off, say warmly that there is no work), naming the key things, pointing out a breather, tying to a goal only where it plausibly relates. NEVER state raw counts, fractions or percentages (no '5 tasks', '3 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few smaller bits' are fine. Never a bare list of every task: name at most four things and summarise the rest. You may mention the workout briefly. No cliches such as 'you've got this'. Do not invent tasks, times or numbers.";
+overview: 2 to 4 short sentences in plain prose organising the day: its shape (what the morning is about, the afternoon, the evening; on a work day, before work, during work and after work, with work as a fixed block that is not a task; on a public holiday or day off, say warmly that there is no work), naming the key things, pointing out a breather, tying to a goal only where it plausibly relates. NEVER state raw counts, fractions or percentages (no '5 tasks', '3 of 4', '50 percent'); small natural quantities like 'a couple of things' or 'a few smaller bits' are fine. Never a bare list of every task: name at most four things and summarise the rest. You may mention the workout briefly. No cliches such as 'you've got this'. Do not invent tasks, times or numbers.");
 
 pub fn weather_line(w: &Option<Weather>, quote_hint: &str) -> String {
     match w {

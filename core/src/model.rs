@@ -123,15 +123,26 @@ pub struct WorkPrefs {
     pub holiday_region: String,
     #[serde(default = "default_lunch")]
     pub lunch_minutes: u32,
+    /// the one-hour lunch usually falls somewhere in this window
+    #[serde(default = "default_lunch_start")]
+    pub lunch_window_start: String,
+    #[serde(default = "default_lunch_end")]
+    pub lunch_window_end: String,
 }
 
 fn default_lunch() -> u32 {
     60
 }
+fn default_lunch_start() -> String {
+    "12:00".into()
+}
+fn default_lunch_end() -> String {
+    "14:00".into()
+}
 
 impl Default for WorkPrefs {
     fn default() -> Self {
-        WorkPrefs { enabled: true, days: vec![0, 1, 2, 3, 4], start: "10:00".into(), end: "17:00".into(), holiday_region: "AU-NSW".into(), lunch_minutes: 60 }
+        WorkPrefs { enabled: true, days: vec![0, 1, 2, 3, 4], start: "10:00".into(), end: "17:00".into(), holiday_region: "AU-NSW".into(), lunch_minutes: 60, lunch_window_start: "12:00".into(), lunch_window_end: "14:00".into() }
     }
 }
 
