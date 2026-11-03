@@ -144,27 +144,27 @@ pub fn auto_category(st: &mut State, title: &str, notes: &str) -> i64 {
 #[derive(Deserialize)]
 pub struct ChecklistIn {
     #[serde(default)]
-    id: Option<i64>,
-    text: String,
+    pub(crate) id: Option<i64>,
+    pub(crate) text: String,
 }
 
 #[derive(Deserialize)]
 pub struct TaskIn {
-    title: String,
+    pub(crate) title: String,
     #[serde(default)]
-    date: Option<String>,
+    pub(crate) date: Option<String>,
     #[serde(default)]
-    time: Option<String>,
+    pub(crate) time: Option<String>,
     #[serde(default)]
-    part_of_day: Option<String>,
+    pub(crate) part_of_day: Option<String>,
     #[serde(default)]
-    category_id: Option<Value>,
+    pub(crate) category_id: Option<Value>,
     #[serde(default)]
-    notes: String,
+    pub(crate) notes: String,
     #[serde(default)]
-    recurrence: Option<Recurrence>,
+    pub(crate) recurrence: Option<Recurrence>,
     #[serde(default)]
-    checklist: Vec<ChecklistIn>,
+    pub(crate) checklist: Vec<ChecklistIn>,
 }
 
 struct Clean {

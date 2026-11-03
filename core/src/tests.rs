@@ -1425,7 +1425,7 @@ fn private_profile_apply_and_clear() {
         "add_leisure": [{"kind": "read", "title": "A Made-up Book", "note": "n"}, {"kind": "watch", "title": "Sample Film", "status": "current"}]
     });
     let r = a.post("/api/profile/apply", body.clone());
-    assert_eq!(r, json!({"interests": true, "notes": 2, "work": true, "weather": true, "goals_added": 1, "leisure_added": 2}));
+    assert_eq!(r, json!({"interests": true, "notes": 2, "work": true, "weather": true, "goals_added": 1, "leisure_added": 2, "tasks_added": 0}));
     let m = a.get("/api/memory");
     assert_eq!((m["interests"].as_str(), m["profile_updated"].as_str(), m["notes"].as_array().unwrap().len()), (Some("Pottery and tide pools"), Some("2026-11-03"), 2));
     assert_eq!((m["work"]["start"].as_str(), m["work"]["days"].clone(), m["weather"]["hot_above"].as_f64()), (Some("08:30"), json!([1, 2, 3]), Some(24.0)));
@@ -1458,6 +1458,28 @@ fn private_profile_apply_and_clear() {
     let m = a.get("/api/memory");
     assert_eq!((m["interests"].as_str(), m["profile_updated"].as_str(), m["notes"].as_array().unwrap().len(), m["work"]["start"].as_str(), m["weather"]["hot_above"].as_f64()), (Some(""), Some(""), 0, Some("10:00"), Some(22.0)));
     assert_eq!(a.st().goals.len(), 2);
+}
+
+#[test]
+fn profile_add_tasks() {
+    let mut a = App::new(TODAY);
+    let cat = a.st().categories[0].name.clone();
+    let body = json!({"v": 1, "updated": "2026-11-03", "add_tasks": [
+        {"title": "Example errand", "date": "2026-11-10", "time": "14:00", "category": cat.to_lowercase(), "notes": "n", "checklist": ["one", "two"]},
+        {"title": "Book the dentist", "date": "2026-11-11", "category": "auto", "part_of_day": "morning"},
+        {"title": "example ERRAND", "date": "2026-11-10"}
+    ]});
+    let r = a.post("/api/profile/apply", body.clone());
+    assert_eq!(r["tasks_added"], 2);
+    let st = a.st();
+    assert_eq!(st.tasks.len(), 2);
+    assert_eq!(st.tasks[0].checklist.len(), 2);
+    assert_eq!(st.tasks[0].category_id, Some(st.categories[0].id));
+    assert!(st.tasks[1].category_auto);
+    assert_eq!(a.post("/api/profile/apply", body)["tasks_added"], 0);
+    let (s, _) = a.req("POST", "/api/profile/apply", json!({"v": 1, "updated": "2026-11-05", "add_tasks": [{"title": "X", "date": "2026-11-12", "category": "Nope"}]}));
+    assert_eq!(s, 400);
+    assert_eq!(a.st().tasks.len(), 2);
 }
 
 // ------------------------------------------------------------ news

@@ -25,6 +25,7 @@ export function renderTasks(root: HTMLElement): () => void {
       window.scrollTo(0, 0);
     };
     const out: (HTMLElement | null)[] = [
+      h("div", { class: "row", style: { justifyContent: "flex-end" } }, button("New task", () => openTaskDialog({ date: today(), onSaved: draw }), { kind: "tonal", icon: "add" })),
       h("div", { class: "weekbar" }, iconBtn("left", "Previous week", () => go(-1)), h("div", { class: "mid" }, h("h2", { class: "title-sm", style: { fontSize: "17px" } }, `${dayMonth(week)} - ${dayMonth(end)}`), h("p", { class: "muted small" }, isThis ? "This week" : week.slice(0, 4))), iconBtn("right", "Next week", () => go(1))),
       isThis ? null : h("div", { class: "row", style: { justifyContent: "center" } }, button("This week", () => { week = thisWeek(); draw(); }, { kind: "outline", icon: "event" })),
       missed.length ? missedCard(missed, draw) : null,

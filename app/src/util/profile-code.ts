@@ -1,5 +1,6 @@
-/** Private profile codes: `MIRANDA1:` + base64url(UTF-8 JSON). Kept in sync with scripts/make-profile-code.mjs. */
-export const PROFILE_PREFIX = "MIRANDA1:";
+/** Private profile codes: `MIRANDA2:` + base64url(deflate-raw(UTF-8 JSON)); legacy `MIRANDA1:` + base64url(UTF-8 JSON). Kept in sync with scripts/make-profile-code.mjs. */
+export const PROFILE_PREFIX = "MIRANDA2:";
+export const PROFILE_PREFIX_V1 = "MIRANDA1:";
 
 export interface ProfileWork {
   enabled: boolean;
@@ -27,6 +28,7 @@ export interface Profile {
   weather?: ProfileWeather;
   add_goals?: { title: string; horizon: string; why?: string; deadline?: string }[];
   add_leisure?: { kind: string; title: string; note?: string; status?: string }[];
+  add_tasks?: { title: string; date: string; time?: string; part_of_day?: string; category?: string; notes?: string; recurrence?: unknown; checklist?: string[] }[];
 }
 
 export class ProfileCodeError extends Error {}
@@ -45,46 +47,100 @@ export function validateProfile(x: unknown): Profile {
   if (x.weather !== undefined && !isObj(x.weather)) bad("\"weather\" must be an object");
   if (x.add_goals !== undefined && (!Array.isArray(x.add_goals) || x.add_goals.some((g) => !isObj(g) || typeof g.title !== "string" || typeof g.horizon !== "string"))) bad("\"add_goals\" items need a title and horizon");
   if (x.add_leisure !== undefined && (!Array.isArray(x.add_leisure) || x.add_leisure.some((l) => !isObj(l) || typeof l.title !== "string" || typeof l.kind !== "string"))) bad("\"add_leisure\" items need a kind and title");
+  if (x.add_tasks !== undefined && (!Array.isArray(x.add_tasks) || x.add_tasks.some((t) => !isObj(t) || typeof t.title !== "string" || (t.date !== undefined && typeof t.date !== "string") || (t.checklist !== undefined && (!Array.isArray(t.checklist) || t.checklist.some((c: unknown) => typeof c !== "string")))))) bad("\"add_tasks\" items need a title and a YYYY-MM-DD date");
   return x as unknown as Profile;
 }
 
-function toB64Url(text: string): string {
-  const bytes = new TextEncoder().encode(text);
+function bytesToB64Url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function fromB64Url(s: string): string {
+function b64UrlToBytes(s: string): Uint8Array {
   const std = s.replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(std + "=".repeat((4 - (std.length % 4)) % 4));
-  return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
+const utf8 = (bytes: Uint8Array): string => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+
+/** Legacy MIRANDA1 encoder (sync). */
 export function encodeProfile(p: Profile): string {
-  return PROFILE_PREFIX + toB64Url(JSON.stringify(validateProfile(p)));
+  return PROFILE_PREFIX_V1 + bytesToB64Url(new TextEncoder().encode(JSON.stringify(validateProfile(p))));
 }
 
-/** Tolerates whitespace/newlines anywhere in the code. */
-export function decodeProfile(code: string): Profile {
-  const c = code.replace(/\s+/g, "");
-  if (!c.startsWith(PROFILE_PREFIX)) throw new ProfileCodeError("That doesn't look like a profile code (it should start with MIRANDA1:)");
-  const body = c.slice(PROFILE_PREFIX.length);
-  if (!body || !/^[A-Za-z0-9_-]+$/.test(body)) throw new ProfileCodeError("The profile code has unexpected characters. Try copying it again.");
+async function pipeBytes(bytes: Uint8Array, stream: { writable: WritableStream<BufferSource>; readable: ReadableStream<Uint8Array> }): Promise<Uint8Array> {
+  const w = stream.writable.getWriter();
+  void w.write(bytes as BufferSource).catch(() => {});
+  void w.close().catch(() => {});
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+/** MIRANDA2 encoder (the script is the normal producer; this is used for tests). */
+export async function encodeProfileV2(p: Profile): Promise<string> {
+  if (typeof CompressionStream === "undefined") throw new ProfileCodeError("This browser can't compress profile codes.");
+  const raw = new TextEncoder().encode(JSON.stringify(validateProfile(p)));
+  return PROFILE_PREFIX + bytesToB64Url(await pipeBytes(raw, new CompressionStream("deflate-raw")));
+}
+
+const BODY_RE = /^[A-Za-z0-9_-]+$/;
+
+async function decodeBody(version: 1 | 2, body: string): Promise<Profile> {
+  if (!body || !BODY_RE.test(body)) throw new ProfileCodeError("The profile code has unexpected characters. Try copying it again.");
   let json: unknown;
   try {
-    json = JSON.parse(fromB64Url(body));
-  } catch {
+    const bytes = b64UrlToBytes(body);
+    if (version === 1) json = JSON.parse(utf8(bytes));
+    else {
+      if (typeof DecompressionStream === "undefined") throw new ProfileCodeError("This browser can't read the newer compressed profile codes (MIRANDA2). Update your browser, or ask Claude for an older MIRANDA1 code.");
+      json = JSON.parse(utf8(await pipeBytes(bytes, new DecompressionStream("deflate-raw"))));
+    }
+  } catch (e) {
+    if (e instanceof ProfileCodeError) throw e;
     throw new ProfileCodeError("The profile code is damaged or incomplete. Try copying it again.");
   }
   return validateProfile(json);
 }
 
-export interface ApplySummary { interests: boolean; notes: number; work: boolean; weather: boolean; goals_added: number; leisure_added: number }
+/**
+ * Finds the first MIRANDA1:/MIRANDA2: code in free text (extra words around it are fine, whitespace/line
+ * wraps inside the code are ignored) and decodes it. Trailing words are dropped until the code decodes.
+ */
+export async function decodeProfile(text: string): Promise<Profile> {
+  const m = /MIRANDA([12]):/.exec(text);
+  if (!m) throw new ProfileCodeError("That doesn't look like a profile code (it should start with MIRANDA1: or MIRANDA2:)");
+  const version = m[1] === "1" ? 1 : 2;
+  const tokens = text.slice(m.index + m[0].length).split(/\s+/).filter(Boolean);
+  const run: string[] = [];
+  for (const t of tokens) {
+    if (!BODY_RE.test(t)) {
+      // a token may be a code tail glued to punctuation, e.g. "abc." : keep the clean prefix
+      const head = /^[A-Za-z0-9_-]+/.exec(t)?.[0];
+      if (head) run.push(head);
+      break;
+    }
+    run.push(t);
+  }
+  if (!run.length) throw new ProfileCodeError("The profile code is empty. Try copying it again.");
+  let first: unknown;
+  for (let n = run.length; n >= 1; n--) {
+    try {
+      return await decodeBody(version, run.slice(0, n).join(""));
+    } catch (e) {
+      if (n === run.length) first = e;
+      if (e instanceof ProfileCodeError && /newer compressed/.test(e.message)) throw e;
+    }
+  }
+  throw first;
+}
+
+export interface ApplySummary { interests: boolean; notes: number; work: boolean; weather: boolean; goals_added: number; leisure_added: number; tasks_added?: number }
 
 export function summarize(r: ApplySummary): string {
   const parts: string[] = [];
   if (r.goals_added) parts.push(`${r.goals_added} goal${r.goals_added === 1 ? "" : "s"} added`);
   if (r.leisure_added) parts.push(`${r.leisure_added} leisure item${r.leisure_added === 1 ? "" : "s"} added`);
+  if (r.tasks_added) parts.push(`${r.tasks_added} task${r.tasks_added === 1 ? "" : "s"} added`);
   return ["Profile updated", ...parts].join(" · ");
 }

@@ -280,6 +280,25 @@ pub struct ProfileLeisure {
 }
 
 #[derive(Deserialize)]
+pub struct ProfileTask {
+    title: String,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    time: Option<String>,
+    #[serde(default)]
+    part_of_day: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    recurrence: Option<Recurrence>,
+    #[serde(default)]
+    checklist: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub struct ProfileIn {
     v: u32,
     updated: String,
@@ -295,6 +314,8 @@ pub struct ProfileIn {
     add_goals: Vec<ProfileGoal>,
     #[serde(default)]
     add_leisure: Vec<ProfileLeisure>,
+    #[serde(default)]
+    add_tasks: Vec<ProfileTask>,
 }
 
 /// Applies a private profile. All-or-nothing: on any validation error the state is left untouched.
@@ -353,9 +374,37 @@ fn apply_inner(env: &mut Env, b: ProfileIn, updated: String) -> Res<Value> {
         crate::leisure::create(env, crate::leisure::LeisureIn { kind: l.kind, title: l.title, note: l.note, status: l.status, finished_on: None, blurb: None })?;
         leisure_added += 1;
     }
+    let mut tasks_added = 0;
+    for t in b.add_tasks {
+        let title = t.title.trim().to_lowercase();
+        let date = t.date.as_deref().map(str::trim).filter(|d| !d.is_empty()).map(str::to_string);
+        if env.st.tasks.iter().any(|x| x.title.trim().to_lowercase() == title && x.date == date) {
+            continue;
+        }
+        let category_id = match t.category.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(c) if c.eq_ignore_ascii_case("auto") => Some(json!("auto")),
+            Some(c) => {
+                let cat = env.st.categories.iter().find(|x| x.name.trim().eq_ignore_ascii_case(c)).ok_or_else(|| ApiErr::bad(format!("unknown category \"{c}\"")))?;
+                Some(json!(cat.id))
+            }
+        };
+        let tin = crate::tasks::TaskIn {
+            title: t.title,
+            date,
+            time: t.time,
+            part_of_day: t.part_of_day,
+            category_id,
+            notes: t.notes.unwrap_or_default(),
+            recurrence: t.recurrence,
+            checklist: t.checklist.into_iter().map(|text| crate::tasks::ChecklistIn { id: None, text }).collect(),
+        };
+        crate::tasks::create_task(env, tin)?;
+        tasks_added += 1;
+    }
     env.st.memory.profile_updated = updated;
     env.changed = true;
-    Ok(json!({"interests": has_interests, "notes": notes, "work": has_work, "weather": has_weather, "goals_added": goals_added, "leisure_added": leisure_added}))
+    Ok(json!({"interests": has_interests, "notes": notes, "work": has_work, "weather": has_weather, "goals_added": goals_added, "leisure_added": leisure_added, "tasks_added": tasks_added}))
 }
 
 /// Clears interests, notes, work hours (back to defaults), weather preferences (defaults) and the profile date.

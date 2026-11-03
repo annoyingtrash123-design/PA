@@ -298,7 +298,7 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
   }
   if (is("POST") && p === "/api/profile/apply") {
     if (body.v !== 1) throw bad("unsupported profile version");
-    const r = { interests: false, notes: 0, work: false, weather: false, goals_added: 0, leisure_added: 0 };
+    const r = { interests: false, notes: 0, work: false, weather: false, goals_added: 0, leisure_added: 0, tasks_added: 0 };
     if (typeof body.interests === "string") { s.memory.interests = body.interests.trim(); r.interests = true; }
     if (Array.isArray(body.notes)) { s.memory.notes = body.notes.map((t: string) => ({ id: id(), text: t.trim() })); r.notes = s.memory.notes.length; }
     if (body.work) { s.memory.work = { ...s.memory.work, ...body.work }; r.work = true; }
@@ -306,6 +306,12 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
     const has = (list: Any[], t: string) => list.some((x: Any) => x.title.trim().toLowerCase() === t.trim().toLowerCase());
     for (const g of body.add_goals ?? []) if (!has(s.goals, g.title)) { s.goals.push({ id: id(), created: ctx.today, achieved_on: null, status: "active", why: "", deadline: null, ...g }); r.goals_added++; }
     for (const l of body.add_leisure ?? []) if (!has(s.leisure, l.title)) { s.leisure.push({ id: id(), note: "", status: "someday", created: ctx.today, finished_on: null, last_suggested: null, blurb: "", ...l }); r.leisure_added++; }
+    for (const t of body.add_tasks ?? []) {
+      if (s.tasks.some((x: Any) => x.title.trim().toLowerCase() === t.title.trim().toLowerCase() && (x.date ?? null) === (t.date ?? null))) continue;
+      const cat = t.category && t.category !== "auto" ? s.categories.find((c: Any) => c.name.toLowerCase() === String(t.category).toLowerCase()) : null;
+      s.tasks.push({ id: id(), title: t.title, date: t.date ?? null, time: t.time ?? null, part_of_day: t.part_of_day ?? "anytime", category_id: cat?.id ?? null, category_auto: t.category === "auto", notes: t.notes ?? "", recurrence: t.recurrence ?? null, checklist: (t.checklist ?? []).map((text: string) => ({ id: id(), text })) });
+      r.tasks_added++;
+    }
     s.memory.profile_updated = body.updated;
     return mut(r);
   }

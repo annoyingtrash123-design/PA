@@ -267,11 +267,10 @@ function profileCard(redraw: () => void): HTMLElement {
   let updated = "";
   try { updated = api<Memory>("GET", "/api/memory").profile_updated ?? ""; } catch { /* shown as not set */ }
   const when = updated ? new Date(`${updated}T12:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short" }) : "";
-  const ta = h("textarea", { class: "input", rows: 4, autocomplete: "off", spellcheck: false, "aria-label": "Paste a profile code", placeholder: "MIRANDA1:…" }) as HTMLTextAreaElement;
-  const apply = () => {
-    if (!ta.value.trim()) return toast("Paste a profile code first");
+  const ta = h("textarea", { class: "input", rows: 4, autocomplete: "off", spellcheck: false, "aria-label": "Paste a profile code", placeholder: "MIRANDA2:…" }) as HTMLTextAreaElement;
+  const applyText = async (text: string) => {
     try {
-      const r = api<ApplySummary>("POST", "/api/profile/apply", decodeProfile(ta.value));
+      const r = api<ApplySummary>("POST", "/api/profile/apply", await decodeProfile(text));
       ta.value = "";
       toast(summarize(r));
       if (r.work) void refreshHolidays();
@@ -281,6 +280,20 @@ function profileCard(redraw: () => void): HTMLElement {
       toast(e instanceof ProfileCodeError || e instanceof ApiError ? e.message : String(e));
     }
   };
+  const apply = () => {
+    if (!ta.value.trim()) return toast("Paste a profile code first");
+    void applyText(ta.value);
+  };
+  const fileIn = h("input", { type: "file", accept: ".txt,text/*,*/*", hidden: true }) as HTMLInputElement;
+  fileIn.onchange = async () => {
+    const f = fileIn.files?.[0];
+    fileIn.value = "";
+    if (!f) return;
+    let text = "";
+    try { text = await f.text(); } catch { return toast("Couldn't read that file"); }
+    if (!text.trim()) return toast("That file is empty");
+    await applyText(text);
+  };
   const clearIt = async () => {
     if (!(await confirmDialog("Clear private profile?", "This removes the private interests, notes, work hours and weather preferences. Goals and leisure items it added stay.", "Clear"))) return;
     try { api("POST", "/api/profile/clear", {}); } catch (e) { return toast((e as Error).message); }
@@ -289,11 +302,11 @@ function profileCard(redraw: () => void): HTMLElement {
     redraw();
   };
   return card("stack",
-    h("h3", { class: "title-sm" }, "Private profile"),
+    h("h3", { class: "title-sm" }, "Private profile & imports"),
     h("p", { class: "small" }, updated ? `Private profile: set · updated ${when}` : "Not set yet"),
-    muted("Your interests, notes, work hours and weather preferences are kept private and aren't shown here. Ask Claude for a profile code to add or change them."),
+    muted("Your interests, notes, work hours and weather preferences are private and aren't shown here. Codes from Claude can also add goals, tasks and reading-list items."),
     field("Paste a profile code", ta),
-    h("div", { class: "row wrap" }, outlineBtn("Apply", apply), updated ? button("Clear private profile", () => void clearIt(), { kind: "text", cls: "danger" }) : null),
+    h("div", { class: "row wrap" }, outlineBtn("Apply", apply), outlineBtn("Load code from file", () => fileIn.click()), fileIn, updated ? button("Clear private profile", () => void clearIt(), { kind: "text", cls: "danger" }) : null),
   );
 }
 
