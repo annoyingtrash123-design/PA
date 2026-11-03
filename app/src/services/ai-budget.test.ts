@@ -76,3 +76,10 @@ describe("separate voice budget", () => {
     expect(voiceRemaining("2026-11-04", store as never)).toBe(VOICE_BUDGET);
   });
 });
+
+import { cleanKey } from "./cache";
+describe("cleanKey", () => {
+  it("strips spaces, newlines and invisible characters from a pasted key", () => {
+    expect(cleanKey(" AIzaSyAbc​123\n ")).toBe("AIzaSyAbc123");
+  });
+});

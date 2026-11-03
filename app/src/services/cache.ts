@@ -28,7 +28,9 @@ const ls = {
 };
 
 export const getKey = () => ls.get(KEY_STORAGE).trim();
-export const setKey = (v: string) => ls.set(KEY_STORAGE, v.trim());
+/** Keys are plain ASCII: drop spaces, newlines and invisible characters a phone/tablet keyboard may add when pasting. */
+export const cleanKey = (v: string) => v.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, "").replace(/[^\x21-\x7E]/g, "");
+export const setKey = (v: string) => ls.set(KEY_STORAGE, cleanKey(v));
 export const hasKey = () => getKey() !== "";
 export const getModel = () => {
   const m = ls.get(MODEL_STORAGE).trim();

@@ -1,6 +1,6 @@
 import { api, ApiError, assistantName, getState, resetEverything } from "../core";
 import { aiUsage, testKey } from "../services/ai-text";
-import { DEFAULT_MODEL, getKey, getModel, hasKey, setKey, setModel } from "../services/cache";
+import { cleanKey, DEFAULT_MODEL, getKey, getModel, hasKey, setKey, setModel } from "../services/cache";
 import { refreshHolidays } from "../services/holidays";
 import { kvClear } from "../services/idb";
 import { listVoices } from "../services/speech";
@@ -112,7 +112,7 @@ function build(redraw: () => void): HTMLElement[] {
   };
 
   // ---- gemini
-  const fKey = h("input", { class: "input", type: "password", autocomplete: "off", placeholder: hasKey() ? "Key saved (leave empty to keep it)" : "Paste your key", "aria-label": "Gemini API key" });
+  const fKey = h("input", { class: "input", type: "password", autocomplete: "off", autocapitalize: "off", autocorrect: "off", spellcheck: "false", placeholder: hasKey() ? "Key saved (leave empty to keep it)" : "Paste your key", "aria-label": "Gemini API key" });
   const fModel = textInput(getModel(), { placeholder: DEFAULT_MODEL });
   const keyStatus = h("p", { class: "small", hidden: true });
   const usageText = () => {
@@ -121,7 +121,7 @@ function build(redraw: () => void): HTMLElement[] {
   };
   const usageLine = h("p", { class: "muted small" }, usageText());
   const runTest = async () => {
-    const key = fKey.value.trim() || getKey();
+    const key = cleanKey(fKey.value) || getKey();
     if (!key) return setStatus("Paste a key first.", true);
     setStatus("Testing…", false);
     try {
