@@ -81,3 +81,40 @@ export function composeWithNews(body: string, news: string | null | undefined, p
 export function morningScriptWithNews(p: MorningParts, news: string | null | undefined, pos: number): string {
   return morningScript({ ...p, briefing: composeWithNews(p.briefing, news, pos) });
 }
+
+// ---------------------------------------------------------------- the three spoken sections
+// Each briefing is recorded as three clips ("sections") that are played back-to-back. On screen it stays one text.
+// Morning: 1 = greeting, weather, affirmation (+ the news when it sits first); 2 = the day (first two paragraphs of the
+// briefing); 3 = the rest (tomorrow, the news when it sits last, the closing). Evening: 1 = the look back, 2 = tomorrow,
+// 3 = the news (when present) and the closing.
+
+/** News position 1 (older cached summaries) is treated as "last": the news never splits the middle section. */
+export const normalisePos = (pos: number): number => (pos === 0 ? 0 : 2);
+
+const join2 = (xs: string[]) => xs.map(clean).filter(Boolean).join("\n\n");
+
+/** Spread paragraphs over at most three sections: [first], [second], [rest]. */
+function spread(paras: string[]): string[][] {
+  const n = paras.length;
+  if (n <= 1) return [paras];
+  if (n === 2) return [[paras[0]], [paras[1]]];
+  return [[paras[0]], [paras[1]], paras.slice(2)];
+}
+
+export function morningSections(p: MorningParts, news: string | null | undefined, pos: number): string[] {
+  const nw = clean(news);
+  const paras = paragraphs(p.briefing);
+  const first = [p.greeting, p.weather_comment, p.affirmation].map(clean).filter(Boolean);
+  const day = paras.slice(0, Math.min(2, Math.max(1, paras.length - 1)));
+  const rest = paras.slice(day.length);
+  if (nw && normalisePos(pos) === 0) first.push(nw);
+  if (nw && normalisePos(pos) === 2) rest.splice(Math.max(0, rest.length - 1), 0, nw);
+  return [join2(first), join2(day), join2(rest)].filter(Boolean);
+}
+
+export function eveningSections(body: string, news: string | null | undefined): string[] {
+  const nw = clean(news);
+  const [a, b, c] = spread(paragraphs(body));
+  const last = [...(nw ? [nw] : []), ...(c ?? [])];
+  return [join2(a ?? []), join2(b ?? []), join2(last)].filter(Boolean);
+}

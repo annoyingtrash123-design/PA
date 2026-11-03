@@ -69,17 +69,22 @@ export async function loadNews(): Promise<NewsFile> {
   return ctxCache.news;
 }
 
-const norm = (s: string) =>
+/** Quotes, case, accents, punctuation and spacing don't matter when checking that a headline was quoted. */
+export const normHeadline = (s: string): string =>
   s
-    .replace(/[‘’‛]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[‘’‛′`]/g, "'")
+    .replace(/[“”„″]/g, '"')
+    .replace(/&/g, " and ")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 
-/** How many of the headlines appear word for word in the spoken news text. */
+/** How many of the headlines appear word for word (after normalising) in the spoken news text. */
 export function headlinesQuoted(news: string, titles: string[]): number {
-  const n = norm(news);
-  return titles.filter((t) => t.trim() && n.includes(norm(t).replace(/[.]$/, ""))).length;
+  const n = ` ${normHeadline(news)} `;
+  return titles.filter((t) => t.trim() && n.includes(` ${normHeadline(t)} `)).length;
 }
 
 /** The AI news is accepted when it quotes at least half of the headlines exactly (else the template news is used). */

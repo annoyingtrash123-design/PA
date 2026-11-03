@@ -160,3 +160,17 @@ and prior knowledge. Re-verify against https://ai.google.dev/gemini-api/docs/spe
   briefing, 2 before the last paragraph); the evening is always 2. Gemini still makes one request: the morning JSON has a fifth field `news`,
   the evening reply becomes `{briefing, news}`; the AI news is kept only if it quotes at least half of the headlines word for word, else the
   template segment is used. News text is stored under `<morning:DATE>:news` in `pa-ai-cache`. "Get the latest news" = one news-only request.
+
+## Reliability, sections and voice (update)
+- AI replies: briefings ask for `maxOutputTokens` 8192 (thinking stays low). `parseMorningJson` strips fences and salvages the complete fields of a truncated
+  reply (a usable `briefing` is enough; missing parts use the template). `has_stats` (core) ignores text inside quotation marks and the app guards only the
+  non-news parts. The news must quote at least half of the headlines after normalising quotes, case, accents and punctuation (`normHeadline`).
+  Why the built-in text was shown is classified in `services/ai-reason.ts` and shown under the card ("Written by Miranda's AI" / "Built-in summary — <reason>").
+- Spoken sections: each briefing is three sections (`morningSections` / `eveningSections`; the news sits first or last, never in the middle: core `news::position`
+  is 0 or 2). The screen shows one continuous text; "Read it to me" synthesises one clip per section (a section over ~300 words is split at paragraph/sentence
+  ends; without sections `chunkScript` splits at ~240 words), prefetches the next clip while one plays, pauses ~1 s between sections, shows progress across clips
+  and continues with the phone voice if a later clip fails. Each clip is cached by its text (newest 16 kept). Voice budget: 12 clips per day.
+- Favourite voices: `pa-voice-prefs.favs`; Settings lists them first under "Favourites".
+- Prompts carry the shared SPOKEN STYLE GUIDE (`lib.rs` `style_guide!`/`STYLE_GUIDE`): light natural fillers and pauses; headlines stay verbatim.
+- Template (no AI): imperative titles become gerund phrases (`taskvoice::task_phrase`), stock lines never repeat within a summary, at most one goal mention
+  (`goals::find_link` ignores generic words), a varied closing well-wish, greetings are hellos.

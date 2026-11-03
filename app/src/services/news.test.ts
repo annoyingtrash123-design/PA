@@ -74,3 +74,18 @@ describe("5-part reply parsing", () => {
     expect(parseNewsJson('{"other":1}')).toBeNull();
   });
 });
+
+import { headlinesQuoted as hq, newsIsFaithful as faithful } from "./news";
+
+describe("headline check is forgiving about quotes, case, spacing and punctuation", () => {
+  const titles = ["Prices rise 5% as “rates” hold, says RBA", "Ferry services: disrupted by storm", "It's a lovely day in Sydney"];
+  it("accepts curly vs straight quotes, case and punctuation", () => {
+    const news = `So the first one: "Prices rise 5 percent"... no wait, "prices rise 5% as 'rates' hold says rba". Then FERRY SERVICES - disrupted by storm! And "It’s a lovely day in Sydney".`;
+    expect(hq(news, titles)).toBe(3);
+    expect(faithful(news, titles)).toBe(true);
+  });
+  it("still rejects reworded headlines", () => {
+    expect(faithful("Prices went up a bit and ferries had trouble and it was nice out.", titles)).toBe(false);
+    expect(hq("Ferry services are disrupted by a storm today", titles)).toBe(0);
+  });
+});

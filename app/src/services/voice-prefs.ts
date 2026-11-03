@@ -8,6 +8,8 @@ export interface VoicePrefs {
   voice?: string;
   style?: string;
   speed?: number;
+  /** favourite Gemini voice names, in the order they were starred */
+  favs?: string[];
 }
 export const VOICE_PREFS_KEY = "pa-voice-prefs";
 
@@ -50,3 +52,20 @@ export const clampSpeed = (v: unknown): number => {
   return Math.round(Math.min(SPEED_MAX, Math.max(SPEED_MIN, n)) * 100) / 100;
 };
 export const getSpeed = (): number => clampSpeed(readPrefs().speed);
+
+// ---- favourite voices
+/** Valid favourite names only (known voices, no repeats). */
+export const cleanFavs = (v: unknown): string[] => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string" && VOICES.some((y) => y.name === x)))] : []);
+export const getFavourites = (): string[] => cleanFavs(readPrefs().favs);
+/** Add or remove a favourite; returns the new list. */
+export function toggleFavourite(name: string): string[] {
+  const cur = getFavourites();
+  const next = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
+  savePrefs({ favs: next });
+  return next;
+}
+/** The voice list for Settings: favourites first (in the order starred), then the rest in the usual order. */
+export function orderVoices<T extends { name: string }>(voices: T[], favs: string[]): { favourites: T[]; others: T[] } {
+  const favourites = favs.map((n) => voices.find((v) => v.name === n)).filter((v): v is T => !!v);
+  return { favourites, others: voices.filter((v) => !favs.includes(v.name)) };
+}

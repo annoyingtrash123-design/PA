@@ -50,7 +50,7 @@ export function recordUse(date: string, store: Store = lsStore): number {
 }
 
 // ---- separate daily budget for the natural voice (Google limits voice and text models separately)
-export const VOICE_BUDGET = 10;
+export const VOICE_BUDGET = 12;
 export const VOICE_USAGE_KEY = "pa-voice-usage";
 export function voiceUsedToday(date: string, store: Store = lsStore): number {
   try {

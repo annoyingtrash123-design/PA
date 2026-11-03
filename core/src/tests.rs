@@ -1611,7 +1611,8 @@ fn news_template_contains_each_selected_headline_verbatim_and_only_given_titles(
         assert!(t.contains(&format!("'{}'", i["title"].as_str().unwrap())), "{t}");
     }
     assert!(t.contains("First up, from "));
-    assert!(t.contains("Last one, from "));
+    assert!(t.contains("And last, from "));
+    assert!(t.contains(", the headline is: '"));
     // the quoted headlines are exactly the selected ones, nothing else
     let quotes = t.matches(" '").count();
     assert_eq!(quotes, items.len(), "{t}");
@@ -1639,7 +1640,8 @@ fn news_position_varies_by_day_for_morning_and_is_the_end_for_evening() {
         assert_eq!(crate::news::position(Kind::Evening, d(&day)), 2);
         seen.insert(crate::news::position(Kind::Morning, d(&day)));
     }
-    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen.iter().all(|p| *p == 0 || *p == 2), "{seen:?}");
 }
 
 #[test]
@@ -1813,7 +1815,8 @@ fn templates_walk_through_every_task_with_we_phrasing() {
         let t = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"))["template_text"].as_str().unwrap().to_string();
         println!("{kind}: {t}\n");
         for title in &titles {
-            assert!(t.contains(title), "{kind}: missing {title}\n{t}");
+            let ph = crate::taskvoice::task_phrase(title).text().to_string();
+            assert!(t.contains(title) || t.contains(&ph), "{kind}: missing {title}\n{t}");
         }
         assert!(!t.contains("plus a few more") && !t.contains("a few more,"), "{t}");
         assert!(t.contains("we've got") || t.contains("you've got") || t.contains("we have") || t.contains("for us") || t.contains("your day"), "{t}");
@@ -1927,4 +1930,180 @@ fn trains_covers_the_usual_workout_names_generically() {
     let mut rest = plan("Rest", "strength");
     rest.rest = true;
     assert!(crate::gym::trains(&rest).is_none());
+}
+
+// ------------------------------------------------------------ template quality, greeting, fillers, style guide
+
+fn days_from(n: i64) -> Vec<String> {
+    (0..n).map(|k| fmt_date(d(TODAY) + chrono::Duration::days(k))).collect()
+}
+
+fn task_app_for_days(days: &[String], titles: &[&str]) -> App {
+    let mut a = App::new(TODAY);
+    a.req("PUT", "/api/settings", json!({"user_name": "Sam"}));
+    for day in days {
+        for t in titles {
+            a.post("/api/tasks", json!({"title": t, "date": day}));
+        }
+    }
+    a
+}
+
+#[test]
+fn morning_greeting_is_a_hello_never_a_well_wish() {
+    let days = days_from(14);
+    for named in [true, false] {
+        let mut a = task_app_for_days(&days, &["Pay the water bill"]);
+        if !named {
+            a.req("PUT", "/api/settings", json!({"user_name": ""}));
+        }
+        for day in &days {
+            let b = a.get(&format!("/api/briefing?kind=morning&date={day}"));
+            let g = b["template_parts"]["greeting"].as_str().unwrap().to_string();
+            let l = g.to_lowercase();
+            assert!(!l.starts_with("i hope") && !l.starts_with("hope") && !l.starts_with("have a") && !l.contains("lovely"), "{g}");
+            assert!(l.contains("morning") || l.contains("rise and shine"), "{g}");
+            // the well-wish is in the closing instead
+            let body = b["template_parts"]["briefing"].as_str().unwrap();
+            assert!(body.trim_end().ends_with('.'), "{body}");
+            let last = sentences(body).pop().unwrap().to_lowercase();
+            assert!(last.contains("lovely") || last.contains("enjoy") || last.contains("good one") || last.contains("good"), "closing well-wish missing: {last}");
+        }
+    }
+}
+
+#[test]
+fn imperative_titles_read_naturally_in_sentences() {
+    use crate::taskvoice::{task_phrase, Phrase};
+    let cases = [
+        ("Try Gemini learning mode for Korean study", "trying Gemini learning mode for Korean study"),
+        ("Read about the Australian mining boom", "reading about the Australian mining boom"),
+        ("Make book club inquiries", "making some book club inquiries"),
+        ("Organise the hall cupboard", "organising the hall cupboard"),
+        ("Call the plumber", "calling the plumber"),
+        ("Pay the water bill", "paying the water bill"),
+    ];
+    for (title, want) in cases {
+        assert_eq!(task_phrase(title), Phrase::Gerund(want.into()), "{title}");
+    }
+    // nouns and book-club style titles stay as they are
+    assert_eq!(task_phrase("Dentist check-up"), Phrase::Noun("Dentist check-up".into()));
+    assert_eq!(task_phrase("Book club"), Phrase::Noun("Book club".into()));
+    // and the template uses the phrasing
+    let days = days_from(1);
+    let mut a = task_app_for_days(&days, &["Try Gemini learning mode for Korean study", "Read about the Australian mining boom", "Make book club inquiries", "Organise the hall cupboard"]);
+    let t = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"))["template_text"].as_str().unwrap().to_string();
+    for want in ["trying Gemini learning mode for Korean study", "reading about the Australian mining boom", "making some book club inquiries", "organising the hall cupboard"] {
+        assert!(t.contains(want), "{want} missing in\n{t}");
+    }
+    assert!(!t.contains("there's Try ") && !t.contains("there's Read ") && !t.contains("got Make "), "{t}");
+}
+
+#[test]
+fn no_stock_sentence_repeats_within_one_summary() {
+    let days = days_from(10);
+    let titles = ["Sort the garden shed", "Clean the oven", "Tidy the spare room", "Wash the car", "Mop the hallway"];
+    let mut a = task_app_for_days(&days, &titles);
+    for kind in ["morning", "evening"] {
+        for day in &days {
+            let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
+            let mut seen = std::collections::HashSet::new();
+            for s in sentences(&t) {
+                if words_in(&s) >= 6 {
+                    assert!(seen.insert(s.clone()), "{kind} {day}: repeated sentence {s:?}\n{t}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn goals_link_only_on_meaningful_words_and_at_most_once() {
+    use crate::goals::find_link;
+    use crate::model::Goal;
+    let g = |title: &str, why: &str| Goal { id: 1, title: title.into(), horizon: "medium".into(), deadline: None, why: why.into(), status: "active".into(), achieved_on: None, created: "2026-01-01".into() };
+    let generic = [g("Read more and work better", "I want to spend my own time writing and learning more"), g("Be better with time", "more of my own work")];
+    for task in ["Read about the Australian mining boom", "Work on the report notes", "Writing time", "Learning mode for something", "Own it", "Make book club inquiries"] {
+        assert!(find_link(&generic, &[(task.into(), task.into())]).is_none(), "{task}");
+    }
+    let korean = [g("Learn Korean", "to talk with family")];
+    assert!(find_link(&korean, &[("Try Gemini learning mode for Korean study".into(), "Try Gemini learning mode for Korean study".into())]).is_some());
+    assert!(find_link(&korean, &[("Read about the Australian mining boom".into(), "Read about the Australian mining boom".into())]).is_none());
+    // in a whole summary the goal is mentioned at most once
+    let days = days_from(3);
+    let mut a = task_app_for_days(&days, &["Korean vocab practice", "Korean lesson notes", "Do a Korean flashcard set"]);
+    a.post("/api/goals", json!({"title": "Learn Korean", "horizon": "medium"}));
+    for kind in ["morning", "evening"] {
+        for day in &days {
+            let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
+            assert!(t.matches("Learn Korean").count() <= 1, "{kind} {day}\n{t}");
+        }
+    }
+}
+
+#[test]
+fn keyword_categories_for_study_admin_and_reading() {
+    use crate::model::Category;
+    let names = ["Chores", "Exercise", "Study", "Work", "Errands", "Appointments", "Social", "Self-care", "Admin & Money"];
+    let cats: Vec<Category> = names.iter().enumerate().map(|(i, n)| Category { id: i as i64 + 1, name: n.to_string(), color: "#000".into() }).collect();
+    let name = |t: &str| crate::tasks::keyword_category(t, &cats).map(|id| names[id as usize - 1]);
+    assert_eq!(name("Try Gemini learning mode for Korean study"), Some("Study"));
+    assert_eq!(name("Read about the Australian mining boom"), Some("Study"));
+    assert!(matches!(name("Make book club inquiries"), Some("Admin & Money") | Some("Social")));
+    assert_eq!(name("Research flights to Seoul"), Some("Study"));
+    assert_eq!(name("JLPT practice"), Some("Study"));
+    assert_eq!(name("Email the landlord about the lease"), Some("Admin & Money"));
+    assert_ne!(name("Read"), Some("Self-care"));
+    assert_eq!(name("Read a novel before bed"), Some("Self-care"));
+}
+
+fn filler_count(p: &str) -> usize {
+    let l = p.to_lowercase();
+    ["…", " um,", ", um", "hmm", "oh, and", "you know", " uh,", " ah,"].iter().map(|k| l.matches(k).count()).sum()
+}
+
+#[test]
+fn templates_have_light_natural_pauses_but_not_too_many() {
+    let days = days_from(14);
+    let mut a = task_app_for_days(&days, &["Pay the water bill", "Sort the garden shed", "Call the plumber"]);
+    for kind in ["morning", "evening"] {
+        let mut with = 0;
+        for day in &days {
+            let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
+            if filler_count(&t) > 0 {
+                with += 1;
+            }
+            for p in t.split("\n\n") {
+                assert!(filler_count(p) <= 3, "{kind} {day}: too many in a paragraph ({}) {p}", filler_count(p));
+            }
+            assert!(!has_stats(&t));
+        }
+        assert!(with * 10 >= days.len() * 8, "{kind}: only {with} days had a pause");
+    }
+}
+
+#[test]
+fn every_prompt_carries_the_spoken_style_guide() {
+    let mut a = news_app(TODAY);
+    for kind in ["morning", "evening", "weekly"] {
+        let b = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"));
+        assert!(b["system_prompt"].as_str().unwrap().contains(crate::STYLE_GUIDE), "{kind}");
+    }
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert!(b["news"]["system_prompt"].as_str().unwrap().contains(crate::STYLE_GUIDE));
+    assert!(crate::STYLE_GUIDE.contains("never put one inside a quoted headline"));
+    for k in ["BASE TONE", "NEWS TONE", "EXAMPLE OF THE TONE FOR THE DAY", "EXAMPLE OF THE TONE FOR THE NEWS", "speaking of", "reflective takeaway"] {
+        assert!(crate::STYLE_GUIDE.contains(k), "{k}");
+    }
+}
+
+#[test]
+fn news_leads_are_complete_sentences() {
+    use crate::news::first_sentence;
+    for lead in ["Several ferries were suspended on Sunday. Repairs will take days.", "A long lead that runs on and then stops mid-", "The cut off lead ends here. And then a part that was trimmed…", "Fine without a full stop"] {
+        let f = first_sentence(lead);
+        assert!(f.is_empty() || f.ends_with(['.', '!', '?']), "{f:?}");
+    }
+    assert_eq!(first_sentence("The cut off lead ends here. And then a part that was trimmed…"), "The cut off lead ends here.");
+    assert_eq!(first_sentence("A lead with no end that keeps going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going and going"), "");
 }

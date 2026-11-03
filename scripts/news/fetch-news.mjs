@@ -48,13 +48,55 @@ export function stripHtml(html) {
   return s.replace(/\s+/g, " ").trim();
 }
 
-/** Cut at ~max characters on a word boundary, ending cleanly. */
+/** Sentences of a text (not split at "U.S.", "Mr." or an ellipsis). */
+export function sentencesOf(text) {
+  const t = text.replace(/\s+/g, " ").trim();
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c !== "." && c !== "!" && c !== "?") continue;
+    if (t[i + 1] === "." || t[i - 1] === ".") continue;
+    let j = i + 1;
+    while (j < t.length && /["'”’)\]]/.test(t[j])) j++;
+    if (j < t.length && t[j] !== " ") continue;
+    const word = t.slice(start, i).split(" ").pop() ?? "";
+    if (c === "." && (/^[A-Z]$/.test(word) || word.includes(".") || /^(Mr|Mrs|Ms|Dr|St|No|Jr|Sr|Vs)$/.test(word))) continue;
+    out.push(t.slice(start, j).trim());
+    start = j;
+  }
+  const rest = t.slice(start).trim();
+  return { sentences: out, rest };
+}
+
+const TAIL_JUNK = /\s*(?:\[(?:…|\.\.\.)\]|(?:…|\.\.\.)|(?:Continue reading|Read more|Read the full (?:story|article))\W*)\s*$/i;
+
+/**
+ * A lead that ends cleanly: never cut mid-sentence. Text that is short enough and ends a sentence is kept whole; otherwise
+ * the complete sentences that fit in `max` characters are kept, and when not even the first fits (or the feed cut it
+ * off before its first full stop) the lead is dropped (""), so the app never reads half a sentence.
+ */
 export function truncate(s, max = LEAD_MAX) {
-  if (s.length <= max) return s;
-  const cut = s.slice(0, max);
-  const sentence = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
-  if (sentence > max * 0.5) return cut.slice(0, sentence + 1);
-  return cut.slice(0, cut.lastIndexOf(" ")).replace(/[,;:\-–]$/, "") + "…";
+  let t = String(s ?? "").replace(/\s+/g, " ").trim();
+  let cutOff = false;
+  for (let k = 0; k < 3 && TAIL_JUNK.test(t); k++) {
+    t = t.replace(TAIL_JUNK, "").trim();
+    cutOff = true;
+  }
+  if (!t) return "";
+  const { sentences, rest } = sentencesOf(t);
+  if (!cutOff && !rest && t.length <= max) return t;
+  // a trailing fragment without an end (a cut-off feed lead, or a lead with no full stop at all)
+  if (!cutOff && !sentences.length && t.length <= max) return t; // one short unpunctuated line is complete as given
+  const kept = [];
+  let len = 0;
+  for (const sent of sentences) {
+    const next = len + (kept.length ? 1 : 0) + sent.length;
+    if (next > max) break;
+    kept.push(sent);
+    len = next;
+  }
+  return kept.join(" ");
 }
 
 // ---------------------------------------------------------------- tiny RSS / Atom parser

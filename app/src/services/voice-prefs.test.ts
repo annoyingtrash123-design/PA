@@ -11,3 +11,19 @@ describe("clampSpeed", () => {
     expect(clampSpeed(1)).toBe(1);
   });
 });
+
+import { cleanFavs, orderVoices } from "./voice-prefs";
+
+describe("favourite voices", () => {
+  const voices = [{ name: "Sulafat" }, { name: "Achernar" }, { name: "Aoede" }, { name: "Puck" }];
+  it("lists favourites first (in the order starred), then the rest in the usual order", () => {
+    const o = orderVoices(voices, ["Puck", "Achernar"]);
+    expect(o.favourites.map((v) => v.name)).toEqual(["Puck", "Achernar"]);
+    expect(o.others.map((v) => v.name)).toEqual(["Sulafat", "Aoede"]);
+    expect(orderVoices(voices, []).favourites).toEqual([]);
+  });
+  it("ignores unknown names and repeats", () => {
+    expect(cleanFavs(["Sulafat", "Nobody", "Sulafat", 5])).toEqual(["Sulafat"]);
+    expect(cleanFavs("x")).toEqual([]);
+  });
+});

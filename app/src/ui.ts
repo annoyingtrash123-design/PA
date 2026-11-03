@@ -146,7 +146,7 @@ export function confirmDialog(title: string, text: string, confirmLabel: string,
 // ---------- Read-aloud button + controls ----------
 
 /** Big "Read it to me" button; while generating shows a spinner, while playing pause/resume, stop and (natural voice) a progress bar. */
-export function readAloud(getText: () => string, getVoice: () => string, label = "Read it to me", disabled = false, big = true, opts: { forcePhone?: boolean } = {}): HTMLElement {
+export function readAloud(getText: () => string, getVoice: () => string, label = "Read it to me", disabled = false, big = true, opts: { forcePhone?: boolean; sections?: () => string[] | undefined } = {}): HTMLElement {
   const wrap = h("div", { class: "read-aloud" });
   const natural = !opts.forcePhone && getVoiceType() === "gemini";
   if (!speechSupported() && !natural) {
@@ -159,7 +159,7 @@ export function readAloud(getText: () => string, getVoice: () => string, label =
     offProgress = () => {};
     const st = playState();
     if (st === "idle") {
-      clear(wrap, button(label, () => void playAloud(getText(), getVoice(), opts).catch((e) => toast(String(e.message ?? e))), big ? { big: true, icon: "play", disabled, cls: "btn-wide" } : { kind: "outline", icon: "volume", disabled }));
+      clear(wrap, button(label, () => void playAloud(getText(), getVoice(), { forcePhone: opts.forcePhone, sections: opts.sections?.() }).catch((e) => toast(String(e.message ?? e))), big ? { big: true, icon: "play", disabled, cls: "btn-wide" } : { kind: "outline", icon: "volume", disabled }));
     } else if (st === "loading") {
       clear(wrap, h("div", { class: "player" }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${assistantName()} is warming up her voice…`), h("button", { type: "button", class: "round", "aria-label": "Cancel", onclick: stopAll }, icon("stop", 22))));
     } else {

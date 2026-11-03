@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { audioBlobFrom, buildPrompt, clampText, parseSampleRate, pcmToWav, planVoice, pruneIndex, restingReason, ttsCacheKey, type IndexEntry } from "./gemini-tts";
+import { audioBlobFrom, buildPrompt, clampText, parseSampleRate, MAX_CLIPS, pcmToWav, planVoice, pruneIndex, restingReason, ttsCacheKey, type IndexEntry } from "./gemini-tts";
 import { resolveVoiceType } from "./voice-prefs";
 
 describe("pcmToWav", () => {
@@ -55,13 +55,13 @@ describe("ttsCacheKey", () => {
 
 describe("pruneIndex", () => {
   const day = 24 * 3600 * 1000;
-  it("keeps the newest 10 clips, drops clips older than 3 days, never previews", () => {
+  it("keeps the newest clips (MAX_CLIPS), drops clips older than 3 days, never previews", () => {
     const now = 100 * day;
     const idx: IndexEntry[] = [{ key: "p", at: 0, kind: "preview" }, { key: "old", at: now - 4 * day, kind: "clip" }];
-    for (let i = 0; i < 12; i++) idx.push({ key: `c${i}`, at: now - i * 1000, kind: "clip" });
+    for (let i = 0; i < MAX_CLIPS + 2; i++) idx.push({ key: `c${i}`, at: now - i * 1000, kind: "clip" });
     const { keep, drop } = pruneIndex(idx, now);
-    expect(keep.map((e) => e.key)).toEqual(["p", ...Array.from({ length: 10 }, (_, i) => `c${i}`)]);
-    expect(drop.map((e) => e.key).sort()).toEqual(["c10", "c11", "old"]);
+    expect(keep.map((e) => e.key)).toEqual(["p", ...Array.from({ length: MAX_CLIPS }, (_, i) => `c${i}`)]);
+    expect(drop.map((e) => e.key).sort()).toEqual([`c${MAX_CLIPS}`, `c${MAX_CLIPS + 1}`, "old"]);
   });
 });
 
@@ -107,5 +107,56 @@ describe("rankTtsModels", () => {
       "gemini-2.5-flash-preview-tts",
       "gemini-2.5-pro-preview-tts",
     ]);
+  });
+});
+
+import { chunkScript, chunkSections, splitSentences } from "./gemini-tts";
+
+const sentence = (n: number) => `This is sentence number ${n} and it has a handful of ordinary spoken words in it.`; // 16 words
+const para = (start: number, count: number) => Array.from({ length: count }, (_, k) => sentence(start + k)).join(" ");
+const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+describe("chunkScript", () => {
+  it("splits a ~750 word script into ~1.5 minute chunks at paragraph boundaries", () => {
+    const paras = Array.from({ length: 8 }, (_, i) => para(i * 6, 6)); // 8 paragraphs of 96 words
+    const chunks = chunkScript(paras.join("\n\n"));
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    expect(chunks.length).toBeLessThanOrEqual(4);
+    for (const c of chunks) {
+      expect(words(c)).toBeGreaterThan(80);
+      expect(words(c)).toBeLessThanOrEqual(300);
+    }
+    // nothing lost, nothing cut: every chunk is whole paragraphs
+    expect(chunks.join("\n\n")).toBe(paras.join("\n\n"));
+  });
+  it("splits one huge paragraph at sentence ends only", () => {
+    const big = para(0, 40); // 640 words, one paragraph
+    const chunks = chunkScript(big);
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    for (const c of chunks) {
+      expect(c.endsWith(".")).toBe(true);
+      expect(c.startsWith("This is sentence number")).toBe(true);
+      expect(words(c)).toBeLessThanOrEqual(260);
+    }
+    expect(chunks.join(" ")).toBe(big);
+  });
+  it("keeps a short script as one chunk and folds a tiny tail into the previous chunk", () => {
+    expect(chunkScript("Hello there.\n\nHow are you today?")).toEqual(["Hello there.\n\nHow are you today?"]);
+    const withTail = [para(0, 15), para(20, 2)].join("\n\n"); // 240 + 32 words
+    expect(chunkScript(withTail)).toHaveLength(1);
+  });
+  it("does not treat an ellipsis or an abbreviation as a sentence end", () => {
+    expect(splitSentences("Hmm… let's see, so... anyway. The U.S. said yes. Done!")).toEqual(["Hmm… let's see, so... anyway.", "The U.S. said yes.", "Done!"]);
+  });
+});
+
+describe("chunkSections", () => {
+  it("makes each section one clip and only splits one that runs past about two minutes", () => {
+    const s1 = para(0, 8);
+    const s2 = para(10, 40);
+    const out = chunkSections([s1, "", s2]);
+    expect(out[0]).toBe(s1);
+    expect(out.length).toBeGreaterThanOrEqual(3);
+    expect(out.slice(1).every((c) => words(c) <= 300 && c.endsWith("."))).toBe(true);
   });
 });

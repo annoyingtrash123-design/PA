@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { buildItems, industryScore, leadFromPage, parseFeed, run, similarTitles, stripHtml } from "./fetch-news.mjs";
+import { truncate, buildItems, industryScore, leadFromPage, parseFeed, run, similarTitles, stripHtml } from "./fetch-news.mjs";
 
 const RSS = `<?xml version="1.0"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel><title>Test</title>
@@ -49,10 +49,23 @@ test("stripHtml removes tags and decodes entities", () => {
   assert.equal(stripHtml("<p>Hello&nbsp;<em>there</em> &#8217;s &#x41;</p><script>x()</script>"), "Hello there ’s A");
 });
 
-test("lead is capped at about 700 characters on a boundary", () => {
-  const long = `<item><title>T</title><description>${"Word ".repeat(300)}</description><pubDate>Sun, 01 Nov 2026 17:30:00 +0000</pubDate></item>`;
+test("lead is capped at about 700 characters and ends at a sentence boundary", () => {
+  const sentence = "The council said the work would finish early next year.";
+  const long = `<item><title>T</title><description>${`${sentence} `.repeat(30)}</description><pubDate>Sun, 01 Nov 2026 17:30:00 +0000</pubDate></item>`;
   const [it] = parseFeed(long);
-  assert.ok(it.lead.length <= 702, it.lead.length);
+  assert.ok(it.lead.length <= 700, it.lead.length);
+  assert.ok(it.lead.endsWith("."), it.lead);
+  assert.equal(it.lead.length % (sentence.length + 1), sentence.length); // whole sentences only
+});
+
+test("a lead that cannot be cut cleanly is dropped, never cut mid-sentence", () => {
+  assert.equal(truncate("Word ".repeat(300)), "");
+  assert.equal(truncate(`${"A very long first sentence ".repeat(40)}ends here. Short one.`), "");
+  assert.equal(truncate("First complete sentence. Second one that was trimmed by the feed…"), "First complete sentence.");
+  assert.equal(truncate("Only a fragment that the feed trimmed [...]"), "");
+  assert.equal(truncate("Fine as it is. And this too."), "Fine as it is. And this too.");
+  assert.equal(truncate("The U.S. said talks go on. More later. Continue reading..."), "The U.S. said talks go on. More later.");
+  for (const lead of [truncate("One. Two. Three trailing off and"), truncate("Hello there. " + "x".repeat(800))]) assert.ok(lead === "" || /[.!?]$/.test(lead), lead);
 });
 
 test("titles: similar detection", () => {

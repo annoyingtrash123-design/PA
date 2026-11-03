@@ -1,6 +1,7 @@
 import { assistantName, getState, now, today } from "../core";
 import type { BriefingResult } from "../services/ai-text";
-import { affirmationFor, aiNotice, getBriefing, refreshNews, templateBriefing, templateDigest, type Digest, type NewsView } from "../services/ai-text";
+import { affirmationFor, getBriefing, refreshNews, templateBriefing, templateDigest, type Digest, type NewsView } from "../services/ai-text";
+import { sourceLabel } from "../services/ai-reason";
 import { sourcesLine } from "../services/news";
 import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
@@ -28,6 +29,8 @@ export function renderHome(root: HTMLElement): () => void {
   const affHolder = h("div", { hidden: true });
   /** what "Read it to me" says right now: morning = greeting, weather, affirmation, briefing; evening = the wind-down text */
   let script = "";
+  /** the spoken sections of what is shown (each is read as one clip); undefined = split by length */
+  let sections: string[] | undefined;
 
   const drawWeather = () => {
     const w = digest?.weather;
@@ -81,11 +84,11 @@ export function renderHome(root: HTMLElement): () => void {
         ...(b?.news && b.layout && text
           ? [...paragraphs(b.layout.before).map((p) => h("p", null, p)), newsBlock(b.news, date!), ...paragraphs(b.layout.after).map((p) => h("p", null, p))]
           : paragraphs(body).map((p) => h("p", null, p))),
-        resting ? h("p", { class: "muted small" }, resting) : null,
+        resting ? h("p", { class: "muted small", "data-testid": "source-label" }, resting) : null,
         onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
       ),
     );
-    clear(playHolder, readAloud(() => script || body, () => getState().settings.voice, kind === "morning" ? "Read it to me" : "Read my wind-down", !text));
+    clear(playHolder, readAloud(() => script || body, () => getState().settings.voice, kind === "morning" ? "Read it to me" : "Read my wind-down", !text, true, { sections: () => sections }));
   };
 
   /** Paint everything a briefing result holds: weather comment, affirmation card, "Your day" card, and the read-aloud script. */
@@ -99,8 +102,9 @@ export function renderHome(root: HTMLElement): () => void {
     if (my !== token) return;
     drawAffirmation(aff);
     script = b.script;
+    sections = b.sections;
     const update = b.outdated ? () => void regenerate(date) : null;
-    drawDay(b.text, p?.greeting, false, note, b.source === "template" ? aiNotice() : null, update, b, date);
+    drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy), update, b, date);
   };
   const regenerate = async (date: string) => {
     const my = ++token;

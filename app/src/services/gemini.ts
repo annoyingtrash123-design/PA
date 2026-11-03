@@ -30,10 +30,84 @@ export function cleanReply(text: string): string {
   return t.trim();
 }
 
-function parseJsonObject(raw: string): Record<string, unknown> | null {
+/** Remove ```json fences (also an unclosed opening fence, as in a truncated reply). */
+function stripFences(raw: string): string {
   let s = raw.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) s = fence[1].trim();
+  if (fence) return fence[1].trim();
+  s = s.replace(/^```(?:json)?\s*/i, "");
+  return s.trim();
+}
+
+/**
+ * Complete top-level fields of a JSON object that was cut off part-way (a reply that hit the output limit).
+ * Only fields whose value finished are kept: strings, null, numbers and booleans.
+ */
+export function salvageFields(raw: string): Record<string, unknown> | null {
+  const s = stripFences(raw);
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  const out: Record<string, unknown> = {};
+  let i = start + 1;
+  const ws = () => {
+    while (i < s.length && /[\s,]/.test(s[i])) i++;
+  };
+  const readString = (): string | null => {
+    // s[i] is the opening quote; returns the decoded string, or null when it never closes
+    let j = i + 1;
+    while (j < s.length) {
+      if (s[j] === "\\") j += 2;
+      else if (s[j] === '"') break;
+      else j++;
+    }
+    if (j >= s.length) return null;
+    const lit = s.slice(i, j + 1);
+    i = j + 1;
+    try {
+      return JSON.parse(lit) as string;
+    } catch {
+      return null;
+    }
+  };
+  for (;;) {
+    ws();
+    if (i >= s.length || s[i] !== '"') break;
+    const key = readString();
+    if (key === null) break;
+    ws();
+    if (s[i] !== ":") break;
+    i++;
+    ws();
+    if (s[i] === '"') {
+      const v = readString();
+      if (v === null) break;
+      out[key] = v;
+    } else {
+      const m = /^(null|true|false|-?\d+(?:\.\d+)?)/.exec(s.slice(i));
+      if (!m) break; // a nested value or a cut-off literal: stop here
+      i += m[1].length;
+      out[key] = m[1] === "null" ? null : m[1] === "true" ? true : m[1] === "false" ? false : Number(m[1]);
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** True when the reply looks like JSON that stopped before its closing brace. */
+export function looksTruncated(raw: string): boolean {
+  const s = stripFences(raw);
+  return s.startsWith("{") && !s.trimEnd().endsWith("}");
+}
+
+function parseStrict(raw: string): boolean {
+  try {
+    return typeof JSON.parse(stripFences(raw)) === "object";
+  } catch {
+    return false;
+  }
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  const s = stripFences(raw);
   const tryParse = (x: string): unknown => {
     try {
       return JSON.parse(x);
@@ -47,19 +121,21 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
     const b = s.lastIndexOf("}");
     if (a >= 0 && b > a) obj = tryParse(s.slice(a, b + 1));
   }
+  if (!obj || typeof obj !== "object") obj = salvageFields(raw);
   if (!obj || typeof obj !== "object") return null;
   return obj as Record<string, unknown>;
 }
 
 /** Parse the morning reply {"greeting","weather_comment","affirmation","briefing"}. Tolerant: any field may be missing
  *  (callers fall back to the template part); null only if there is no usable briefing. */
-export function parseMorningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null; briefing: string; news: string | null } | null {
+export function parseMorningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null; briefing: string; news: string | null; salvaged?: true } | null {
   const o = parseJsonObject(raw);
   if (!o) return null;
+  const salvaged = looksTruncated(raw) && !parseStrict(raw);
   const get = (k: string) => (typeof o[k] === "string" ? cleanReply(o[k] as string) : "") || null;
   const briefing = get("briefing");
   if (!briefing) return null;
-  return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing, news: get("news") };
+  return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing, news: get("news"), ...(salvaged ? { salvaged: true as const } : {}) };
 }
 
 /** Parse a news-only reply {"news": string}. Tolerant of fences and chatter; null when there is no usable news. */

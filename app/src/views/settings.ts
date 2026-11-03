@@ -9,7 +9,7 @@ import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal
 import { stopAll, previewNatural, refreshSpeed } from "../services/readaloud";
 import { STYLES, VOICES } from "../services/gemini-tts";
 import { icon } from "../icons";
-import { DEFAULT_SPEED, getGeminiVoice, getSpeed, getStyle, getVoiceType, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
+import { DEFAULT_SPEED, getGeminiVoice, getFavourites, getSpeed, getStyle, getVoiceType, orderVoices, toggleFavourite, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
 import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
@@ -117,7 +117,7 @@ function build(redraw: () => void): HTMLElement[] {
   const keyStatus = h("p", { class: "small", hidden: true });
   const usageText = () => {
     const u = aiUsage();
-    return `AI writing today: ${u.used} of ${u.limit} · Voice clips today: ${u.voiceUsed} of ${u.voiceLimit}`;
+    return `AI writing today: ${u.used} of ${u.limit} · Voice clips today: ${u.voiceUsed} of ${u.voiceLimit} (a summary is read in about 3 clips)`;
   };
   const usageLine = h("p", { class: "muted small" }, usageText());
   const runTest = async () => {
@@ -392,23 +392,35 @@ function voiceCard(fVoice: HTMLSelectElement, fAssistant: HTMLInputElement): HTM
     return b;
   };
   const list = h("div", { class: "voice-list", role: "radiogroup", "aria-label": "Natural voice" });
-  for (const v of VOICES) {
-    const row = h(
-      "div",
-      { class: `voice-row ${v.name === voice ? "on" : ""}` },
-      h("button", { type: "button", class: "pick", role: "radio", "aria-checked": String(v.name === voice), onclick: () => {
-        voice = v.name;
-        savePrefs({ voice });
-        rows.forEach((r, n) => {
-          r.classList.toggle("on", n === voice);
-          r.querySelector(".pick")?.setAttribute("aria-checked", String(n === voice));
-        });
-      } }, `${v.name} — ${v.trait}`),
-      previewBtn(v.name),
-    );
-    rows.set(v.name, row);
-    list.appendChild(row);
-  }
+  const drawList = () => {
+    rows.clear();
+    const favs = getFavourites();
+    const { favourites, others } = orderVoices(VOICES, favs);
+    const row = (v: (typeof VOICES)[number]) => {
+      const fav = favs.includes(v.name);
+      const el = h(
+        "div",
+        { class: `voice-row ${v.name === voice ? "on" : ""}` },
+        h("button", { type: "button", class: "pick", role: "radio", "aria-checked": String(v.name === voice), onclick: () => {
+          voice = v.name;
+          savePrefs({ voice });
+          rows.forEach((r, n) => {
+            r.classList.toggle("on", n === voice);
+            r.querySelector(".pick")?.setAttribute("aria-checked", String(n === voice));
+          });
+        } }, `${v.name} — ${v.trait}`),
+        h("button", { type: "button", class: "btn btn-outline", "aria-pressed": String(fav), "aria-label": fav ? `Remove ${v.name} from favourites` : `Add ${v.name} to favourites`, style: { minHeight: "36px", padding: "6px 10px" }, onclick: () => {
+          toggleFavourite(v.name);
+          drawList();
+        } }, fav ? "★" : "☆"),
+        previewBtn(v.name),
+      );
+      rows.set(v.name, el);
+      return el;
+    };
+    clear(list, ...(favourites.length ? [h("p", { class: "label-caps muted small" }, "Favourites"), ...favourites.map(row), h("p", { class: "label-caps muted small" }, "All voices")] : []), ...others.map(row));
+  };
+  drawList();
   const naturalBox = h(
     "div",
     { class: "stack", hidden: type !== "gemini" },

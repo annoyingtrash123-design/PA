@@ -187,7 +187,14 @@ pub fn fingerprint(active: &[Goal], date: NaiveDate) -> String {
         .join(";")
 }
 
-const STOP: [&str; 14] = ["with", "that", "this", "from", "have", "more", "your", "into", "just", "keep", "when", "over", "than", "them"];
+/// Words too generic to link a goal to a task (direct matches only count on meaningful words).
+const STOP: &[&str] = &[
+    "with", "that", "this", "from", "have", "more", "your", "into", "just", "keep", "when", "over", "than", "them", "read", "reading", "write", "writing", "learn", "learning", "better", "work", "working",
+    "time", "times", "about", "being", "doing", "making", "getting", "going", "every", "where", "which", "would", "could", "should", "their", "there", "these", "those", "other", "after", "before", "great",
+    "small", "start", "finish", "today", "tomorrow", "week", "weeks", "month", "months", "years", "regularly", "stay", "build", "improve", "focus", "goals", "goal", "habit", "habits", "daily", "spend",
+    "enough", "really", "simple", "little", "bigger", "bring", "email", "emails", "things", "thing", "again", "myself", "mine", "feel", "feeling", "life", "year", "least", "often", "much", "many", "some",
+    "need", "needs", "want", "wants", "make", "take", "check", "plan", "planning", "tasks", "task", "session", "sessions", "morning", "evening", "afternoon", "night", "while", "still", "also", "like",
+];
 
 fn tokens(s: &str) -> Vec<String> {
     s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(|w| w.to_string()).collect()
@@ -197,36 +204,38 @@ fn stem(w: &str) -> &str {
     w.strip_suffix('s').filter(|x| x.len() >= 4).unwrap_or(w)
 }
 
-/// (goal-side words, task-side words): a shared theme links a goal to a task. Words match with a
-/// short inflection only ("workout" does not match "work").
+/// (goal-side words, task-side words): a strong shared theme links a goal to a task. Words match with a
+/// short inflection only ("workout" does not match "work"). Generic words (read, work, learn, plan...) are not here.
 const THEMES: [(&[&str], &[&str]); 5] = [
-    (&["strong", "stronger", "strength", "bench", "squat", "deadlift", "lift", "fit", "fitter", "fitness", "gym", "muscle", "workout", "exercis", "health", "running", "marathon"],
-     &["gym", "push", "pull", "legs", "bench", "press", "squat", "deadlift", "lift", "workout", "walk", "run", "exercis", "stretch", "row", "curl", "session"]),
-    (&["study", "exam", "course", "learn", "degree", "certif", "revis"],
-     &["study", "revis", "course", "lecture", "read", "essay", "exam", "learn", "homework"]),
-    (&["work", "career", "promotion", "report", "project", "job", "admin", "inbox", "email", "reply"],
-     &["report", "stand", "project", "email", "reply", "submit", "meeting", "invoice", "inbox"]),
-    (&["routine", "organis", "organiz", "calm", "habit", "tidy", "chore", "loose", "ends"],
-     &["routine", "plan", "laundry", "bill", "tap", "grocer", "chore", "dentist", "clean", "tidy", "pay", "book"]),
-    (&["people", "family", "friend", "social", "mum", "visit", "relationship", "connect"],
-     &["call", "mum", "coffee", "alex", "dinner", "friend", "family", "visit", "lunch"]),
+    (&["strong", "stronger", "strength", "bench", "squat", "deadlift", "fitter", "fitness", "gym", "muscle", "workout", "exercis", "marathon", "running", "health"],
+     &["gym", "push", "pull", "legs", "bench", "squat", "deadlift", "workout", "walk", "run", "exercis", "stretch", "cardio", "swim"]),
+    (&["study", "exam", "course", "degree", "certif", "revis", "language", "fluent", "fluency"],
+     &["study", "revis", "course", "lecture", "essay", "exam", "homework", "lesson", "flashcard", "vocab", "tutor"]),
+    (&["career", "promotion", "report", "project", "inbox"],
+     &["report", "project", "submit", "meeting", "invoice", "inbox", "presentation"]),
+    (&["routine", "organis", "organiz", "tidy", "chore", "declutter", "clutter"],
+     &["routine", "laundry", "clean", "tidy", "chore", "declutter", "vacuum", "dishes"]),
+    (&["family", "friend", "friends", "social", "relationship", "connect"],
+     &["mum", "dad", "coffee", "dinner", "friend", "family", "visit", "lunch", "catch"]),
 ];
 
 fn word_match(w: &str, k: &str) -> bool {
     w.starts_with(k) && w.len() <= k.len() + 2
 }
 
-/// 0 = unrelated, 1 = shared theme, 2 = a meaningful word in common.
+/// 0 = unrelated, 1 = a strong shared theme, 2 = a meaningful word (5+ letters, not generic) in common.
 fn score(g: &Goal, text: &str) -> u8 {
     let gt = tokens(&format!("{} {}", g.title, g.why));
     let tt = tokens(text);
     for a in &gt {
-        if a.len() >= 5 && !STOP.contains(&a.as_str()) && tt.iter().any(|b| b.len() >= 5 && stem(a) == stem(b)) {
+        if a.len() >= 5 && !STOP.contains(&a.as_str()) && !STOP.contains(&stem(a)) && tt.iter().any(|b| b.len() >= 5 && stem(a) == stem(b)) {
             return 2;
         }
     }
+    // themes look at the goal's title only: the "why" is chatty and full of generic words
+    let title = tokens(&g.title);
     let has = |ws: &[String], keys: &[&str]| ws.iter().any(|w| keys.iter().any(|k| word_match(w, k)));
-    if THEMES.iter().any(|(gk, tk)| has(&gt, gk) && has(&tt, tk)) {
+    if THEMES.iter().any(|(gk, tk)| has(&title, gk) && has(&tt, tk)) {
         1
     } else {
         0

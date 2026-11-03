@@ -63,3 +63,28 @@ describe("cache back-compat", () => {
     expect(readEntry({ briefing: "  " })).toBeNull();
   });
 });
+
+import { eveningSections, morningSections, normalisePos } from "./morning-script";
+
+describe("spoken sections", () => {
+  const p: MorningParts = { greeting: "Morning!", weather_comment: "Cool.", affirmation: "Dentist first.", briefing: "P1 day.\n\nP2 order.\n\nP3 tomorrow.\n\nP4 close." };
+  it("morning: hello/weather/affirmation, the day, then tomorrow + closing", () => {
+    expect(morningSections(p, null, 2)).toEqual(["Morning!\n\nCool.\n\nDentist first.", "P1 day.\n\nP2 order.", "P3 tomorrow.\n\nP4 close."]);
+  });
+  it("news first joins section 1; news last sits before the closing in section 3; never in the middle", () => {
+    const first = morningSections(p, "NEWS", 0);
+    expect(first[0].endsWith("NEWS")).toBe(true);
+    expect(first[1]).toBe("P1 day.\n\nP2 order.");
+    const last = morningSections(p, "NEWS", 2);
+    expect(last[1]).toBe("P1 day.\n\nP2 order.");
+    expect(last[2]).toBe("P3 tomorrow.\n\nNEWS\n\nP4 close.");
+    expect(normalisePos(1)).toBe(2);
+  });
+  it("evening: look back, tomorrow, then news + cosy close", () => {
+    expect(eveningSections("A back.\n\nB tomorrow.\n\nC close.", "NEWS")).toEqual(["A back.", "B tomorrow.", "NEWS\n\nC close."]);
+    expect(eveningSections("A back.\n\nB tomorrow.\n\nC close.", null)).toHaveLength(3);
+  });
+  it("joined sections read as the same text as the screen shows", () => {
+    expect(morningSections(p, "NEWS", 2).join("\n\n")).toBe(["Morning!", "Cool.", "Dentist first.", "P1 day.", "P2 order.", "P3 tomorrow.", "NEWS", "P4 close."].join("\n\n"));
+  });
+});

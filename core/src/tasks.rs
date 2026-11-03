@@ -93,13 +93,13 @@ fn derive_part(time: &str) -> &'static str {
 const KEYWORDS: &[(&str, &[&str])] = &[
     ("Chores", &["laundry", "hoover", "vacuum", "clean", "cleaning", "dishes", "dishwasher", "bins", "bin", "tidy", "iron", "ironing", "wash", "mop", "dust", "sweep", "declutter", "fix", "repair", "tap"]),
     ("Exercise", &["gym", "run", "running", "jog", "walk", "yoga", "swim", "workout", "cycle", "cycling", "stretch", "push", "pull", "leg", "legs", "pilates", "hike", "exercise", "lift", "cardio"]),
-    ("Study", &["study", "revise", "revision", "essay", "read chapter", "chapter", "lecture", "homework", "exam", "assignment", "course", "coursework", "revising", "dissertation", "thesis"]),
-    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "email", "emails", "client", "deadline", "presentation", "shift", "project", "invoice", "sprint", "colleague", "boss"]),
+    ("Study", &["study", "studying", "revise", "revision", "essay", "read chapter", "chapter", "lecture", "homework", "exam", "assignment", "course", "coursework", "revising", "dissertation", "thesis", "read about", "research", "learn", "learning", "lesson", "lessons", "class", "tutorial", "flashcards", "vocab", "korean", "japanese", "chinese", "mandarin", "jlpt", "topik"]),
+    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "client", "deadline", "presentation", "shift", "project", "sprint", "colleague", "boss"]),
     ("Errands", &["shop", "shopping", "groceries", "grocery", "post office", "pick up", "collect", "buy", "return", "parcel", "pharmacy", "supermarket", "drop off"]),
     ("Appointments", &["dentist", "doctor", "gp", "appointment", "haircut", "vet", "optician", "checkup", "check-up", "physio", "hospital", "dermatologist"]),
-    ("Social", &["call", "mum", "dad", "friend", "friends", "party", "dinner with", "drinks", "birthday", "visit", "coffee with", "lunch with", "date night", "catch up", "brunch"]),
-    ("Self-care", &["rest", "nap", "bath", "skincare", "meditate", "meditation", "journal", "read", "relax", "therapy", "massage", "sleep", "breathe", "morning routine"]),
-    ("Admin & Money", &["bill", "bills", "pay", "bank", "tax", "budget", "form", "renew", "insurance", "rent", "council", "mortgage", "invoice", "passport", "visa", "savings", "subscription"]),
+    ("Social", &["call", "mum", "dad", "friend", "friends", "party", "dinner with", "drinks", "birthday", "visit", "coffee with", "lunch with", "date night", "catch up", "brunch", "book club", "text", "reply to"]),
+    ("Self-care", &["rest", "nap", "bath", "skincare", "meditate", "meditation", "journal", "read for fun", "read a novel", "read a book", "novel", "relax", "therapy", "massage", "sleep", "breathe", "morning routine"]),
+    ("Admin & Money", &["bill", "bills", "pay", "bank", "tax", "budget", "form", "renew", "insurance", "rent", "council", "mortgage", "invoice", "passport", "visa", "savings", "subscription", "inquiries", "inquiry", "enquiries", "enquiry", "email", "emails", "sign up", "signup", "register", "apply"]),
 ];
 
 fn words(s: &str) -> String {

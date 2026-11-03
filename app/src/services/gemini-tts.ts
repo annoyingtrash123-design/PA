@@ -7,7 +7,7 @@ import { kvDelete, kvGet, kvSet } from "./idb";
 
 /** Newest first; a model that 404s (or is gone) is skipped for the next one. Verify against ai.google.dev/gemini-api/docs/speech-generation. */
 export const TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"];
-/** A 2-3 minute script is slow to synthesise. */
+/** One chunk (about 1.5 minutes of speech) can still take a while to synthesise. */
 export const TTS_TIMEOUT_MS = 90_000;
 /** Far below the documented 8,192-token input limit; longer texts are cut at a sentence/paragraph boundary. */
 export const MAX_TTS_CHARS = 12_000;
@@ -58,6 +58,93 @@ export function clampText(text: string, max = MAX_TTS_CHARS): string {
   return (sent > max * 0.5 ? cut.slice(0, sent + 1) : cut).trim();
 }
 
+// ---------------- chunks ----------------
+// Gemini TTS drifts (the voice degrades, deepens, slurs) on long single recordings, so a script is read as several
+// clips of about 1.5 minutes each (about 220-260 words), split at section / paragraph boundaries and never mid-sentence.
+export const CHUNK_TARGET_WORDS = 240;
+export const CHUNK_SOFT_MAX_WORDS = 260;
+export const CHUNK_HARD_MAX_WORDS = 300;
+/** A section (a spoken part of a briefing) stays one clip unless it runs past about two minutes. */
+export const SECTION_MAX_WORDS = 300;
+
+const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+/** Sentences of a paragraph. An ellipsis ("…" or "...") and abbreviations ("U.S.", "Mr.") are not sentence ends. */
+export function splitSentences(text: string): string[] {
+  const t = text.replace(/\s+/g, " ").trim();
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c !== "." && c !== "!" && c !== "?") continue;
+    if (t[i + 1] === "." || t[i - 1] === ".") continue; // "..." or "U.S."
+    let j = i + 1;
+    while (j < t.length && /["'”’)]/.test(t[j])) j++;
+    if (j < t.length && t[j] !== " ") continue;
+    const word = t.slice(start, i).split(" ").pop() ?? "";
+    if (c === "." && (/^[A-Z]$/.test(word) || word.includes(".") || /^(Mr|Mrs|Ms|Dr|St|No|Jr|Sr)$/.test(word))) continue;
+    out.push(t.slice(start, j).trim());
+    start = j;
+  }
+  if (start < t.length) out.push(t.slice(start).trim());
+  return out.filter(Boolean);
+}
+
+/** Pieces of one over-long paragraph, each at most `max` words and ending at a sentence end. */
+function splitParagraph(p: string, max: number): string[] {
+  const pieces: string[] = [];
+  let cur: string[] = [];
+  let n = 0;
+  for (const s of splitSentences(p)) {
+    const w = wordCount(s);
+    if (cur.length && n + w > max) {
+      pieces.push(cur.join(" "));
+      cur = [];
+      n = 0;
+    }
+    cur.push(s);
+    n += w;
+  }
+  if (cur.length) pieces.push(cur.join(" "));
+  return pieces;
+}
+
+/** Split a script into chunks of about 1.5 minutes at paragraph boundaries (long paragraphs at sentence ends). */
+export function chunkScript(text: string): string[] {
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const units = paras.flatMap((p) => (wordCount(p) > CHUNK_SOFT_MAX_WORDS ? splitParagraph(p, CHUNK_SOFT_MAX_WORDS) : [p]));
+  const chunks: string[][] = [];
+  let cur: string[] = [];
+  let n = 0;
+  for (const u of units) {
+    const w = wordCount(u);
+    const fits = n + w <= CHUNK_SOFT_MAX_WORDS || (n < 180 && n + w <= CHUNK_HARD_MAX_WORDS);
+    if (cur.length && !fits) {
+      chunks.push(cur);
+      cur = [];
+      n = 0;
+    }
+    cur.push(u);
+    n += w;
+  }
+  if (cur.length) chunks.push(cur);
+  // a tiny last chunk joins the one before it
+  if (chunks.length > 1) {
+    const last = chunks[chunks.length - 1];
+    const prev = chunks[chunks.length - 2];
+    if (wordCount(last.join(" ")) < 80 && wordCount(prev.join(" ")) + wordCount(last.join(" ")) <= 340) {
+      prev.push(...last);
+      chunks.pop();
+    }
+  }
+  return chunks.map((c) => c.join("\n\n"));
+}
+
+/** Briefing sections are the clips (one each); a section over about two minutes is split further at paragraph/sentence ends. */
+export function chunkSections(sections: string[]): string[] {
+  return sections.map((s) => s.trim()).filter(Boolean).flatMap((s) => (wordCount(s) > SECTION_MAX_WORDS ? chunkScript(s) : [s]));
+}
+
 // ---------------- audio ----------------
 /** Sample rate from a mimeType like "audio/L16;codec=pcm;rate=24000" (default 24000). */
 export function parseSampleRate(mime: string | undefined | null): number {
@@ -106,7 +193,7 @@ export function audioBlobFrom(base64: string, mime: string | undefined): Blob {
 // ---------------- cache ----------------
 export const TTS_DB = "pa-tts-cache";
 export const INDEX_KEY = "__index";
-export const MAX_CLIPS = 10;
+export const MAX_CLIPS = 16;
 export const MAX_AGE_MS = 3 * 24 * 3600 * 1000;
 
 function fnv(s: string, seed: number): string {

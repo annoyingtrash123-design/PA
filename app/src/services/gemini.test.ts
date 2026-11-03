@@ -49,3 +49,22 @@ describe("voice choice", () => {
     expect(pickVoice([])).toBeNull();
   });
 });
+
+import { looksTruncated, parseMorningJson as pmj, salvageFields } from "./gemini";
+
+describe("tolerant briefing JSON (truncated replies)", () => {
+  const full = '{"greeting":"Morning, Sam!","weather_comment":"Cool.","affirmation":"Dentist first.","briefing":"Para one.\\n\\nPara two.","news":"From the ABC, the headline is: \\"Prices up 5%\\". So there';
+  it("keeps the complete fields of a reply cut off in the news and uses the briefing", () => {
+    expect(looksTruncated(full)).toBe(true);
+    const r = pmj(full);
+    expect(r).toMatchObject({ greeting: "Morning, Sam!", affirmation: "Dentist first.", briefing: "Para one.\n\nPara two.", news: null, salvaged: true });
+  });
+  it("handles fences, an unclosed fence, and missing parts", () => {
+    expect(pmj('```json\n{"briefing":"Hi there.","greeting":"Hello"}\n```')).toMatchObject({ briefing: "Hi there.", greeting: "Hello" });
+    expect(pmj('```json\n{"greeting":"Hello","briefing":"Done.","affirmation":"Go"')).toMatchObject({ briefing: "Done.", affirmation: "Go", salvaged: true });
+  });
+  it("needs a complete briefing field", () => {
+    expect(pmj('{"greeting":"Hello","briefing":"Cut off mid sen')).toBeNull();
+    expect(salvageFields('{"a":"x","b":null,"c":3,"d":"unfinished')).toEqual({ a: "x", b: null, c: 3 });
+  });
+});
