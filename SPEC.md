@@ -1,15 +1,15 @@
 # Personal Assistant App — Spec
 
 ## Stack
-- **Backend:** Rust (Axum) REST API, SQLite storage.
-- **Frontend:** Python (Flet), served as a web app; used on Android via Chrome "Add to home screen". APK later, optional.
-- **Hosting:** free/cheap cloud host, backend + frontend in one Docker deployment.
-- **AI:** Google Gemini API free tier, behind a swappable provider interface. Template-based fallback if the AI fails or there is no key.
-- **Voice:** edge-tts (free Microsoft neural voices, American English, e.g. "Jenny"/"Aria"), with Piper as an offline fallback.
-- **Weather:** Open-Meteo (free, no key). Location set in settings.
-- **Units:** kg.
-- **No notifications/reminders:** the app is opened manually; briefings play on demand.
-- **Single user:** no accounts. A single passcode (env `APP_PASSCODE`) protects the hosted app; the phone stays signed in after entering it once.
+- **Runs entirely on the phone:** installable web app (PWA) on GitHub Pages; no server.
+- **Logic:** Rust core compiled to WebAssembly. **UI:** TypeScript + Vite.
+- **Data:** stored in the browser (IndexedDB); backup/restore file in Settings.
+- **AI:** Google Gemini API free tier, called directly from the phone with the user's key (stored only on the device). Template fallback when there's no key or the AI is unavailable.
+- **Voice:** the phone's built-in text-to-speech (Web Speech API), voice selectable in Settings.
+- **Weather:** Open-Meteo (free, no key). **Public holidays:** Nager.Date (AU-NSW).
+- **Units:** kg. **Timezone:** Australia/Sydney (setting).
+- **No notifications/reminders:** the app is opened manually.
+- **Single user:** no accounts.
 
 ## Assistant
 - Tone: warm best friend: chatty and natural, like a real assistant. No raw stats or percentages; specific highlights tied to goals.

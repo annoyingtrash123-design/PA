@@ -1,6 +1,0 @@
-flet==0.28.3
-flet-web==0.28.3
-# flet-web 0.28.3 breaks with newer FastAPI (openapi_prefix removed)
-fastapi==0.115.14
-starlette<0.47
-httpx>=0.27

@@ -1,20 +1,24 @@
-# Personal Assistant
+# Sunny: Personal Assistant
 
-A personal assistant app: a daily briefing read aloud, a weekly task planner, and a gym tracker.
+An installable web app (PWA) that runs entirely on your phone: a spoken daily summary, a weekly task planner, goals, and a gym tracker.
 
-- `backend/`: Rust (Axum + SQLite) API. See `backend/README.md`.
-- `frontend/`: Python (Flet) web app. See `frontend/README.md`.
-- `SPEC.md`: what the app does. `docs/API.md`: the backend API.
+**Live app:** https://annoyingtrash123-design.github.io/PA/
 
-## Run locally
+- `core/`: all app logic in Rust (tasks, recurrence, gym rotation, briefing templates, AI prompts).
+- `wasm/`: the core compiled to WebAssembly for the browser.
+- `app/`: TypeScript + Vite UI, installable PWA. See `app/README.md`.
+- `.github/workflows/pages.yml`: tests, builds and publishes to GitHub Pages on every push.
+- `SPEC.md`: what the app does. `docs/WEB_ARCH.md`: how it fits together. `docs/API.md`: the core's API.
+
+No server: data is stored in the browser (IndexedDB) on your phone. Use Settings → Download backup to keep a copy.
+The Gemini API key (optional, free tier) is stored only on your device.
+
+## Develop
 
 ```
-# terminal 1
-cd backend && cargo run --release            # http://localhost:8080 (seeds demo data on first run)
-
-# terminal 2
-cd frontend && pip install -r requirements.txt && pip install edge-tts
-BACKEND_URL=http://localhost:8080 python main.py   # open http://localhost:8550
+cd app && npm ci
+npm run build:web   # wasm-pack build of the Rust core + vite build
+npm run dev         # http://localhost:5173
+npm test            # UI unit tests
+cargo test -p pa-core
 ```
-
-Optional: set your Gemini API key in the app's Settings (or `GEMINI_API_KEY` for the backend) for AI-written briefings; otherwise friendly template briefings are used.
