@@ -196,8 +196,8 @@ pub struct InterestsIn {
 
 pub fn put_interests(env: &mut Env, b: InterestsIn) -> Res<Memory> {
     let t = b.text.trim();
-    if t.chars().count() > 1000 {
-        return Err(ApiErr::bad("text must be at most 1000 characters"));
+    if t.chars().count() > 6000 {
+        return Err(ApiErr::bad("text must be at most 6000 characters"));
     }
     env.st.memory.interests = t.to_string();
     env.changed = true;
