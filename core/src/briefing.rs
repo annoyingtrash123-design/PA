@@ -8,6 +8,7 @@ use crate::goals;
 use crate::gym::{self, WorkoutPlan};
 use crate::leisure;
 use crate::memory;
+use crate::news;
 use crate::model::{Goal, Leisure, Memory, Weather};
 use crate::tasks::{self, DayInfo, Occurrence};
 use crate::util::*;
@@ -32,8 +33,8 @@ impl Kind {
     }
     fn max_words(self) -> usize {
         match self {
-            Kind::Morning => 450,
-            Kind::Evening => 250,
+            Kind::Morning => 520,
+            Kind::Evening => 400,
             Kind::Weekly => 300,
         }
     }
@@ -91,6 +92,8 @@ struct Ctx {
     tomorrow_info: DayInfo,
     /// timed tasks / appointments whose day passed (morning only), oldest first
     missed: Vec<Occurrence>,
+    /// morning / evening only: the news stories to cover (None = no news)
+    news: Option<news::Plan>,
 }
 
 fn count_done(items: &[Occurrence]) -> usize {
@@ -125,6 +128,7 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
         info: DayInfo::default(),
         tomorrow_info: DayInfo::default(),
         missed: vec![],
+        news: None,
     };
     match kind {
         Kind::Morning | Kind::Evening => {
@@ -218,6 +222,10 @@ fn build_ctx(env: &mut Env, kind: Kind, date: NaiveDate) -> Ctx {
             ctx.leisure_finished = leisure::finished_between(&env.st.leisure, monday, monday + Duration::days(6));
             ctx.week = Some(w);
         }
+    }
+    if kind != Kind::Weekly && date == env.today {
+        let busy = ctx.items.len();
+        ctx.news = news::plan(env.st, &env.ctx.news, &env.ctx.news_generated_at, kind, date, busy, None, false);
     }
     ctx
 }
@@ -410,11 +418,16 @@ fn assemble(pieces: Vec<Piece>, min: usize, max: usize) -> String {
             None => break,
         }
     }
-    pieces.iter().zip(&incl).filter(|(_, i)| **i).map(|(p, _)| p.text.as_str()).collect::<Vec<_>>().join(" ")
+    // a piece that is just a paragraph break joins its neighbours with a blank line
+    pieces.iter().zip(&incl).filter(|(_, i)| **i).map(|(p, _)| p.text.as_str()).collect::<Vec<_>>().join(" ").replace(" \n\n ", "\n\n")
 }
 
 fn must(v: &mut Vec<Piece>, s: String) {
     v.push(Piece { text: s, kind: PK::Core });
+}
+
+fn brk(v: &mut Vec<Piece>) {
+    v.push(Piece { text: "\n\n".into(), kind: PK::Core });
 }
 
 fn add(v: &mut Vec<Piece>, s: String, k: PK) {
@@ -432,12 +445,20 @@ pub struct MorningParts {
 impl MorningParts {
     /// All parts as one text, blank-line separated (the no-AI `template_text`).
     pub fn joined(&self) -> String {
-        let mut v: Vec<&str> = vec![self.greeting.as_str()];
+        self.joined_with_news(None)
+    }
+
+    /// Same, with the news segment inserted at its position (0 = before the briefing, else inside it).
+    pub fn joined_with_news(&self, news: Option<(&str, usize)>) -> String {
+        let mut v: Vec<String> = vec![self.greeting.clone()];
         if let Some(w) = self.weather_comment.as_deref().filter(|w| !w.is_empty()) {
-            v.push(w);
+            v.push(w.to_string());
         }
-        v.push(self.affirmation.as_str());
-        v.push(self.briefing.as_str());
+        v.push(self.affirmation.clone());
+        match news {
+            Some((n, pos)) => v.push(news::compose(&self.briefing, n, pos)),
+            None => v.push(self.briefing.clone()),
+        }
         v.retain(|p| !p.is_empty());
         v.join("\n\n")
     }
@@ -499,6 +520,7 @@ fn morning_template(c: &Ctx) -> String {
         back.push_str(&format!(" {} didn't quite happen, so it's moved across to today, with no pressure at all.", limited(rolled.clone(), 2)));
     }
     must(&mut v, back);
+    must(&mut v, care_line(Kind::Morning, c.info.work.is_some(), d));
     if !c.missed.is_empty() {
         let mut parts: Vec<String> = vec![];
         for o in c.missed.iter().take(2) {
@@ -516,7 +538,7 @@ fn morning_template(c: &Ctx) -> String {
     if c.items.is_empty() {
         must(&mut v, "Your list is wide open today, which means you get to decide what kind of day this is, and that sounds lovely.".into());
     } else {
-        must(&mut v, pick(&["So, what does today hold?", "Here's how today breaks down.", "Let's go through what's on your plate."], d, 7).to_string());
+        must(&mut v, pick(&["So, what does today hold?", "Anyway, here's how today is shaping up.", "Let's have a wander through what's on your plate."], d, 7).to_string());
         let mut cats: Vec<String> = CAT_ORDER.iter().map(|s| s.to_string()).collect();
         for o in &todo {
             let cn = group_name(o);
@@ -566,6 +588,8 @@ fn morning_template(c: &Ctx) -> String {
         add(&mut v, format!("Also, keep in mind that {dl}."), PK::Drop(3));
     }
 
+    brk(&mut v);
+
     // 4. suggested order
     let timed: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_some()).cloned().collect();
     let fixed: Vec<String> = timed.iter().filter(|o| !is_routine(o)).map(|o| item_phrase(o)).collect();
@@ -582,12 +606,12 @@ fn morning_template(c: &Ctx) -> String {
     let lunch_pick = c.info.work.as_ref().and_then(|_| quick.iter().find(|o| lunchable(o)).map(|o| o.title.clone()));
     match (big.first(), quick.len()) {
         (Some(b), q) if q >= 3 => must(&mut v, format!(
-            "For the rest, I'd clear the quick ones first, {}, to build some momentum, and then give {} your proper attention while the afternoon is still on your side.",
+            "Anyway, for the rest, I'd clear the quick ones first, {}, to build some momentum, and then give {} your proper attention while the afternoon is still on your side.",
             limited(titles(&quick, 3), 3),
             b.title
         )),
         (Some(b), _) => must(&mut v, format!(
-            "For the rest, I'd start with {} while you're fresh, because it's the one that could drag, and let the small things{} fill the gaps afterwards.",
+            "Anyway, for the rest, I'd start with {} while you're fresh, because it's the one that could drag, and let the small things{} fill the gaps afterwards.",
             b.title,
             if quick.is_empty() { String::new() } else { format!(", like {}", limited(titles(&quick, 2), 2)) }
         )),
@@ -608,7 +632,7 @@ fn morning_template(c: &Ctx) -> String {
     if let Some(w) = &c.info.work {
         let r = &c.memory.rhythm;
         let mut s = format!(
-            "With work from {} to {}, the window between waking up around {} and starting is good for the first small thing",
+            "Other than that, with work from {} to {}, the window between waking up around {} and starting is good for the first small thing",
             say_time(&w.start),
             say_time(&w.end),
             say_time(&r.wake_to)
@@ -628,6 +652,8 @@ fn morning_template(c: &Ctx) -> String {
         must(&mut v, "With no work block today, you can put the loose things wherever they fit best and keep a decent break in the middle.".into());
     }
 
+    brk(&mut v);
+
     // 5. tomorrow
     if let Some((twd, titems, tw)) = &c.tomorrow {
         let mut notable: Vec<&Occurrence> = titems.iter().filter(|o| cat_name(o) == "Appointments" || (o.time.is_some() && !is_routine(o))).collect();
@@ -635,10 +661,10 @@ fn morning_template(c: &Ctx) -> String {
             notable = titems.iter().filter(|o| !o.recurring).take(2).collect();
         }
         let mut s = if notable.is_empty() {
-            format!("Peeking at tomorrow, {twd}, it's looking nice and open so far.")
+            format!("Oh, and a little peek at tomorrow, {twd}, it's looking nice and open so far.")
         } else {
             let ph: Vec<String> = notable.iter().map(|o| item_phrase(o)).collect();
-            format!("Peeking at tomorrow, {twd}, you've got {}.", limited(ph, 3))
+            format!("Oh, and a little peek at tomorrow, {twd}, you've got {}.", limited(ph, 3))
         };
         if let Some(h) = &c.tomorrow_info.holiday {
             s.push_str(&format!(" It's also a public holiday, {h}, so there's no work."));
@@ -690,6 +716,8 @@ fn morning_template(c: &Ctx) -> String {
         must(&mut v, leisure::morning_sentence(l, d, c.leisure_open_day));
     }
 
+    brk(&mut v);
+
     // 6. grounded close
     must(&mut v, match daynote::key_task(&c.items) {
         Some(k) if !k.done => {
@@ -704,7 +732,51 @@ fn morning_template(c: &Ctx) -> String {
         None => "Nothing is waiting on you, so the day is yours to shape.".into(),
     });
     must(&mut v, pick(&["I'll be right here if the plan changes.", "Have a good one, and shout if you need me.", "Go get started, and I'll be here when you need me."], d, 17).into());
-    assemble(v, 275, 330)
+    assemble(v, 340, 400)
+}
+
+/// A small, optional everyday-care line (a complete spoken sentence), varied by date and fitted to the time of day and
+/// whether it is a work day. Never the same line two days running.
+fn care_line(kind: Kind, work_day: bool, d: NaiveDate) -> String {
+    let pool: Vec<&str> = match (kind, work_day) {
+        (Kind::Morning, true) => vec![
+            "Maybe put the kettle on and have a cup of tea before the day gets going.",
+            "A proper breakfast is worth it this morning, even if it's just some Weet-Bix or a bit of toast.",
+            "If you can, pop outside for a few minutes before work, just to wake up properly.",
+            "Have a glass of water first thing, too, it makes a surprising difference.",
+            "There's time for a cup of tea before work, so I'd take it.",
+        ],
+        (Kind::Morning, false) => vec![
+            "There's no rush this morning, so a slow cup of tea and some toast sounds just right.",
+            "Maybe put the kettle on and have a proper breakfast, like Weet-Bix or a bit of toast, before you do anything else.",
+            "A few minutes outside in the fresh air would be a nice way to start the day.",
+            "Have a glass of water first, and then let the morning unfold however it likes.",
+        ],
+        (_, true) => vec![
+            "After a day of sitting, a little stretch would probably feel lovely.",
+            "A cup of tea might be nice as you wind down.",
+            "An early night wouldn't hurt, either.",
+            "A glass of water before bed, and a few slow stretches, and you're all set.",
+        ],
+        (_, false) => vec![
+            "A cup of tea would go nicely with a quiet evening like this.",
+            "If you've been sitting for a while, a little stretch before bed would feel good.",
+            "An early night sounds like a lovely idea.",
+            "Maybe step outside for a minute for some fresh air before you settle in.",
+        ],
+    };
+    // different on consecutive days: step through the pool by the day number
+    let n = pool.len();
+    pool[(d.num_days_from_ce() as usize).wrapping_add(if kind == Kind::Morning { 0 } else { 2 }) % n].to_string()
+}
+
+/// Today's pick of care touches for the model (varied by date).
+fn care_ideas(c: &Ctx) -> String {
+    let w = c.info.work.is_some();
+    let a = care_line(c.kind, w, c.date);
+    let b = care_line(c.kind, w, c.date + Duration::days(1));
+    let c2 = care_line(c.kind, w, c.date + Duration::days(2));
+    format!("{a} / {b} / {c2}")
 }
 
 fn lower_first(s: &str) -> String {
@@ -721,7 +793,13 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
     let a = &c.assistant;
     let mut parts: Vec<String> = vec![];
     match c.kind {
-        Kind::Morning => parts.push(morning_parts(c, weather).joined()),
+        Kind::Morning => {
+            let mp = morning_parts(c, weather);
+            parts.push(match &c.news {
+                Some(p) => mp.joined_with_news(Some((&news::template_text(&p.items, c.kind, c.date, p.position), p.position))),
+                None => mp.joined(),
+            })
+        }
         Kind::Evening => {
             parts.push(match d.num_days_from_ce() as usize % 3 {
                 0 => format!("Hey{n}, it's {a}. Let's wind the day down together."),
@@ -774,6 +852,8 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                     _ => format!("That's one more step toward {gr}, thanks to {what}."),
                 });
             }
+            parts.push(care_line(Kind::Evening, c.tomorrow_info.work.is_some() || c.info.work.is_some(), d));
+            parts.push("\n\n".into());
             if let Some((wd, items, w)) = &c.tomorrow {
                 let mut s = if items.is_empty() {
                     format!("Tomorrow is {wd}, and it's looking nice and open.")
@@ -811,6 +891,11 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 },
                 None => "There's nothing else that needs your attention tonight.".into(),
             });
+            parts.push("\n\n".into());
+            if let Some(p) = &c.news {
+                parts.push(news::template_text(&p.items, c.kind, d, p.position));
+                parts.push("\n\n".into());
+            }
             parts.push(format!(
                 "{} {}",
                 pick(&["Start winding down soon so you're asleep in good time.", "Dim the lights and ease off the screens soon, so sleep comes easily.", "Maybe get ready for bed a little early, so you're properly rested."], d, 29),
@@ -926,12 +1011,15 @@ fn template_text(c: &Ctx, weather: &Option<Weather>) -> String {
             });
         }
     }
-    parts.join(" ")
+    parts.join(" ").replace(" \n\n ", "\n\n")
 }
 
 // ------------------------------------------------------------------ prompts
 
 const TONE: &str = "TONE: you are a warm, chatty best friend who is also a really good personal assistant and genuinely knows this person. Sound natural and human, with contractions and a bit of personality, never like a report. \
+Be relaxed and conversational, like a friend chatting over breakfast: gently meandering is fine ('Anyway,', 'Other than that,', 'Oh, and'), it does not have to be a tight checklist, and it should always feel warm and unhurried. \
+CARE TOUCHES: where they fit the time of day and the plans, weave in small, optional everyday care touches naturally, such as putting the kettle on for a cup of tea, a proper breakfast (Weet-Bix or toast), a glass of water, a few minutes outside, a stretch after sitting for a while, or an early night. At most two or three per summary, different ones on different days, never bossy, never a list, never the same ones every day, and only the ones that genuinely suit this day (a stretch or an early night belong to the evening; breakfast and tea to the morning). \
+The listener is well-read and knows history and politics well: never over-explain or define basics or give potted histories; be straightforward and substantive, with a sharp bit of context only when it adds something. \
 NEVER read out raw counts, fractions, percentages or tallies: no '0 of 24 tasks', no 'six tasks', no '50 percent', no lists of numbers. Small natural quantities like 'a couple of things' or 'a few' are fine, but prefer naming the specific things (task titles, workout names, exercises) that were done or are coming up. \
 Be kind and low-key about quiet days or weeks: no guilt, no stats, no pressure. \
 GOALS: when active goals are given, connect specific completed or planned tasks and gym sessions to a goal, but ONLY where they plausibly relate (never force a link, and it is fine to mention no goal at all). Mention an approaching goal deadline naturally when it is relevant and fairly close, saying it like a person would ('that's a few weeks away now'), not as a date dump.";
@@ -939,25 +1027,28 @@ GOALS: when active goals are given, connect specific completed or planned tasks 
 fn system_prompt(c: &Ctx) -> String {
     let words = match c.kind {
         Kind::Weekly => "between 200 and 300 words",
-        Kind::Morning => "between 290 and 400 words for the briefing part alone (the four parts together are a 2 to 3 minute read-aloud; do not stop short)",
-        Kind::Evening => "between 150 and 250 words",
+        Kind::Morning if c.news.is_some() => "between 330 and 430 words for the briefing part alone (the four parts together, with the separate news field, come to roughly 600 to 750 words, a 4 to 5 minute read-aloud; do not stop short)",
+        Kind::Morning => "between 330 and 430 words for the briefing part alone (the four parts together are a 3 to 4 minute read-aloud; do not stop short)",
+        Kind::Evening if c.news.is_some() => "at least 280 words for the wind-down part alone (a soft floor, it can run longer if there is more to say, up to about 500; with the separate news field the whole thing comes to at least 450 words, a 3 to 4 minute read-aloud)",
+        Kind::Evening => "between 250 and 450 words, a soft floor rather than a cap",
     };
     let focus = match c.kind {
-        Kind::Morning => "This is the MORNING briefing, which you write as FOUR separate spoken parts that are read aloud in this order: greeting, weather_comment, affirmation, briefing. Together they run 2 to 3 minutes.\n\
+        Kind::Morning => "This is the MORNING briefing, which you write as FOUR separate spoken parts that are read aloud in this order: greeting, weather_comment, affirmation, briefing. Together they run several relaxed minutes.\n\
 PART greeting: one short spoken hello with the weekday and date feel (for example 'Morning! I hope you have a lovely Tuesday.'), using the person's name if given. One or two short sentences at most, no weather, no plans.\n\
 PART weather_comment: 1 to 2 sentences interpreting the forecast, with tone and advice quietly shaped by the person's weather preferences (happy about cool days, a gentle heads-up and practical tips when hot, sun cream when UV is high and they avoid sunburn, cosy about cool rain if they like it) but NEVER stating or explaining those preferences, and tied to the day's plans rather than just read out. Temperatures as degrees, never a rain percentage. null if no weather is given.\n\
 PART affirmation: 1 or 2 sentences, at most 40 words, grounded and SPECIFIC to today's actual plan: name a real task, appointment or workout, or the shape of the day (where the busy stretch is, where there is slack or a breather). Practical and encouraging, not soppy. Never state or narrate the person's preferences. If a goal plausibly relates to a task today you may tie them together in a few words, never forced. Never use clichés or generic affirmations like 'you\'ve got this', 'believe in yourself', 'one step at a time' or 'you are enough'. No raw counts.\n\
-PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT any weather (those are spoken first, so do not repeat them), flowing naturally with no headings: if the context says 'On this day: yes', start the briefing with ONE short spoken sentence about a well-known historical anniversary of today's calendar date that connects to the person's interests (use the interests text quietly), but ONLY if you are certain of both the date and the fact; if you are not completely certain, or the context says 'On this day: no', omit it entirely and never mention that you are omitting it. Then mention a public holiday or day off warmly if it is one (no work today); (1) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (2) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (3) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch break only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop; the lunch window is private background, so suggest such a thing only softly and optionally, in words like 'if you get a moment in the middle of the day, X would fit nicely', never stating the lunch times and never as an order like 'do X at lunch', and keep the evening finishing comfortably before bedtime); (4) a peek at tomorrow's notable things and appointments; (5) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Do not repeat the affirmation. Never use generic affirmations or cliches like 'you\'ve got this'.",
-        Kind::Evening => "This is the EVENING wind-down. Kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates, give a gentle look at tomorrow, mention whether tomorrow is a work day, a public holiday or a day off, gently nudge toward winding down in time for sleep, and end with one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. No generic affirmations or cliches.",
+PART briefing: the rest of the morning summary, WITHOUT any greeting and WITHOUT any weather (those are spoken first, so do not repeat them), flowing naturally with no headings: if the context says 'On this day: yes', start the briefing with ONE short spoken sentence about a well-known historical anniversary of today's calendar date that connects to the person's interests (use the interests text quietly), but ONLY if you are certain of both the date and the fact; if you are not completely certain, or the context says 'On this day: no', omit it entirely and never mention that you are omitting it. Write the briefing as FOUR short paragraphs separated by a blank line: first the look back and today broken down by theme, then the suggested order for the day, then tomorrow, then a one or two sentence closing line. Then mention a public holiday or day off warmly if it is one (no work today); (1) a quick, kind look back at yesterday: name what got done and what rolled over, no counts, no guilt; (2) today broken down by category or theme using the category given for each item (e.g. 'on the life admin front you've got X and Y', work, chores, errands, study, exercise and the gym with goal tie-ins, social plans, appointments with their times), naming specific things; routines and planning habits count as looking after yourself, not as work; (3) a suggested order for the day: decide whether to do the quick small tasks first to build momentum or the big one first while fresh, say which and why (use the size hints), respect fixed-time items and the work block (work hours are fixed and not a task; use the window between waking and the start of work for early things, the flexible lunch break only for short things that fit about an hour and plausibly sit near work like quick calls, bills, booking appointments or a quick shop; the lunch window is private background, so suggest such a thing only softly and optionally, in words like 'if you get a moment in the middle of the day, X would fit nicely', never stating the lunch times and never as an order like 'do X at lunch', and keep the evening finishing comfortably before bedtime); (4) a peek at tomorrow's notable things and appointments; (5) a grounded, specific closing line naming the suggested key task (a meaningful appointment or meeting, never a routine). Do not repeat the affirmation. Never use generic affirmations or cliches like 'you\'ve got this'.",
+        Kind::Evening => "This is the EVENING wind-down, a relaxed, unhurried chat that winds the person down. Write it as three paragraphs separated by a blank line. First, a relaxed look back at what happened today: kindly say what got done by naming it (celebrate it, never guilt), mention what is left and that unfinished one-off tasks roll over to tomorrow, mention whether the gym happened, link what was done to a goal where it plausibly relates. Second, a gentle preview of tomorrow that alludes to what is coming and what it might bring, not a checklist: mention notable things such as appointments, the gym, and whether it looks busy or open, and whether it is a work day, a public holiday or a day off. Third, a short closing paragraph: gently nudge toward winding down in time for sleep, then one grounded, specific closing line (such as what comes first tomorrow) and a calm goodnight. If a news segment is requested below it is spoken between the second and third paragraph, so do not mention the news in your paragraphs. No generic affirmations or cliches.",
         Kind::Weekly => "This is the WEEKLY overview, read on Sunday. Open warmly. Pick two or three specific highlights that were actually done (task titles, gym sessions by name, and any exercise progressions) and connect them to the goals where they plausibly relate. Gently mention anything that slid, without guilt. Look ahead to the notable things next week and to any goal deadline coming up. Close with one short grounded line. If nothing much was done, be kind and low-key, give no stats, and focus on the week ahead and the goals. Do not list every task and never quote totals. No generic affirmations or cliches.",
     };
     format!(
         "You are {a}, the user's personal assistant and friend. You are writing a script that will be read aloud by a text-to-speech voice, so write exactly how a chatty, caring friend would talk.\n\
          {spoken}\nRules: plain spoken sentences only. No markdown, no asterisks, no headings, no bullet points, no numbered lists, no emojis, no stage directions, no quotation marks around the whole text. \
          Say times naturally, like 'at seven thirty in the morning' or 'at 3 PM'. Say 'kilos' instead of 'kg'. Weather temperatures are in Celsius and should be said as degrees. \
-         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{TONE}\n{focus}",
+         Only use facts from the context; never invent tasks, numbers or weather. Keep it {words}. Output only the script.\n{TONE}\n{focus}{news}",
         a = c.assistant,
-        spoken = spoken_rule!()
+        spoken = spoken_rule!(),
+        news = c.news.as_ref().map(|p| format!("\n{}", news::instructions(c.kind, p.position, p.items.len()))).unwrap_or_default()
     )
 }
 
@@ -1064,6 +1155,12 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
     }
     s.push_str(&goals::context_block(&c.goals, &c.goals_achieved, c.date));
     if c.kind != Kind::Weekly {
+        s.push_str(&format!("Care touch ideas that suit today, pick at most two or three, or fewer, only if they fit naturally: {}\n", care_ideas(c)));
+    }
+    if let Some(p) = &c.news {
+        s.push_str(&news::user_block(&p.items));
+    }
+    if c.kind != Kind::Weekly {
         s.push_str(&leisure::context_block(&c.leisure, &c.leisure_pick, c.leisure_room));
     } else {
         s.push_str(&leisure::finished_context(&c.leisure_finished));
@@ -1136,7 +1233,7 @@ fn plan_fingerprint(ctx: &Ctx) -> String {
 
 /// `GET /api/briefing?kind=&date=`
 pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
-    let ctx = build_ctx(env, kind, date);
+    let mut ctx = build_ctx(env, kind, date);
     // the suggestion counts as "made" once today's summary is prepared: remember it for the 5-day rotation
     if kind != Kind::Weekly && date == env.today {
         if let Some(l) = &ctx.leisure_pick {
@@ -1150,6 +1247,17 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     // The morning briefing is a plan for the day: ticking things off must not change its cache key.
     let hash = if kind == Kind::Morning { fnv(&format!("{system}\n{}", plan_only(&user))) } else { fnv(&format!("{system}\n{user}")) };
     let text = template_text(&ctx, &weather);
+    // the same text without the news (the app inserts the news itself, at the same position)
+    let template_body = if ctx.news.is_some() {
+        let mut plain = ctx;
+        let saved = plain.news.take();
+        let t = template_text(&plain, &weather);
+        plain.news = saved;
+        ctx = plain;
+        t
+    } else {
+        text.clone()
+    };
     let template_parts = (kind == Kind::Morning).then(|| {
         let p = morning_parts(&ctx, &weather);
         json!({"greeting": p.greeting, "weather_comment": p.weather_comment, "affirmation": p.affirmation, "briefing": p.briefing})
@@ -1169,12 +1277,14 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
         "stats": stats,
         "affirmation": affirmation,
         "template_text": text,
+        "template_body": template_body,
         "template_parts": template_parts,
+        "news": ctx.news.as_ref().map(|p| news::prep_json(p, kind, date, &env.ctx.news_generated_at, &ctx.assistant, "")),
         "cache_key": format!("briefing:{}:{ds}:{hash}", kind.name()),
         "plan_fingerprint": plan_fingerprint(&ctx),
         "system_prompt": system,
         "user_prompt": user,
-        "max_words": kind.max_words(),
+        "max_words": kind.max_words() + if ctx.news.is_some() { 350 } else { 0 },
     }))
 }
 

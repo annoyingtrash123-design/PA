@@ -41,6 +41,8 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         navigateFallback: `${base}index.html`,
+        // news.json is refreshed twice a day by a scheduled workflow: never precached, never served as the app shell
+        navigateFallbackDenylist: [/news\.json$/],
       },
     }),
   ],

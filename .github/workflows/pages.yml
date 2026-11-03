@@ -6,6 +6,13 @@ on:
   push:
     paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
+  # Refresh the news twice a day (the feeds can't be read from the browser, so news.json is built here and published with the site).
+  # UTC crons for about 05:45 and 16:45 Sydney time while it is AEDT (UTC+11, Oct-Apr): 18:45 and 05:45 UTC.
+  # During AEST (UTC+10, Apr-Oct) they land an hour earlier (04:45 and 15:45 Sydney), which is fine.
+  # Scheduled runs only ever run on the default branch (main), so the deploy condition below passes for them.
+  schedule:
+    - cron: "45 18 * * *"
+    - cron: "45 5 * * *"
 
 permissions:
   contents: read
@@ -41,6 +48,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: News script tests
+        run: node --test scripts/news/fetch-news.test.mjs
+      - name: Fetch news (free RSS feeds; a failing feed is skipped, and the build goes on without news if all fail)
+        continue-on-error: true
+        run: node scripts/news/fetch-news.mjs --out app/public/news.json
+      - name: Make sure news.json exists
+        run: |
+          mkdir -p app/public
+          test -s app/public/news.json || echo "{\"generated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"items\":[]}" > app/public/news.json
       - name: Build
         working-directory: app
         env:
@@ -54,6 +70,7 @@ jobs:
 
   deploy:
     needs: build
+    # push, manual and scheduled runs on main deploy (scheduled runs always run on the default branch)
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     environment:

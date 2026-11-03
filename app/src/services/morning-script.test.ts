@@ -18,10 +18,10 @@ describe("morningScript", () => {
 describe("parseMorningJson (four parts)", () => {
   it("parses all four", () => {
     const r = parseMorningJson('{"greeting":"Morning! Happy Tuesday.","weather_comment":"Cool.","affirmation":"Dentist first.","briefing":"Yesterday was **good**."}');
-    expect(r).toEqual({ greeting: "Morning! Happy Tuesday.", weather_comment: "Cool.", affirmation: "Dentist first.", briefing: "Yesterday was good." });
+    expect(r).toEqual({ greeting: "Morning! Happy Tuesday.", weather_comment: "Cool.", affirmation: "Dentist first.", briefing: "Yesterday was good.", news: null });
   });
   it("is tolerant of fences and chatter, and missing fields come back null", () => {
-    expect(parseMorningJson('```json\n{"briefing":"Hi.","weather_comment":null}\n```')).toEqual({ greeting: null, weather_comment: null, affirmation: null, briefing: "Hi." });
+    expect(parseMorningJson('```json\n{"briefing":"Hi.","weather_comment":null}\n```')).toEqual({ greeting: null, weather_comment: null, affirmation: null, briefing: "Hi.", news: null });
     expect(parseMorningJson('Sure! {"affirmation":"A","briefing":"B"} done')).toMatchObject({ affirmation: "A", briefing: "B" });
   });
   it("needs a briefing", () => {

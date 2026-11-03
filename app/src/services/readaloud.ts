@@ -6,7 +6,7 @@ import { hasKey } from "./cache";
 import { budgetDate } from "./gemini";
 import { PREVIEW_TEXT, pcmToWav, planVoice, restingReason, synthesize } from "./gemini-tts";
 import * as phone from "./speech";
-import { getGeminiVoice, getStyle, getVoiceType } from "./voice-prefs";
+import { getGeminiVoice, getSpeed, getStyle, getVoiceType } from "./voice-prefs";
 
 export type PlayState = "idle" | "loading" | "playing" | "paused";
 export interface Progress {
@@ -53,6 +53,18 @@ export const formatClock = (sec: number): string => {
   const s = Math.max(0, Math.floor(Number.isFinite(sec) ? sec : 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
+
+/** Playback speed without changing pitch; needs no new synthesis. */
+function applySpeed(el: HTMLAudioElement) {
+  const a = el as HTMLAudioElement & { webkitPreservesPitch?: boolean };
+  a.preservesPitch = true;
+  a.webkitPreservesPitch = true;
+  a.playbackRate = getSpeed();
+}
+/** Settings slider moved: apply to whatever is playing right now. */
+export function refreshSpeed(): void {
+  if (audio) applySpeed(audio);
+}
 
 function release() {
   if (audio) {
@@ -107,6 +119,7 @@ function startPlayback(blob: Blob, el: HTMLAudioElement, id: number): Promise<vo
       if (id === runId) reject(new Error("The audio couldn't be played"));
     };
     el.src = url;
+    applySpeed(el);
     el.play().then(() => resolve(), reject);
   });
 }
@@ -117,6 +130,7 @@ function openAudio(): HTMLAudioElement {
   el.preload = "auto";
   el.src = silentClip();
   void el.play().catch(() => {});
+  applySpeed(el);
   audio = el;
   return el;
 }

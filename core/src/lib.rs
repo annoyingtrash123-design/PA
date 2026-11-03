@@ -21,6 +21,7 @@ pub mod holidays;
 pub mod leisure;
 pub mod memory;
 pub mod model;
+pub mod news;
 pub mod router;
 pub mod seed;
 pub mod tasks;

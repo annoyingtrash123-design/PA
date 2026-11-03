@@ -224,6 +224,9 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
             let date = date_param(env, q, "date")?;
             daynote::day_note(env, date)
         }
+        // news: pick stories for a briefing / remember which ones a briefing used
+        ("POST", ["news", "select"]) => news_select(env, body),
+        ("POST", ["news", "record"]) => news_record(env, body),
         // helpers
         ("POST", ["holidays", "filter"]) => {
             let region = body["region"].as_str().unwrap_or("").trim().to_string();
@@ -298,4 +301,41 @@ pub fn call_typed(state: &str, method: &str, path: &str, body: &str, ctx: &str) 
         }
         Err(e) => err_response(e),
     }
+}
+
+fn news_items(v: &Value) -> Vec<crate::model::NewsItem> {
+    serde_json::from_value(v.clone()).unwrap_or_default()
+}
+
+/// `POST /api/news/select {items?, kind, date?, morning_generated_at?, refresh?}`: the stories, sources, template text and prompts.
+fn news_select(env: &mut Env, body: &Value) -> Res<Value> {
+    let kind = briefing::parse_kind(body["kind"].as_str())?;
+    let date = match body["date"].as_str() {
+        Some(d) => parse_date(d).ok_or_else(|| ApiErr::bad("date must be YYYY-MM-DD"))?,
+        None => env.today,
+    };
+    let items = if body["items"].is_array() { news_items(&body["items"]) } else { env.ctx.news.clone() };
+    let generated = body["generated_at"].as_str().map(String::from).unwrap_or_else(|| env.ctx.news_generated_at.clone());
+    let busy = body["busy"].as_u64().unwrap_or(0) as usize;
+    let plan = crate::news::plan(env.st, &items, &generated, kind, date, busy, body["morning_generated_at"].as_str(), body["refresh"].as_bool().unwrap_or(false));
+    Ok(match plan {
+        Some(p) => crate::news::prep_json(&p, kind, date, &generated, &env.st.settings.assistant_name, ""),
+        None => Value::Null,
+    })
+}
+
+/// `POST /api/news/record {kind, date, items, generated_at?}`: the briefing used these stories (never repeated for ~48 hours).
+fn news_record(env: &mut Env, body: &Value) -> Res<Value> {
+    let kind = briefing::parse_kind(body["kind"].as_str())?;
+    let date = match body["date"].as_str() {
+        Some(d) => parse_date(d).ok_or_else(|| ApiErr::bad("date must be YYYY-MM-DD"))?,
+        None => env.today,
+    };
+    let items = news_items(&body["items"]);
+    if items.is_empty() {
+        return Err(ApiErr::bad("items must be a non-empty list"));
+    }
+    crate::news::record(env.st, kind, date, items, body["generated_at"].as_str());
+    env.changed = true;
+    Ok(json!({"ok": true}))
 }

@@ -337,6 +337,10 @@ pub struct State {
     pub leisure: Vec<Leisure>,
     pub memory: Memory,
     pub gym: Gym,
+    /// "<date>" -> ISO time the morning text was written (evening news only covers stories published after it)
+    pub news_morning_cutoff: BTreeMap<String, String>,
+    /// "<date>|morning" / "<date>|evening" (and "...|prev" for replaced sets) -> the stories that briefing covered
+    pub news_used: BTreeMap<String, Vec<NewsItem>>,
 }
 
 impl Default for State {
@@ -356,6 +360,8 @@ impl Default for State {
             leisure: vec![],
             memory: Memory::default(),
             gym: Gym::default(),
+            news_morning_cutoff: BTreeMap::new(),
+            news_used: BTreeMap::new(),
         }
     }
 }
@@ -424,4 +430,24 @@ pub struct Ctx {
     pub has_key: bool,
     pub weather: HashMap<String, Weather>,
     pub holidays: Vec<Holiday>,
+    /// the compact news list from news.json (only sent with briefing calls)
+    pub news: Vec<NewsItem>,
+    /// `generated_at` of that news.json (ISO)
+    pub news_generated_at: String,
+}
+
+/// One headline from news.json: only title + the feed's lead paragraph.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct NewsItem {
+    pub id: String,
+    pub source: String,
+    pub title: String,
+    /// the story's lead / standfirst (plain text)
+    pub summary: String,
+    pub link: String,
+    /// ISO time
+    pub published: String,
+    /// australia | world | east-asia | science-tech
+    pub topics: Vec<String>,
 }

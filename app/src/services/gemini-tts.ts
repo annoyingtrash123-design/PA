@@ -44,7 +44,8 @@ export const DEFAULT_STYLE = "warm";
 
 export function buildPrompt(text: string, styleId: string): string {
   const s = STYLES.find((x) => x.id === styleId) ?? STYLES[0];
-  return `${s.instruction}: ${text.trim()}`;
+  // constant wording (cached audio is keyed by the style id, not the speed: the speed is applied with playbackRate only)
+  return `${s.instruction}, at a relaxed, unhurried pace: ${text.trim()}`;
 }
 
 /** Cut over-long text at the last paragraph (else sentence) boundary before the limit. */

@@ -5,6 +5,7 @@ import { setupInstall } from "./install";
 import { refreshHolidays } from "./services/holidays";
 import { stop as stopSpeech } from "./services/speech";
 import { refreshWeather } from "./services/weather";
+import { loadNews } from "./services/news";
 import { clear, h, loading } from "./ui";
 import { setupUpdates } from "./updates";
 import { renderGoals } from "./views/goals";
@@ -97,6 +98,7 @@ async function start() {
   route();
   void refreshWeather();
   void refreshHolidays();
+  void loadNews();
 }
 
 void start();

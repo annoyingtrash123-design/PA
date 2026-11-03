@@ -53,13 +53,20 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 
 /** Parse the morning reply {"greeting","weather_comment","affirmation","briefing"}. Tolerant: any field may be missing
  *  (callers fall back to the template part); null only if there is no usable briefing. */
-export function parseMorningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null; briefing: string } | null {
+export function parseMorningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null; briefing: string; news: string | null } | null {
   const o = parseJsonObject(raw);
   if (!o) return null;
   const get = (k: string) => (typeof o[k] === "string" ? cleanReply(o[k] as string) : "") || null;
   const briefing = get("briefing");
   if (!briefing) return null;
-  return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing };
+  return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing, news: get("news") };
+}
+
+/** Parse a news-only reply {"news": string}. Tolerant of fences and chatter; null when there is no usable news. */
+export function parseNewsJson(raw: string): string | null {
+  const o = parseJsonObject(raw);
+  const n = o && typeof o.news === "string" ? cleanReply(o.news) : "";
+  return n || null;
 }
 
 /** Parse the digest reply: JSON, possibly fenced or with chatter around it. Returns null if unusable. */

@@ -51,6 +51,7 @@ pub fn context_block(m: &Memory) -> String {
     if !m.interests.trim().is_empty() {
         s.push_str(&format!("  - Interests (things they love or want to learn about; private background, never recite the list, only let it quietly shape suggestions and recommendations. Only suggest specific works, films, books, shows, music, games or places that are on their leisure list; never introduce new titles of your own, and never volunteer content in Chinese, Korean or Japanese unless it is on that list): {}\n", m.interests.trim()));
     }
+    s.push_str("  - Well-read: knows history and politics well. Never over-explain or define basics, no potted history lessons; be straightforward and substantive about what happened and why it matters, adding a sharp bit of context only when it genuinely adds something. Delivery stays relaxed and chatty.\n");
     for n in &m.notes {
         s.push_str(&format!("  - Note: {}\n", n.text));
     }

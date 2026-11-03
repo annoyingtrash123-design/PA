@@ -67,7 +67,7 @@ describe("pruneIndex", () => {
 
 describe("prompt and text", () => {
   it("prefixes the style instruction", () => {
-    expect(buildPrompt(" Hi ", "warm")).toBe("Say warmly and chattily, like a caring friend talking to you over coffee: Hi");
+    expect(buildPrompt(" Hi ", "warm")).toBe("Say warmly and chattily, like a caring friend talking to you over coffee, at a relaxed, unhurried pace: Hi");
     expect(buildPrompt("Hi", "nope")).toContain("warmly");
   });
   it("clamps at a paragraph boundary", () => {

@@ -7,6 +7,7 @@ export interface VoicePrefs {
   type?: VoiceType;
   voice?: string;
   style?: string;
+  speed?: number;
 }
 export const VOICE_PREFS_KEY = "pa-voice-prefs";
 
@@ -37,3 +38,15 @@ export const getStyle = (): string => {
   const s = readPrefs().style;
   return s && STYLES.some((x) => x.id === s) ? s : DEFAULT_STYLE;
 };
+
+export const SPEED_MIN = 0.7;
+export const SPEED_MAX = 1.15;
+export const SPEED_STEP = 0.05;
+export const DEFAULT_SPEED = 0.88;
+/** Clamp to the slider range; anything that isn't a number gives the default (0.88 is deliberately off the slider's grid). */
+export const clampSpeed = (v: unknown): number => {
+  const n = typeof v === "number" ? v : Number.NaN;
+  if (!Number.isFinite(n)) return DEFAULT_SPEED;
+  return Math.round(Math.min(SPEED_MAX, Math.max(SPEED_MIN, n)) * 100) / 100;
+};
+export const getSpeed = (): number => clampSpeed(readPrefs().speed);

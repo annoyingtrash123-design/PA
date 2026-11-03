@@ -1,6 +1,7 @@
 import { assistantName, getState, now, today } from "../core";
 import type { BriefingResult } from "../services/ai-text";
-import { affirmationFor, aiNotice, getBriefing, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
+import { affirmationFor, aiNotice, getBriefing, refreshNews, templateBriefing, templateDigest, type Digest, type NewsView } from "../services/ai-text";
+import { sourcesLine } from "../services/news";
 import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
@@ -45,7 +46,25 @@ export function renderHome(root: HTMLElement): () => void {
     clear(affHolder, card("affirmation", h("div", { class: "aff-head" }, icon("leaf", 18), h("span", { class: "label-caps" }, "For today")), h("p", { class: "aff-text" }, text)));
   };
 
-  const drawDay = (text: string | null | undefined, greetingLine: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null) => {
+  /** The news segment inside the "Your day" card: a small muted label, the text, then sources + updated time. */
+  const newsBlock = (n: NewsView, date: string): HTMLElement => {
+    const meta = [sourcesLine(n.sources), n.updated ? `Updated ${n.updated}` : ""].filter(Boolean).join(" · ");
+    let btn: HTMLElement | null = null;
+    btn = n.canRefresh
+      ? button("Get the latest news", () => {
+          btn?.setAttribute("disabled", "true");
+          void (async () => {
+            const r = await refreshNews(kind!, date).catch(() => ({ done: false, notice: "Couldn't get the news just now." }));
+            if (r.notice) toast(r.notice);
+            if (r.done) void load();
+            else btn?.removeAttribute("disabled");
+          })();
+        }, { kind: "text", cls: "small" })
+      : null;
+    return h("div", { class: "news-block stack", style: { gap: "8px" } }, h("p", { class: "label-caps muted" }, "In the news"), ...paragraphs(n.text).map((p) => h("p", null, p)), meta ? h("p", { class: "muted small" }, meta) : null, btn);
+  };
+
+  const drawDay = (text: string | null | undefined, greetingLine: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null, b?: BriefingResult, date?: string) => {
     if (busy) {
       clear(playHolder, readAloud(() => "", () => getState().settings.voice, "Read it to me", true));
       return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
@@ -59,7 +78,9 @@ export function renderHome(root: HTMLElement): () => void {
         h("div", { class: "summary-head" }, icon(kind === "morning" ? "sun" : "moon", 20), h("span", { class: "label-caps" }, `${title} with ${name}`)),
         note ? h("div", { class: "row muted small", style: { gap: "8px" } }, h("span", { class: "spinner" }), note) : null,
         greetingLine ? h("p", { class: "day-greeting" }, greetingLine) : null,
-        ...paragraphs(body).map((p) => h("p", null, p)),
+        ...(b?.news && b.layout && text
+          ? [...paragraphs(b.layout.before).map((p) => h("p", null, p)), newsBlock(b.news, date!), ...paragraphs(b.layout.after).map((p) => h("p", null, p))]
+          : paragraphs(body).map((p) => h("p", null, p))),
         resting ? h("p", { class: "muted small" }, resting) : null,
         onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
       ),
@@ -79,7 +100,7 @@ export function renderHome(root: HTMLElement): () => void {
     drawAffirmation(aff);
     script = b.script;
     const update = b.outdated ? () => void regenerate(date) : null;
-    drawDay(b.text, p?.greeting, false, note, b.source === "template" ? aiNotice() : null, update);
+    drawDay(b.text, p?.greeting, false, note, b.source === "template" ? aiNotice() : null, update, b, date);
   };
   const regenerate = async (date: string) => {
     const my = ++token;

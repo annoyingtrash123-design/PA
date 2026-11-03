@@ -141,3 +141,22 @@ and prior knowledge. Re-verify against https://ai.google.dev/gemini-api/docs/spe
   voice previews (fixed sentence) are kept forever. Replays are instant and free.
 - Playback: `HTMLAudioElement` (a silent clip is played inside the tap to unlock iOS audio). Any failure (no key, paused, over budget,
   error, autoplay refusal) falls back to the phone voice with a toast.
+
+## News in the summaries
+- `scripts/news/fetch-news.mjs` (+ `sources.json`) is run by the scheduled workflow (`pages.yml`, ~05:45 and ~16:45 Sydney) and writes
+  `app/public/news.json` = `{generated_at, items:[{id, source, title, summary (the feed's lead, <=700 chars), link, published, topics}]}`
+  (last 36 h, near-duplicate titles merged, <=80 items). Topics: australia, world, east-asia, science-tech, life; the script and the core add
+  `industry-tech` by keywords. Feeds that fail are skipped; article pages are only read (<=25/run) when a feed gives a lead under 120 chars.
+- App: `services/news.ts` fetches `./news.json` (network first, last copy in IndexedDB `pa-news`) into `ctxCache.news`; `core.ts` passes it as
+  `ctx.news` / `ctx.news_generated_at` to `/api/briefing` and `/api/news/*` calls only. news.json is never precached by the service worker.
+- Core (`news.rs`): `GET /api/briefing` (morning/evening, today only) adds `news` (items, sources, position 0/1/2, recorded, template_text, ...) and
+  `template_body`, and puts the NEWS instructions + story block (title + lead) into the prompts. Morning 3-5 stories, evening 3-4 ("since this morning":
+  published after `news_morning_cutoff[date]`); Australia first, then world, a "life" story most days, an industry-tech story on about half the days,
+  East Asia, science/tech; one story per event, spread over sources. `POST /api/news/select {kind,date,refresh?,items?}` returns the same plus a
+  news-only prompt; `POST /api/news/record {kind,date,items,generated_at?}` stores the stories a summary used in `State.news_used["date|kind"]`
+  (and the morning cutoff) when its news is first generated (AI or template); nothing used in the last ~48 h is picked again, and re-viewing
+  returns the recorded stories.
+- The news sits inside the summary: morning position varies by date hash (0 after greeting/weather/affirmation, 1 after the first paragraph of the
+  briefing, 2 before the last paragraph); the evening is always 2. Gemini still makes one request: the morning JSON has a fifth field `news`,
+  the evening reply becomes `{briefing, news}`; the AI news is kept only if it quotes at least half of the headlines word for word, else the
+  template segment is used. News text is stored under `<morning:DATE>:news` in `pa-ai-cache`. "Get the latest news" = one news-only request.

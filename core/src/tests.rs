@@ -13,14 +13,16 @@ struct App {
     today: String,
     holidays: Value,
     weather: Value,
+    news: Value,
+    news_at: String,
 }
 
 impl App {
     fn new(today: &str) -> App {
-        App { state: init_state(today), today: today.into(), holidays: json!([]), weather: json!({}) }
+        App { state: init_state(today), today: today.into(), holidays: json!([]), weather: json!({}), news: json!([]), news_at: String::new() }
     }
     fn ctx(&self) -> String {
-        json!({"today": self.today, "now": "07:42", "has_key": true, "weather": self.weather, "holidays": self.holidays}).to_string()
+        json!({"today": self.today, "now": "07:42", "has_key": true, "weather": self.weather, "holidays": self.holidays, "news": self.news, "news_generated_at": self.news_at}).to_string()
     }
     fn req(&mut self, method: &str, path: &str, body: Value) -> (u16, Value) {
         let raw = call(&self.state, method, path, &body.to_string(), &self.ctx());
@@ -651,7 +653,7 @@ fn morning_template_word_count_on_sample_data() {
             }
             let text = morning(&mut a, &day);
             let n = words_in(&text);
-            assert!((320..=450).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
+            assert!((360..=540).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
             assert!(!has_stats(&text), "{day}: {text}");
         }
     }
@@ -721,7 +723,7 @@ fn morning_template_prefers_meaningful_fixed_points() {
     }
     assert!(text.contains("looking after yourself") || text.contains("routine side"), "{text}");
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
-    assert_eq!(b["max_words"], 450);
+    assert_eq!(b["max_words"], 520);
     assert!(b["cache_key"].as_str().unwrap().starts_with("briefing:morning:2026-11-02:"));
     assert!(b["user_prompt"].as_str().unwrap().contains("Plan tomorrow"));
     assert_eq!(b["stats"]["total"], 7);
@@ -1456,4 +1458,261 @@ fn private_profile_apply_and_clear() {
     let m = a.get("/api/memory");
     assert_eq!((m["interests"].as_str(), m["profile_updated"].as_str(), m["notes"].as_array().unwrap().len(), m["work"]["start"].as_str(), m["weather"]["hot_above"].as_f64()), (Some(""), Some(""), 0, Some("10:00"), Some(22.0)));
     assert_eq!(a.st().goals.len(), 2);
+}
+
+// ------------------------------------------------------------ news
+
+fn story(id: &str, source: &str, title: &str, lead: &str, published: &str, topics: &[&str]) -> Value {
+    json!({"id": id, "source": source, "title": title, "summary": lead, "link": format!("https://example.com/{id}"), "published": published, "topics": topics})
+}
+
+/// A sample feed for the morning of 2026-11-02 (generated 05:45 Sydney = 2026-11-01T18:45Z).
+fn morning_news() -> Value {
+    json!([
+        story("a1", "ABC News", "Sydney ferry services disrupted by storm damage", "Several Sydney ferry services were suspended on Sunday after storm damage to wharves. Transport for NSW says repairs will take days.", "2026-11-01T17:30:00Z", &["australia"]),
+        story("a2", "The Guardian", "NSW government announces new rental reforms", "The NSW government has announced changes to rental laws. Tenants will get longer notice.", "2026-11-01T16:00:00Z", &["australia"]),
+        story("a3", "SBS News", "Federal budget update due this week", "The treasurer will deliver a mid-year update on Thursday.", "2026-11-01T12:00:00Z", &["australia"]),
+        story("w1", "BBC News", "Ceasefire talks resume in Geneva", "Negotiators returned to the table on Sunday after a week of stalled talks. Mediators described the mood as cautious.", "2026-11-01T17:00:00Z", &["world"]),
+        story("w2", "Al Jazeera", "Talks resume in Geneva on ceasefire", "Negotiators returned to the table after a week of stalled talks.", "2026-11-01T17:10:00Z", &["world"]),
+        story("w3", "The Guardian", "European leaders meet over energy prices", "Leaders gathered in Brussels to discuss winter energy supply.", "2026-11-01T15:00:00Z", &["world"]),
+        story("e1", "NHK World", "Japan and South Korea agree to resume summit talks", "The two governments said leaders will meet next month. It would be the first summit in a year.", "2026-11-01T14:00:00Z", &["east-asia", "world"]),
+        story("e2", "Yonhap", "South Korea's exports rise for a fifth month", "Exports were driven by chips and ships. Officials expect growth to continue.", "2026-11-01T13:00:00Z", &["east-asia"]),
+        story("s1", "BBC News", "Scientists map a new deep-sea ecosystem", "Researchers say the vents host species never seen before.", "2026-11-01T11:00:00Z", &["science-tech"]),
+        story("s2", "The Conversation", "How a new telescope will change what we know about galaxies", "The telescope begins observations next year.", "2026-11-01T10:00:00Z", &["science-tech", "australia"]),
+        story("i1", "Yonhap", "Samsung and SK hynix lift chip output as demand for memory chips grows", "The two semiconductor makers plan more capacity. Analysts say the cycle is turning.", "2026-11-01T09:00:00Z", &["east-asia"]),
+        story("i2", "BBC News", "Japan to fund rare earth magnet production to cut reliance on imports", "Tokyo will back domestic magnet makers. Rare earth supply from China has been uncertain.", "2026-11-01T08:00:00Z", &["world"]),
+        story("l1", "ABC News", "Backyard bakers find a following at the Parramatta markets", "A group of home bakers has turned a weekend stall into a small business.", "2026-11-01T07:00:00Z", &["life", "australia"]),
+        story("l2", "The Guardian", "The joy of a long lunch: why slowing down is back in style", "Restaurants report a rise in long, leisurely lunches.", "2026-11-01T06:00:00Z", &["life"]),
+    ])
+}
+
+fn news_app(date: &str) -> App {
+    let mut a = App::with_sample(date);
+    a.news = morning_news();
+    a.news_at = "2026-11-01T18:45:00Z".into();
+    a
+}
+
+fn ids(v: &Value) -> Vec<String> {
+    v.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect()
+}
+
+fn record_news(a: &mut App, kind: &str, date: &str, items: &Value, at: &str) {
+    a.post("/api/news/record", json!({"kind": kind, "date": date, "items": items, "generated_at": at}));
+}
+
+#[test]
+fn news_morning_is_balanced_and_deduplicated() {
+    let mut a = news_app(TODAY);
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    let n = &b["news"];
+    let items = n["items"].as_array().unwrap();
+    assert!((3..=5).contains(&items.len()), "{} stories", items.len());
+    assert!(items[0]["topics"].as_array().unwrap().iter().any(|t| t == "australia"), "Australia leads: {}", items[0]);
+    assert!(items.iter().any(|i| i["topics"].as_array().unwrap().iter().any(|t| t == "world")), "a world story");
+    // the same story from two outlets is never both picked
+    let got = ids(&n["items"]);
+    assert!(!(got.contains(&"w1".to_string()) && got.contains(&"w2".to_string())), "{got:?}");
+    // at most two from one source
+    for src in ["ABC News", "The Guardian", "BBC News"] {
+        assert!(items.iter().filter(|i| i["source"] == src).count() <= 2, "{src}");
+    }
+    assert!(n["sources"].as_array().unwrap().len() >= 2);
+    assert!(b["system_prompt"].as_str().unwrap().contains("NEWS:"));
+    assert!(b["system_prompt"].as_str().unwrap().contains("EXACTLY as given"));
+    let up = b["user_prompt"].as_str().unwrap();
+    assert!(up.contains("Lead: "), "{up}");
+    assert!(up.contains(items[0]["title"].as_str().unwrap()));
+    // no news in the ctx -> no news and no news instructions
+    let mut none = App::with_sample(TODAY);
+    let b0 = none.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert!(b0["news"].is_null());
+    assert!(!b0["system_prompt"].as_str().unwrap().contains("NEWS:"));
+}
+
+#[test]
+fn news_template_contains_each_selected_headline_verbatim_and_only_given_titles() {
+    let mut a = news_app(TODAY);
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    let t = b["news"]["template_text"].as_str().unwrap();
+    let items = b["news"]["items"].as_array().unwrap();
+    for i in items {
+        assert!(t.contains(&format!("'{}'", i["title"].as_str().unwrap())), "{t}");
+    }
+    assert!(t.contains("First up, from "));
+    assert!(t.contains("Last one, from "));
+    // the quoted headlines are exactly the selected ones, nothing else
+    let quotes = t.matches(" '").count();
+    assert_eq!(quotes, items.len(), "{t}");
+    for pool in morning_news().as_array().unwrap() {
+        let title = pool["title"].as_str().unwrap();
+        if !items.iter().any(|i| i["title"] == pool["title"]) {
+            assert!(!t.contains(title), "{title} was not selected");
+        }
+    }
+    // and the whole morning template carries it, within the new longer range
+    let full = b["template_text"].as_str().unwrap();
+    for i in items {
+        assert!(full.contains(i["title"].as_str().unwrap()));
+    }
+    let n = words_in(full);
+    assert!((480..=900).contains(&n), "{n} words");
+    assert!(!has_stats(&b["news"]["template_text"].to_string()));
+}
+
+#[test]
+fn news_position_varies_by_day_for_morning_and_is_the_end_for_evening() {
+    let mut seen = std::collections::BTreeSet::new();
+    for off in 0..30 {
+        let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+        assert_eq!(crate::news::position(Kind::Evening, d(&day)), 2);
+        seen.insert(crate::news::position(Kind::Morning, d(&day)));
+    }
+    assert_eq!(seen.len(), 3, "{seen:?}");
+}
+
+#[test]
+fn news_compose_inserts_at_the_chosen_paragraph() {
+    let body = "One.\n\nTwo.\n\nThree.\n\nClosing.";
+    assert_eq!(crate::news::compose(body, "NEWS", 0), "NEWS\n\nOne.\n\nTwo.\n\nThree.\n\nClosing.");
+    assert_eq!(crate::news::compose(body, "NEWS", 1), "One.\n\nNEWS\n\nTwo.\n\nThree.\n\nClosing.");
+    assert_eq!(crate::news::compose(body, "NEWS", 2), "One.\n\nTwo.\n\nThree.\n\nNEWS\n\nClosing.");
+    assert_eq!(crate::news::compose("Only.", "NEWS", 2), "Only.\n\nNEWS");
+}
+
+#[test]
+fn news_evening_only_has_stories_after_the_morning_cutoff_and_never_repeats_the_morning() {
+    let mut a = news_app(TODAY);
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    let morning_items = b["news"]["items"].clone();
+    record_news(&mut a, "morning", TODAY, &morning_items, "2026-11-01T20:30:00Z");
+    assert_eq!(a.st().news_morning_cutoff.get(TODAY).map(String::as_str), Some("2026-11-01T20:30:00Z"));
+    // re-viewing the morning gives the same stories
+    let again = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert_eq!(ids(&again["news"]["items"]), ids(&morning_items));
+    assert_eq!(again["news"]["recorded"], true);
+    // the evening feed has new items plus all the old ones
+    let mut feed = morning_news().as_array().unwrap().clone();
+    feed.push(story("n1", "ABC News", "Hunter Valley bushfire contained overnight", "Crews contained the fire on Monday afternoon. No homes were lost.", "2026-11-02T03:00:00Z", &["australia"]));
+    feed.push(story("n2", "BBC News", "Markets close higher after central bank signal", "Shares rose after the bank signalled a pause.", "2026-11-02T04:00:00Z", &["world"]));
+    feed.push(story("n3", "NHK World", "Typhoon heads for southern Japan", "The typhoon is expected to make landfall on Wednesday.", "2026-11-02T04:30:00Z", &["east-asia"]));
+    feed.push(story("n4", "The Guardian", "New study links sleep to memory", "Researchers followed 200 adults for a year.", "2026-11-02T05:00:00Z", &["science-tech"]));
+    a.news = json!(feed);
+    a.news_at = "2026-11-02T05:45:00Z".into();
+    let e = a.get(&format!("/api/briefing?kind=evening&date={TODAY}"));
+    let ev = ids(&e["news"]["items"]);
+    assert!((3..=4).contains(&ev.len()), "{ev:?}");
+    for id in &ev {
+        assert!(id.starts_with('n'), "old story {id} in the evening: {ev:?}");
+    }
+    for id in ids(&morning_items) {
+        assert!(!ev.contains(&id));
+    }
+    assert!(e["news"]["position"] == 2);
+    assert!(e["system_prompt"].as_str().unwrap().contains("since this morning"));
+    // the evening template carries the news before the goodnight
+    let t = e["template_text"].as_str().unwrap();
+    let first = e["news"]["items"][0]["title"].as_str().unwrap();
+    assert!(t.contains(first));
+    assert!(t.find(first).unwrap() < t.rfind("\n\n").unwrap());
+    // with nothing new since the morning there is no news at all
+    a.news = morning_news();
+    a.news_at = "2026-11-01T18:45:00Z".into();
+    let none = a.get(&format!("/api/briefing?kind=evening&date={TODAY}"));
+    assert!(none["news"].is_null());
+    assert!(!none["system_prompt"].as_str().unwrap().contains("NEWS:"));
+}
+
+#[test]
+fn news_next_morning_excludes_the_previous_evening_and_morning_and_same_story_other_outlets() {
+    let mut a = news_app(TODAY);
+    let m = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"))["news"]["items"].clone();
+    record_news(&mut a, "morning", TODAY, &m, "2026-11-01T20:30:00Z");
+    let mut feed = morning_news().as_array().unwrap().clone();
+    feed.push(story("n1", "ABC News", "Hunter Valley bushfire contained overnight", "Crews contained the fire.", "2026-11-02T03:00:00Z", &["australia"]));
+    feed.push(story("n2", "BBC News", "Markets close higher after central bank signal", "Shares rose.", "2026-11-02T04:00:00Z", &["world"]));
+    feed.push(story("n3", "NHK World", "Typhoon heads for southern Japan", "Landfall on Wednesday.", "2026-11-02T04:30:00Z", &["east-asia"]));
+    a.news = json!(feed.clone());
+    a.news_at = "2026-11-02T05:45:00Z".into();
+    let e = a.get(&format!("/api/briefing?kind=evening&date={TODAY}"))["news"]["items"].clone();
+    record_news(&mut a, "evening", TODAY, &e, "");
+    // next morning: same feed plus a rewrite of an evening story by another outlet and one fresh story
+    feed.push(story("x1", "The Guardian", "Typhoon heads towards southern Japan", "Landfall is expected on Wednesday.", "2026-11-02T20:00:00Z", &["east-asia"]));
+    feed.push(story("x2", "SBS News", "Bushfire in the Hunter Valley contained overnight", "Crews contained the fire.", "2026-11-02T19:00:00Z", &["australia"]));
+    feed.push(story("f1", "ABC News", "Fresh story about a new Sydney tunnel opening", "The new tunnel opens to traffic on Friday after years of work. Drivers are being asked to plan ahead.", "2026-11-02T19:30:00Z", &["australia"]));
+    a.news = json!(feed);
+    a.news_at = "2026-11-02T18:45:00Z".into();
+    a.today = "2026-11-03".into();
+    let next = a.get("/api/briefing?kind=morning&date=2026-11-03");
+    let got = ids(&next["news"]["items"]);
+    let used: Vec<String> = ids(&m).into_iter().chain(ids(&e)).collect();
+    for id in &got {
+        assert!(!used.contains(id), "{id} repeated: {got:?}");
+    }
+    assert!(!got.contains(&"x1".to_string()) && !got.contains(&"x2".to_string()), "same story from another outlet: {got:?}");
+    assert!(got.contains(&"f1".to_string()), "{got:?}");
+    // old records are pruned after ~48 hours
+    let mut st = a.st();
+    crate::news::record(&mut st, Kind::Morning, d("2026-11-06"), vec![serde_json::from_value(feed_item_for_prune()).unwrap()], None);
+    assert!(st.news_used.keys().all(|k| k.as_str() >= "2026-11-04"), "{:?}", st.news_used.keys());
+}
+
+fn feed_item_for_prune() -> Value {
+    story("p", "ABC News", "Anything", "Lead.", "2026-11-06T01:00:00Z", &["world"])
+}
+
+#[test]
+fn news_selection_is_varied_with_life_most_days_and_industry_tech_sometimes() {
+    let mut life = 0;
+    let mut industry = 0;
+    let mut days = 0;
+    for off in 0..20 {
+        let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
+        let mut a = news_app(&day);
+        a.today = day.clone();
+        let b = a.get(&format!("/api/briefing?kind=morning&date={day}"));
+        let items = b["news"]["items"].as_array().unwrap();
+        days += 1;
+        if items.iter().any(|i| i["topics"].as_array().unwrap().iter().any(|t| t == "life")) {
+            life += 1;
+        }
+        if items.iter().any(|i| i["topics"].as_array().unwrap().iter().any(|t| t == "industry-tech")) {
+            industry += 1;
+        }
+    }
+    assert!(life >= 12, "life story on {life}/{days} days");
+    assert!(industry >= 4 && industry < days, "industry-tech on {industry}/{days} days (a good chance, not guaranteed)");
+}
+
+#[test]
+fn news_industry_keywords_tag_chip_and_battery_stories() {
+    assert!(crate::news::industry_score("Samsung and SK hynix lift chip output", "semiconductor makers") >= 2);
+    assert!(crate::news::industry_score("Japan to fund rare earth magnet production", "") >= 2);
+    assert!(crate::news::industry_score("Lithium prices fall as cathode makers cut output", "") >= 2);
+    assert_eq!(crate::news::industry_score("Local council approves new bike lane", "Cyclists welcome it"), 0);
+}
+
+#[test]
+fn news_first_sentence_is_short_and_complete() {
+    use crate::news::first_sentence;
+    assert_eq!(first_sentence("Several ferries were suspended. Repairs will take days."), "Several ferries were suspended.");
+    assert_eq!(first_sentence("The U.S. said talks continue on Monday. More later."), "The U.S. said talks continue on Monday.");
+    assert_eq!(first_sentence("No full stop here"), "No full stop here.");
+    assert_eq!(first_sentence(""), "");
+    assert!(words_in(&first_sentence(&"word ".repeat(80))) <= 33);
+}
+
+#[test]
+fn news_select_endpoint_returns_prompts_and_refresh_avoids_the_recorded_stories() {
+    let mut a = news_app(TODAY);
+    let first = a.post("/api/news/select", json!({"kind": "morning"}));
+    let ids1 = ids(&first["items"]);
+    assert!(first["system_prompt"].as_str().unwrap().contains("\"news\""));
+    record_news(&mut a, "morning", TODAY, &first["items"], "2026-11-01T20:30:00Z");
+    let refreshed = a.post("/api/news/select", json!({"kind": "morning", "refresh": true}));
+    for id in ids(&refreshed["items"]) {
+        assert!(!ids1.contains(&id));
+    }
+    let (s, _) = a.req("POST", "/api/news/record", json!({"kind": "morning", "items": []}));
+    assert_eq!(s, 400);
 }

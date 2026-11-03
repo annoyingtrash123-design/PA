@@ -53,15 +53,17 @@ export async function resetEverything(): Promise<void> {
 
 export const hasStats = (text: string): boolean => has_stats(text);
 
-function buildCtx() {
+function buildCtx(path = "") {
   const { today, now } = zonedNow(state?.settings.timezone);
-  return { today, now, has_key: hasKey(), weather: ctxCache.weather, holidays: ctxCache.holidays };
+  const base = { today, now, has_key: hasKey(), weather: ctxCache.weather, holidays: ctxCache.holidays };
+  // the news list is big: only briefing calls need it
+  return path.startsWith("/api/briefing") || path.startsWith("/api/news") ? { ...base, news: ctxCache.news.items, news_generated_at: ctxCache.news.generated_at } : base;
 }
 
 /** Call the core like the REST API: returns the response body or throws ApiError. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function api<T = any>(method: string, path: string, body?: unknown): T {
-  const raw = wasmCall(JSON.stringify(getState()), method, path, body === undefined ? "null" : JSON.stringify(body), JSON.stringify(buildCtx()));
+  const raw = wasmCall(JSON.stringify(getState()), method, path, body === undefined ? "null" : JSON.stringify(body), JSON.stringify(buildCtx(path)));
   const res = JSON.parse(raw) as CoreResponse;
   if (res.status >= 400) {
     const msg = (res.body as { error?: string } | null)?.error ?? `Something went wrong (${res.status})`;

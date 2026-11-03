@@ -6,10 +6,10 @@ import { kvClear } from "../services/idb";
 import { listVoices } from "../services/speech";
 import { resetWeather } from "../services/weather";
 import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, segmented, select, textInput, toast } from "../ui";
-import { stopAll, previewNatural } from "../services/readaloud";
+import { stopAll, previewNatural, refreshSpeed } from "../services/readaloud";
 import { STYLES, VOICES } from "../services/gemini-tts";
 import { icon } from "../icons";
-import { getGeminiVoice, getStyle, getVoiceType, savePrefs, type VoiceType } from "../services/voice-prefs";
+import { DEFAULT_SPEED, getGeminiVoice, getSpeed, getStyle, getVoiceType, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
 import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
@@ -341,6 +341,27 @@ function voiceCard(fVoice: HTMLSelectElement, fAssistant: HTMLInputElement): HTM
   const fStyle = select(STYLES.map((x) => [x.id, x.label] as [string, string]), style);
   fStyle.addEventListener("change", () => savePrefs({ style: fStyle.value }));
 
+  const speedVal = getSpeed();
+  const fSpeed = h("input", { type: "range", min: String(SPEED_MIN), max: String(SPEED_MAX), step: String(SPEED_STEP), value: String(speedVal), "aria-label": "Speaking speed", style: { width: "100%" } }) as HTMLInputElement;
+  const speedLabel = h("span", { class: "small" }, "");
+  const showSpeed = () => {
+    const v = getSpeed();
+    speedLabel.textContent = v === DEFAULT_SPEED ? `${v.toFixed(2)}× (my default)` : `${v.toFixed(2)}×`;
+  };
+  showSpeed();
+  fSpeed.addEventListener("input", () => {
+    savePrefs({ speed: Number(fSpeed.value) });
+    showSpeed();
+    refreshSpeed();
+  });
+  const speedBox = h(
+    "div",
+    { class: "stack" },
+    h("div", { class: "row", style: { justifyContent: "space-between" } }, h("span", { class: "label-caps" }, "Speaking speed"), speedLabel),
+    fSpeed,
+    h("div", { class: "row small", style: { justifyContent: "space-between" } }, h("span", {}, "Slower"), h("span", {}, "Normal")),
+  );
+
   const previewBtn = (name: string) => {
     const b = h("button", { type: "button", class: "btn btn-outline", "aria-label": `Preview ${name}`, style: { minHeight: "36px", padding: "6px 12px" } }, "▶ Preview");
     b.onclick = async () => {
@@ -399,5 +420,5 @@ function voiceCard(fVoice: HTMLSelectElement, fAssistant: HTMLInputElement): HTM
       b.setAttribute("aria-selected", String(on));
     });
   });
-  return card("stack", h("h3", { class: "title-sm" }, "Voice"), seg, naturalBox, phoneBox);
+  return card("stack", h("h3", { class: "title-sm" }, "Voice"), seg, naturalBox, phoneBox, speedBox);
 }

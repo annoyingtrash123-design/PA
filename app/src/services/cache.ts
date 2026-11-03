@@ -1,7 +1,7 @@
 // In-memory caches the core reads synchronously when building its per-call context.
-import type { Holiday, Weather } from "../types";
+import type { Holiday, NewsItem, Weather } from "../types";
 
-export const ctxCache: { weather: Record<string, Weather>; holidays: Holiday[] } = { weather: {}, holidays: [] };
+export const ctxCache: { weather: Record<string, Weather>; holidays: Holiday[]; news: { generated_at: string; items: NewsItem[] } } = { weather: {}, holidays: [], news: { generated_at: "", items: [] } };
 
 export const KEY_STORAGE = "pa-gemini-key";
 export const MODEL_STORAGE = "pa-gemini-model";

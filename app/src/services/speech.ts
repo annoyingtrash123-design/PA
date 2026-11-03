@@ -1,5 +1,6 @@
 // Read-aloud with the Web Speech API (speechSynthesis).
 import { speechChunks } from "../util/text";
+import { getSpeed } from "./voice-prefs";
 
 const PARAGRAPH_PAUSE_MS = 450;
 
@@ -79,7 +80,7 @@ export async function speak(text: string, voiceName?: string): Promise<void> {
       u.voice = voice;
       u.lang = voice.lang;
     } else u.lang = "en-US";
-    u.rate = 0.95;
+    u.rate = getSpeed(); // read per chunk, so a change in Settings applies from the next sentence
     u.pitch = 1;
     u.onend = () => (chunk.pause && i < chunks.length ? void setTimeout(next, chunk.pause) : next());
     u.onerror = (e) => {

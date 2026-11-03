@@ -1,0 +1,29 @@
+{
+  "_note": "Free, official RSS/Atom feeds. Topics: australia | world | east-asia | science-tech | life. 'verified' says whether the URL was confirmed to return a feed from the build sandbox (its outbound network is restricted, so most are 'unverified': taken from the publishers' documented feed lists / feed directories). A feed that fails at run time is skipped and logged.",
+  "sources": [
+    { "name": "ABC News", "url": "https://www.abc.net.au/news/feed/45910/rss.xml", "topics": ["australia"], "verified": false },
+    { "name": "ABC News", "url": "https://www.abc.net.au/news/feed/2942460/rss.xml", "topics": ["australia"], "verified": false },
+    { "name": "ABC News", "url": "https://www.abc.net.au/news/feed/51120/rss.xml", "topics": ["australia"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/au/rss", "topics": ["australia"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/australia-news/rss", "topics": ["australia"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/world/rss", "topics": ["world"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/business/rss", "topics": ["world"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/technology/rss", "topics": ["science-tech"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/au/lifeandstyle/rss", "topics": ["life"], "verified": false },
+    { "name": "The Guardian", "url": "https://www.theguardian.com/culture/rss", "topics": ["life"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "topics": ["world"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/world/asia/rss.xml", "topics": ["east-asia", "world"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", "topics": ["science-tech"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/technology/rss.xml", "topics": ["science-tech"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/business/rss.xml", "topics": ["world"], "verified": false },
+    { "name": "BBC News", "url": "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml", "topics": ["life"], "verified": false },
+    { "name": "SBS News", "url": "https://www.sbs.com.au/news/feed", "topics": ["australia"], "verified": false },
+    { "name": "NHK World", "url": "https://www3.nhk.or.jp/nhkworld/data/en/news/backnumber/rss.xml", "topics": ["east-asia", "world"], "verified": false },
+    { "name": "NHK World", "url": "https://www3.nhk.or.jp/nhkworld/data/en/news/all.xml", "topics": ["east-asia", "world"], "verified": false },
+    { "name": "Yonhap", "url": "https://en.yna.co.kr/RSS/news.xml", "topics": ["east-asia"], "verified": false },
+    { "name": "Yonhap", "url": "https://en.yna.co.kr/RSS/economy.xml", "topics": ["east-asia"], "verified": false },
+    { "name": "Korea Herald", "url": "https://www.koreaherald.com/rss/newsAll", "topics": ["east-asia"], "verified": false },
+    { "name": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml", "topics": ["world"], "verified": false },
+    { "name": "The Conversation", "url": "https://theconversation.com/au/articles.atom", "topics": ["australia", "science-tech"], "verified": false }
+  ]
+}

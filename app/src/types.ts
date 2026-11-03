@@ -220,6 +220,32 @@ export interface MorningParts {
   briefing: string;
 }
 
+/** One headline from news.json (summary = the feed's lead paragraph). */
+export interface NewsItem {
+  id: string;
+  source: string;
+  title: string;
+  summary: string;
+  link: string;
+  published: string;
+  topics: string[];
+}
+
+/** The core's news plan for a briefing (POST /api/news/select returns the same shape). */
+export interface NewsPrep {
+  items: NewsItem[];
+  /** short names for the "Sources:" line */
+  sources: string[];
+  /** 0 = after greeting/weather/affirmation, 1 = after the day-by-theme part, 2 = near the end */
+  position: 0 | 1 | 2;
+  /** the stories were already recorded for this briefing (stable on re-viewing) */
+  recorded: boolean;
+  generated_at: string;
+  template_text: string;
+  system_prompt: string;
+  user_prompt: string;
+}
+
 export interface BriefingPrep {
   kind: string;
   date: string;
@@ -227,8 +253,12 @@ export interface BriefingPrep {
   stats: { total?: number; done?: number; gym_sessions?: number; [k: string]: unknown };
   affirmation?: string;
   template_text: string;
+  /** the no-AI text without the news segment (the app inserts the news itself) */
+  template_body?: string;
   /** morning only: the no-AI text in the same four parts (template_text = these joined) */
   template_parts?: MorningParts | null;
+  /** morning / evening: the news stories to cover (null when there is none) */
+  news?: NewsPrep | null;
   cache_key: string;
   /** hash of the plan the text is about (no weather); changes when plans change */
   plan_fingerprint?: string;
