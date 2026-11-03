@@ -434,7 +434,26 @@ pub fn day_info(st: &State, ctx: &Ctx, d: NaiveDate) -> DayInfo {
     }
     let holiday = holidays::lookup(ctx, &ds);
     let works = w.days.contains(&d.weekday().num_days_from_monday()) && holiday.is_none() && !off;
-    DayInfo { work: works.then(|| WorkHours { start: w.start.clone(), end: w.end.clone() }), holiday, day_off: off }
+    DayInfo { work: works.then(|| resolve_hours(w, d)), holiday, day_off: off }
+}
+
+/// Hours for a work day: first matching monthly rule > weekday override > default start/end.
+pub fn resolve_hours(w: &WorkPrefs, d: NaiveDate) -> WorkHours {
+    let wd = d.weekday().num_days_from_monday();
+    let nth = ((d.day() - 1) / 7 + 1) as i32;
+    let is_last = d.day() + 7 > days_in_month(d);
+    if let Some(r) = w.monthly_rules.iter().find(|r| r.weekday == wd && (r.nth == nth || (r.nth == -1 && is_last))) {
+        return WorkHours { start: r.start.clone(), end: r.end.clone() };
+    }
+    if let Some(h) = w.weekday_hours.get(&wd.to_string()) {
+        return WorkHours { start: h.start.clone(), end: h.end.clone() };
+    }
+    WorkHours { start: w.start.clone(), end: w.end.clone() }
+}
+
+fn days_in_month(d: NaiveDate) -> u32 {
+    let (y, m) = if d.month() == 12 { (d.year() + 1, 1) } else { (d.year(), d.month() + 1) };
+    NaiveDate::from_ymd_opt(y, m, 1).unwrap().pred_opt().unwrap().day()
 }
 
 fn is_appointment(st: &State, task: &Task) -> bool {

@@ -557,6 +557,54 @@ fn work_day_shape_with_holiday_and_day_off() {
 }
 
 #[test]
+fn per_day_work_hours() {
+    let mut a = App::new(TODAY);
+    let r = a.req("PUT", "/api/memory/work", json!({
+        "weekday_hours": {"1": {"start": "10:00", "end": "20:00"}},
+        "monthly_rules": [{"nth": 1, "weekday": 2, "start": "09:00", "end": "13:00"}, {"nth": -1, "weekday": 4, "start": "08:00", "end": "12:00"}]
+    }));
+    assert_eq!(r.0, 200);
+    a.holidays = json!([{"date": "2026-11-18", "name": "Test Holiday"}]);
+    let days = a.get("/api/days?start=2026-11-02&days=28");
+    let by = |d: &str| days.as_array().unwrap().iter().find(|x| x["date"] == d).unwrap().clone();
+    assert_eq!(by("2026-11-02")["work"], json!({"start": "10:00", "end": "17:00"}));
+    assert_eq!(by("2026-11-03")["work"], json!({"start": "10:00", "end": "20:00"}));
+    assert_eq!(by("2026-11-04")["work"], json!({"start": "09:00", "end": "13:00"}), "first Wednesday");
+    assert_eq!(by("2026-11-11")["work"], json!({"start": "10:00", "end": "17:00"}), "second Wednesday");
+    assert_eq!(by("2026-11-27")["work"], json!({"start": "08:00", "end": "12:00"}), "last Friday");
+    assert_eq!(by("2026-11-20")["work"], json!({"start": "10:00", "end": "17:00"}));
+    // holiday still wins over a rule
+    a.holidays = json!([{"date": "2026-11-04", "name": "Test Holiday"}]);
+    let days = a.get("/api/days?start=2026-11-04&days=1");
+    assert!(days[0]["work"].is_null());
+    // weekend override is ignored when it is not a work day
+    a.req("PUT", "/api/memory/work", json!({"weekday_hours": {"5": {"start": "10:00", "end": "12:00"}}}));
+    assert!(a.get("/api/days?start=2026-11-07&days=1")[0]["work"].is_null());
+    // the AI context and template use the resolved hours
+    a.req("PUT", "/api/memory/work", json!({"weekday_hours": {"1": {"start": "10:00", "end": "20:00"}}}));
+    let b = a.get("/api/briefing?kind=morning&date=2026-11-03");
+    assert!(b["user_prompt"].as_str().unwrap().contains("work: 10:00 to 20:00 (a fixed block"), "{}", b["user_prompt"]);
+    let sys = a.get("/api/briefing?kind=morning&date=2026-11-11");
+    assert!(!sys["user_prompt"].as_str().unwrap().contains("work: 10:00 to 20:00 (a fixed block"));
+    // validation
+    for bad in [
+        json!({"weekday_hours": {"7": {"start": "10:00", "end": "12:00"}}}),
+        json!({"weekday_hours": {"1": {"start": "12:00", "end": "10:00"}}}),
+        json!({"weekday_hours": {"1": {"start": "9am", "end": "10:00"}}}),
+        json!({"monthly_rules": [{"nth": 0, "weekday": 1, "start": "10:00", "end": "12:00"}]}),
+        json!({"monthly_rules": [{"nth": 6, "weekday": 1, "start": "10:00", "end": "12:00"}]}),
+        json!({"monthly_rules": [{"nth": 1, "weekday": 7, "start": "10:00", "end": "12:00"}]}),
+        json!({"monthly_rules": [{"nth": 1, "weekday": 1, "start": "13:00", "end": "12:00"}]}),
+    ] {
+        assert_eq!(a.req("PUT", "/api/memory/work", bad).0, 400);
+    }
+    // profile codes accept the same fields
+    let p = a.req("POST", "/api/profile/apply", json!({"v": 1, "updated": "2026-11-02", "work": {"weekday_hours": {"3": {"start": "11:00", "end": "19:00"}}}}));
+    assert_eq!(p.0, 200, "{:?}", p.1);
+    assert_eq!(a.get("/api/days?start=2026-11-05&days=1")[0]["work"], json!({"start": "11:00", "end": "19:00"}));
+}
+
+#[test]
 fn memory_validation_and_notes() {
     let mut a = App::new(TODAY);
     assert_eq!(a.req("PUT", "/api/memory/weather", json!({"comfortable_max": 30})).0, 400);

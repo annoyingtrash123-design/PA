@@ -44,6 +44,15 @@ pub fn context_block(m: &Memory) -> String {
             k.end,
             k.days.iter().map(|d| DAY_NAMES[(*d as usize) % 7]).collect::<Vec<_>>().join(", ")
         ));
+        for (wd, h) in &k.weekday_hours {
+            if let Ok(i) = wd.parse::<usize>() {
+                s.push_str(&format!("  - On {}s they work {} to {} instead.\n", DAY_NAMES[i % 7], h.start, h.end));
+            }
+        }
+        for r in &k.monthly_rules {
+            let which = if r.nth == -1 { "last".to_string() } else { format!("#{}", r.nth) };
+            s.push_str(&format!("  - On the {} {} of each month they work {} to {} instead.\n", which, DAY_NAMES[(r.weekday as usize) % 7], r.start, r.end));
+        }
         s.push_str(&format!("  - Lunch break on work days: a flexible lunch break of about {} minutes, usually sometime {}. This is private background: never state or recite these times. If a short task would fit, suggest it softly and optionally, such as \"if you get a moment in the middle of the day, X would fit nicely\" or \"X could fit in around lunch if you have time\" (good for a quick call, a bill, booking an appointment or a quick shop); never an instruction like \"do X at lunch\", and never assume a fixed time).\n", k.lunch_minutes, lunch_window(&k.lunch_window_start, &k.lunch_window_end)));
     }
     let r = &m.rhythm;
@@ -127,6 +136,8 @@ pub struct WorkIn {
     lunch_minutes: Option<u32>,
     lunch_window_start: Option<String>,
     lunch_window_end: Option<String>,
+    weekday_hours: Option<std::collections::BTreeMap<String, HourSpan>>,
+    monthly_rules: Option<Vec<MonthlyRule>>,
 }
 
 pub fn put_work(env: &mut Env, b: WorkIn) -> Res<Memory> {
@@ -140,7 +151,28 @@ pub fn put_work(env: &mut Env, b: WorkIn) -> Res<Memory> {
         lunch_minutes: b.lunch_minutes.unwrap_or(cur.lunch_minutes),
         lunch_window_start: b.lunch_window_start.unwrap_or(cur.lunch_window_start),
         lunch_window_end: b.lunch_window_end.unwrap_or(cur.lunch_window_end),
+        weekday_hours: b.weekday_hours.unwrap_or(cur.weekday_hours),
+        monthly_rules: b.monthly_rules.unwrap_or(cur.monthly_rules),
     };
+    for (k, h) in &w.weekday_hours {
+        if !matches!(k.parse::<u32>(), Ok(0..=6)) || k.len() != 1 {
+            return Err(ApiErr::bad("weekday_hours keys must be \"0\" (Monday) to \"6\" (Sunday)"));
+        }
+        if hm("weekday_hours start", &h.start)? >= hm("weekday_hours end", &h.end)? {
+            return Err(ApiErr::bad("weekday_hours start must be before end"));
+        }
+    }
+    for r in &w.monthly_rules {
+        if !(1..=5).contains(&r.nth) && r.nth != -1 {
+            return Err(ApiErr::bad("monthly_rules nth must be 1 to 5, or -1 for the last"));
+        }
+        if r.weekday > 6 {
+            return Err(ApiErr::bad("monthly_rules weekday must be 0 (Monday) to 6 (Sunday)"));
+        }
+        if hm("monthly_rules start", &r.start)? >= hm("monthly_rules end", &r.end)? {
+            return Err(ApiErr::bad("monthly_rules start must be before end"));
+        }
+    }
     if w.lunch_minutes > 240 {
         return Err(ApiErr::bad("lunch_minutes must be between 0 and 240"));
     }

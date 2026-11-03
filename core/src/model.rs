@@ -128,6 +128,29 @@ pub struct WorkPrefs {
     pub lunch_window_start: String,
     #[serde(default = "default_lunch_end")]
     pub lunch_window_end: String,
+    /// Per-weekday hour overrides, keyed by weekday index as a string ("0" = Monday ... "6" = Sunday).
+    /// Only applies when that weekday is a work day.
+    #[serde(default)]
+    pub weekday_hours: BTreeMap<String, HourSpan>,
+    /// "nth weekday of the month" overrides; the first matching rule wins and beats `weekday_hours`.
+    #[serde(default)]
+    pub monthly_rules: Vec<MonthlyRule>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct HourSpan {
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MonthlyRule {
+    /// 1-5 = nth occurrence of the weekday in the month, -1 = the last one
+    pub nth: i32,
+    /// 0 = Monday ... 6 = Sunday
+    pub weekday: u32,
+    pub start: String,
+    pub end: String,
 }
 
 fn default_lunch() -> u32 {
@@ -142,7 +165,7 @@ fn default_lunch_end() -> String {
 
 impl Default for WorkPrefs {
     fn default() -> Self {
-        WorkPrefs { enabled: true, days: vec![0, 1, 2, 3, 4], start: "10:00".into(), end: "17:00".into(), holiday_region: "AU-NSW".into(), lunch_minutes: 60, lunch_window_start: "12:00".into(), lunch_window_end: "14:00".into() }
+        WorkPrefs { enabled: true, days: vec![0, 1, 2, 3, 4], start: "10:00".into(), end: "17:00".into(), holiday_region: "AU-NSW".into(), lunch_minutes: 60, lunch_window_start: "12:00".into(), lunch_window_end: "14:00".into(), weekday_hours: BTreeMap::new(), monthly_rules: vec![] }
     }
 }
 

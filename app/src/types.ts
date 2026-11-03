@@ -118,7 +118,7 @@ export interface Leisure {
 
 export interface Memory {
   weather: { comfortable_max: number; hot_above: number; too_hot_above: number; likes_rain: boolean; avoid_sunburn: boolean };
-  work: { enabled: boolean; days: number[]; start: string; end: string; holiday_region: string; lunch_minutes: number; lunch_window_start: string; lunch_window_end: string };
+  work: { enabled: boolean; days: number[]; start: string; end: string; holiday_region: string; lunch_minutes: number; lunch_window_start: string; lunch_window_end: string; weekday_hours?: Record<string, { start: string; end: string }>; monthly_rules?: { nth: number; weekday: number; start: string; end: string }[] };
   rhythm: { wake_from: string; wake_to: string; sleep_from: string; sleep_to: string };
   notes: { id: number; text: string }[];
   interests: string;

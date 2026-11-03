@@ -11,6 +11,10 @@ export interface ProfileWork {
   lunch_window_start: string;
   lunch_window_end: string;
   holiday_region: string;
+  /** weekday index as string ("0" = Mon ... "6" = Sun) -> hours override */
+  weekday_hours?: Record<string, { start: string; end: string }>;
+  /** nth (1-5, or -1 = last) occurrence of a weekday (0 = Mon) in the month -> hours override */
+  monthly_rules?: { nth: number; weekday: number; start: string; end: string }[];
 }
 export interface ProfileWeather {
   comfortable_max: number;
