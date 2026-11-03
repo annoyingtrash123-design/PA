@@ -20,6 +20,7 @@ export function renderHome(root: HTMLElement): () => void {
 
   const weatherHolder = h("div", { hidden: true });
   const dayHolder = h("div");
+  const playHolder = h("div", { class: "play-top" });
   let token = 0;
   let digest: Digest | null = null;
   const affHolder = h("div", { hidden: true });
@@ -44,7 +45,10 @@ export function renderHome(root: HTMLElement): () => void {
   };
 
   const drawDay = (text: string | null | undefined, greetingLine: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null) => {
-    if (busy) return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
+    if (busy) {
+      clear(playHolder, readAloud(() => "", () => getState().settings.voice, "Read it to me", true));
+      return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
+    }
     const body = text || "I couldn't put your day into words just now. Check the Tasks tab for what's on.";
     const title = kind === "morning" ? "Your day" : "Your wind-down";
     clear(
@@ -57,9 +61,9 @@ export function renderHome(root: HTMLElement): () => void {
         ...paragraphs(body).map((p) => h("p", null, p)),
         resting ? h("p", { class: "muted small" }, resting) : null,
         onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
-        readAloud(() => script || body, () => getState().settings.voice, "Read it to me", !text),
       ),
     );
+    clear(playHolder, readAloud(() => script || body, () => getState().settings.voice, kind === "morning" ? "Read it to me" : "Read my wind-down", !text));
   };
 
   /** Paint everything a briefing result holds: weather comment, affirmation card, "Your day" card, and the read-aloud script. */
@@ -115,6 +119,7 @@ export function renderHome(root: HTMLElement): () => void {
   clear(
     root,
     h("div", null, h("h2", { class: "title-lg" }, hello), h("p", { class: "muted", style: { marginTop: "2px", fontSize: "14px" } }, longDay(clock.today))),
+    playHolder,
     weatherHolder,
     affHolder,
     segHolder,
