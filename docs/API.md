@@ -169,6 +169,6 @@ Morning is the main daily summary (shown as text on Home and read aloud): about 
 Briefing text from Gemini is cached in the DB by (kind, date, hash of the full prompt context incl. done states, goals, memory, work info and weather), so reloading Home does not call Gemini again; changing done states may regenerate.
 
 Tone: warm best friend: chatty, natural and human, like a real personal assistant who knows you. Never read out raw counts, fractions or percentages ("0 of 24 tasks", "50 percent"); talk about specific things done or coming up instead, and tie them to goals where they genuinely relate. Kind and low-key about quiet days/weeks (no guilt, no stats). Morning: weather, the day in order, workout, an affirmation. Evening: what got done (kindly), what's left, a gentle look at tomorrow. Weekly: tasks done over the Mon–Sun week of `date`, gym sessions, progress highlights, a look at next week.
-Gemini model via env `GEMINI_MODEL` (default `gemini-2.5-flash`); on any failure or no key, fall back to template text.
+Gemini model via env `GEMINI_MODEL` (default `gemini-3.8-flash`); on any failure or no key, fall back to template text.
 
 `POST /api/tts` body `{"text":"...","voice":"en-US-JennyNeural"}` → `audio/mpeg` bytes. Uses `edge-tts` CLI; falls back to `piper` if installed; else 503.
