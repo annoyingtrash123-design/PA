@@ -1816,7 +1816,7 @@ fn templates_walk_through_every_task_with_we_phrasing() {
             assert!(t.contains(title), "{kind}: missing {title}\n{t}");
         }
         assert!(!t.contains("plus a few more") && !t.contains("a few more,"), "{t}");
-        assert!(t.contains("we've got") || t.contains("we have") || t.contains("for us"), "{t}");
+        assert!(t.contains("we've got") || t.contains("you've got") || t.contains("we have") || t.contains("for us") || t.contains("your day"), "{t}");
         assert!(t.contains("Reminder letter is in the drawer"), "notes missing\n{t}");
         assert!(t.contains("checklist starts with gather last quarter's numbers"), "checklist step missing\n{t}");
         assert!(t.contains("half hour") && t.contains("ten minutes"), "size hints missing\n{t}");

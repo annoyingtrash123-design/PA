@@ -575,9 +575,10 @@ fn morning_template(c: &Ctx) -> String {
         let regular: Vec<&Occurrence> = todo.iter().filter(|o| !is_routine(o)).cloned().collect();
         let mut routines: Vec<&Occurrence> = todo.iter().filter(|o| is_routine(o)).cloned().collect();
         routines.sort_by(|x, y| x.time.cmp(&y.time));
-        must(&mut v, match d.num_days_from_ce() as usize % 3 {
+        must(&mut v, match d.num_days_from_ce() as usize % 4 {
             0 => format!("So looking at what we've got on today{nm}, {}.", if regular.is_empty() { "it's mostly your usual rhythm".to_string() } else { format!("we've got {}", taskvoice::how_many(regular.len())) }),
-            1 => format!("Anyway, here's how today is shaping up for us{nm}."),
+            1 => format!("Anyway, here's how your day is shaping up{nm}."),
+            2 => format!("So{nm}, here's what you've got on today."),
             _ => format!("Let's have a wander through what we've got on today{nm}."),
         });
         if !regular.is_empty() {
