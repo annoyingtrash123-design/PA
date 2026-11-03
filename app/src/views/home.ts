@@ -1,5 +1,5 @@
 import { assistantName, getState, now, today } from "../core";
-import { getBriefing, getDigest, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
+import { aiNotice, cachedWeatherComment, getBriefing, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
 import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
@@ -33,7 +33,7 @@ export function renderHome(root: HTMLElement): () => void {
     clear(weatherHolder, card("raised stack", h("div", { class: "weather-top" }, icon(weatherIconName(w.summary), 26), h("div", null, h("div", { class: "title-sm", style: { color: "var(--text)" } }, w.summary), loc ? h("div", { class: "muted small" }, loc) : null)), h("div", { class: "row wrap", style: { gap: "8px" } }, ...chips), digest?.weather_comment ? h("p", { class: "comment" }, digest.weather_comment) : null));
   };
 
-  const drawDay = (text: string | null | undefined, busy: boolean, note?: string) => {
+  const drawDay = (text: string | null | undefined, busy: boolean, note?: string, resting?: string | null) => {
     if (busy) return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
     const body = text || "I couldn't put your day into words just now. Check the Tasks tab for what's on.";
     const title = kind === "morning" ? "Your day" : "Your wind-down";
@@ -44,6 +44,7 @@ export function renderHome(root: HTMLElement): () => void {
         h("div", { class: "summary-head" }, icon(kind === "morning" ? "sun" : "moon", 20), h("span", { class: "label-caps" }, `${title} with ${name}`)),
         note ? h("div", { class: "row muted small", style: { gap: "8px" } }, h("span", { class: "spinner" }), note) : null,
         ...paragraphs(body).map((p) => h("p", null, p)),
+        resting ? h("p", { class: "muted small" }, resting) : null,
         readAloud(() => body, () => getState().settings.voice, "Read it to me", !text),
       ),
     );
@@ -62,15 +63,14 @@ export function renderHome(root: HTMLElement): () => void {
     } catch {
       drawDay(null, true);
     }
-    const dg = getDigest(date).catch(() => null);
-    const br = getBriefing(kind!, date).catch(() => null);
-    const d = await dg;
+    // ONE Gemini request per kind per day: the morning one also writes the weather comment
+    const b = await getBriefing(kind!, date).catch(() => null);
     if (my !== token) return;
-    if (d) digest = d;
+    const wc = b?.weather_comment ?? (b ? await cachedWeatherComment(date) : null);
+    if (my !== token) return;
+    if (digest && wc) digest = { ...digest, weather_comment: wc };
     drawWeather();
-    const b = await br;
-    if (my !== token) return;
-    drawDay(b?.text || shown || digest?.overview, false);
+    drawDay(b?.text || shown, false, undefined, b?.source === "template" ? aiNotice() : null);
   };
 
   const segHolder = h("div", { class: "row", style: { justifyContent: "center" } });

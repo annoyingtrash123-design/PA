@@ -57,7 +57,7 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 5);
+    assert_eq!(st.version, 6);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
@@ -472,7 +472,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 5);
+        assert_eq!(r["state"]["version"], 6);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
@@ -488,7 +488,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 5);
+        assert_eq!(m["version"], 6);
     }
 }
 
@@ -498,14 +498,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 5);
+    assert_eq!(r["body"]["version"], 6);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 5);
+    assert_eq!(r["state"]["version"], 6);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -518,7 +518,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 5);
+    assert_eq!(imp["version"], 6);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -576,7 +576,7 @@ fn settings_and_errors() {
     let mut a = App::new(TODAY);
     let s = a.get("/api/settings");
     assert_eq!(s["gemini_api_key_set"], true);
-    assert_eq!(s["assistant_name"], "Sunny");
+    assert_eq!(s["assistant_name"], "Miranda");
     let s = a.req("PUT", "/api/settings", json!({"user_name": " Sam ", "gemini_api_key": "SECRET", "latitude": 51.5}));
     assert_eq!(s.1["user_name"], "Sam");
     assert!(!a.state.contains("SECRET"));
@@ -687,14 +687,16 @@ fn morning_template_prefers_meaningful_fixed_points() {
 }
 
 #[test]
-fn briefing_cache_key_tracks_done_state_and_inputs() {
+fn briefing_cache_key_morning_ignores_done_state_evening_tracks_it() {
     let mut a = App::with_sample(TODAY);
     let k1 = a.get("/api/briefing?kind=morning")["cache_key"].clone();
     assert_eq!(a.get("/api/briefing?kind=morning")["cache_key"], k1);
     let day = a.get("/api/days?start=2026-11-02&days=1");
     let tid = day[0]["items"][1]["task_id"].clone();
+    let ev1 = a.get("/api/briefing?kind=evening")["cache_key"].clone();
     a.post("/api/occurrences/toggle", json!({"task_id": tid, "date": TODAY, "done": true}));
-    assert_ne!(a.get("/api/briefing?kind=morning")["cache_key"], k1);
+    assert_eq!(a.get("/api/briefing?kind=morning")["cache_key"], k1);
+    assert_ne!(a.get("/api/briefing?kind=evening")["cache_key"], ev1);
     let e = a.get("/api/briefing?kind=evening");
     assert!(e["template_text"].as_str().unwrap().contains("Goodnight") || e["template_text"].as_str().unwrap().contains("Sleep well") || e["template_text"].as_str().unwrap().contains("Rest up"));
     let w = a.get("/api/briefing?kind=weekly");
@@ -755,7 +757,7 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v2.gym.rotation.items = old8.clone();
     v2.gym.rotation.next_index = 2;
     assert!(crate::seed::migrate(&mut v2, TODAY));
-    assert_eq!(v2.version, 5);
+    assert_eq!(v2.version, 6);
     assert_eq!(names(&v2), ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"]);
     assert_eq!(v2.gym.rotation.next_index, 4, "still Legs + Abs 1 next");
     // v3 (8 + rest), next = the rest day
@@ -774,6 +776,21 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     custom.gym.rotation.items.swap(0, 1);
     assert!(crate::seed::migrate(&mut custom, TODAY));
     assert_eq!(custom.gym.rotation.items.len(), 8);
+}
+
+#[test]
+fn v6_migration_renames_only_the_default_assistant() {
+    let fresh: State = serde_json::from_str(&init_state(TODAY)).unwrap();
+    let mut a = fresh.clone();
+    a.version = 5;
+    a.settings.assistant_name = "Sunny".into();
+    assert!(crate::seed::migrate(&mut a, TODAY));
+    assert_eq!(a.settings.assistant_name, "Miranda");
+    let mut b = fresh.clone();
+    b.version = 5;
+    b.settings.assistant_name = "Poppy".into();
+    assert!(crate::seed::migrate(&mut b, TODAY));
+    assert_eq!(b.settings.assistant_name, "Poppy");
 }
 
 // ---- gym: missed days, skip-rest, skip

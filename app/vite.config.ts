@@ -18,8 +18,8 @@ export default defineConfig({
       injectRegister: false, // registered by src/updates.ts, which also handles reloading
       includeAssets: ["apple-touch-icon.png", "icon.png"],
       manifest: {
-        name: "Sunny — Personal Assistant",
-        short_name: "Sunny",
+        name: "Miranda — Personal Assistant",
+        short_name: "Miranda",
         description: "Your personal assistant: tasks, goals, gym and a daily briefing. Works offline.",
         lang: "en",
         start_url: base,

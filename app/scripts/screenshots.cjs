@@ -38,7 +38,7 @@ const forecast = () => {
   await page.waitForTimeout(300);
   await shot("settings");
   await shot("settings-full", true);
-  await page.getByText("What Sunny knows about you").scrollIntoViewIfNeeded();
+  await page.getByText("What Miranda knows about you").scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollBy(0, -10));
   await shot("settings-memory");
 

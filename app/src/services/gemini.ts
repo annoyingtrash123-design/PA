@@ -1,5 +1,18 @@
 // Google Gemini (generateContent) client and reply cleaning. No key -> callers use template texts.
+import { DAILY_BUDGET, getMainPausedUntil, getPausedUntil, isMainPaused, isPaused, pauseUntilFor, quotaMessage, recordUse, remaining, setMainPausedUntil, setPausedUntil } from "./ai-budget";
 import { getKey, getModel } from "./cache";
+
+/** The cheaper model tried once when the main one is out of quota. */
+export const LITE_MODEL = "gemini-3.8-flash-lite";
+let liteMissing = false; // remembered for the session once the lite model 404s
+
+let dateProvider: () => string = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+/** The app sets this to the date in the user's timezone; the daily budget resets on it. */
+export const setDateProvider = (fn: () => string) => void (dateProvider = fn);
+export const budgetDate = () => dateProvider();
 
 /** Remove markdown decoration and emojis so the text reads (and speaks) naturally. */
 export function cleanReply(text: string): string {
@@ -17,8 +30,7 @@ export function cleanReply(text: string): string {
   return t.trim();
 }
 
-/** Parse the digest reply: JSON, possibly fenced or with chatter around it. Returns null if unusable. */
-export function parseDigestJson(raw: string): { weather_comment: string | null; overview: string } | null {
+function parseJsonObject(raw: string): Record<string, unknown> | null {
   let s = raw.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();
@@ -36,7 +48,23 @@ export function parseDigestJson(raw: string): { weather_comment: string | null; 
     if (a >= 0 && b > a) obj = tryParse(s.slice(a, b + 1));
   }
   if (!obj || typeof obj !== "object") return null;
-  const o = obj as Record<string, unknown>;
+  return obj as Record<string, unknown>;
+}
+
+/** Parse the morning reply {"weather_comment","briefing"}. Returns null if unusable. */
+export function parseMorningJson(raw: string): { weather_comment: string | null; briefing: string } | null {
+  const o = parseJsonObject(raw);
+  if (!o) return null;
+  const briefing = typeof o.briefing === "string" ? cleanReply(o.briefing) : "";
+  if (!briefing) return null;
+  const wc = typeof o.weather_comment === "string" ? cleanReply(o.weather_comment) : "";
+  return { weather_comment: wc || null, briefing };
+}
+
+/** Parse the digest reply: JSON, possibly fenced or with chatter around it. Returns null if unusable. */
+export function parseDigestJson(raw: string): { weather_comment: string | null; overview: string } | null {
+  const o = parseJsonObject(raw);
+  if (!o) return null;
   const overview = typeof o.overview === "string" ? cleanReply(o.overview) : "";
   if (!overview) return null;
   const wc = typeof o.weather_comment === "string" ? cleanReply(o.weather_comment) : "";
@@ -51,9 +79,20 @@ export interface GenerateOptions {
   key?: string;
   maxTokens?: number;
   signal?: AbortSignal;
+  /** Test key: not blocked by the daily budget (still counted, and still blocked while paused). */
+  bypassBudget?: boolean;
 }
 
-export class GeminiError extends Error {}
+export class GeminiError extends Error {
+  /** HTTP status when Gemini answered */
+  status?: number;
+  /** Google's quota / rate limit (429, RESOURCE_EXHAUSTED) */
+  quota = false;
+  /** We did not call Gemini at all (paused or out of budget) */
+  blocked = false;
+  /** epoch ms when the quota should be back */
+  pausedUntil?: number;
+}
 
 /** How long one request may take before we give up and use the template text instead. */
 export const GEMINI_TIMEOUT_MS = 45_000;
@@ -74,21 +113,27 @@ async function post(model: string, key: string, body: unknown, signal: AbortSign
   });
 }
 
-async function errorMessage(res: Response): Promise<string> {
+async function errorInfo(res: Response): Promise<{ message: string; exhausted: boolean }> {
   try {
     const j = await res.json();
-    if (j?.error?.message) return String(j.error.message);
+    if (j?.error?.message) return { message: String(j.error.message), exhausted: j.error.status === "RESOURCE_EXHAUSTED" };
   } catch {
     // keep default
   }
-  return `Gemini said ${res.status}`;
+  return { message: `Gemini said ${res.status}`, exhausted: false };
+}
+const errorMessage = async (res: Response) => (await errorInfo(res)).message;
+
+function blocked(msg: string, pausedUntil?: number): GeminiError {
+  const e = new GeminiError(msg);
+  e.blocked = true;
+  e.quota = pausedUntil !== undefined;
+  e.pausedUntil = pausedUntil;
+  return e;
 }
 
-/** One generateContent call; resolves to the raw reply text. Times out after GEMINI_TIMEOUT_MS. */
-export async function generate(o: GenerateOptions): Promise<string> {
-  const key = o.key ?? getKey();
-  if (!key) throw new GeminiError("No Gemini key saved");
-  const model = o.model ?? getModel();
+/** One counted HTTP round trip to a model (with the thinking-setting retry). Throws GeminiError. */
+async function callModel(o: GenerateOptions, model: string, key: string): Promise<string> {
   const generationConfig: Record<string, unknown> = { temperature: 0.8, maxOutputTokens: o.maxTokens ?? 4096 };
   if (o.json) generationConfig.responseMimeType = "application/json";
   const thinking = thinkingFor(model);
@@ -103,12 +148,14 @@ export async function generate(o: GenerateOptions): Promise<string> {
   o.signal?.addEventListener("abort", () => ctl.abort());
   let res: Response;
   try {
+    recordUse(budgetDate());
     res = await post(model, key, body, ctl.signal);
     // a model that doesn't accept our thinking setting: try once more without it
     if (!res.ok && res.status === 400 && thinking) {
       const msg = await errorMessage(res.clone());
       if (/thinking/i.test(msg)) {
         delete generationConfig.thinkingConfig;
+        recordUse(budgetDate());
         res = await post(model, key, body, ctl.signal);
       }
     }
@@ -117,10 +164,71 @@ export async function generate(o: GenerateOptions): Promise<string> {
   } finally {
     clearTimeout(timer);
   }
-  if (!res.ok) throw new GeminiError(await errorMessage(res));
+  if (!res.ok) {
+    const info = await errorInfo(res);
+    const err = new GeminiError(info.message);
+    err.status = res.status;
+    if (res.status === 429 || info.exhausted) {
+      err.quota = true;
+      err.pausedUntil = pauseUntilFor(info.message, Date.now());
+    }
+    throw err;
+  }
   const j = await res.json();
   const parts: { text?: string }[] = j?.candidates?.[0]?.content?.parts ?? [];
   const text = parts.map((p) => p.text ?? "").join("");
   if (!text.trim()) throw new GeminiError("Gemini returned an empty reply");
   return o.json ? text : cleanReply(text);
 }
+
+/**
+ * One generateContent call; resolves to the reply text. Never calls Gemini while quota-paused or (unless
+ * bypassBudget) when the daily budget is used up; those throw a `blocked` error and are not counted.
+ * On a quota error for the main model, tries the lite model once.
+ */
+export async function generate(o: GenerateOptions): Promise<string> {
+  const key = o.key ?? getKey();
+  if (!key) throw new GeminiError("No Gemini key saved");
+  const model = o.model ?? getModel();
+  const explicit = o.model !== undefined || o.key !== undefined; // the Test key button: no fallback, no main/lite switching
+  const now = Date.now();
+  if (isPaused(now)) throw blocked(quotaMessage(getPausedUntil(), now), getPausedUntil());
+  if (!o.bypassBudget && remaining(budgetDate()) <= 0) throw blocked(`Today's AI allowance (${DAILY_BUDGET} requests) is used up`);
+  const canLite = !explicit && model !== LITE_MODEL && !liteMissing;
+  // main model already out of quota: go straight to lite
+  if (canLite && isMainPaused(now)) return callLite(o, key, getMainPausedUntil());
+  try {
+    return await callModel(o, model, key);
+  } catch (e) {
+    if (!(e instanceof GeminiError) || !e.quota) throw e;
+    const until = e.pausedUntil ?? pauseUntilFor(e.message, Date.now());
+    if (!canLite) {
+      setPausedUntil(until);
+      throw e;
+    }
+    setMainPausedUntil(until);
+    if (!o.bypassBudget && remaining(budgetDate()) <= 0) {
+      setPausedUntil(until);
+      throw e;
+    }
+    return callLite(o, key, until, e);
+  }
+}
+
+async function callLite(o: GenerateOptions, key: string, mainUntil: number, original?: GeminiError): Promise<string> {
+  if (remaining(budgetDate()) <= 0 && !o.bypassBudget) throw blocked(`Today's AI allowance (${DAILY_BUDGET} requests) is used up`);
+  try {
+    return await callModel(o, LITE_MODEL, key);
+  } catch (e) {
+    if (e instanceof GeminiError && (e.status === 404 || (e.status === 400 && /not found|not supported/i.test(e.message)))) {
+      liteMissing = true;
+      setPausedUntil(mainUntil);
+      throw original ?? blocked(quotaMessage(mainUntil, Date.now()), mainUntil);
+    }
+    if (e instanceof GeminiError && e.quota) setPausedUntil(e.pausedUntil ?? mainUntil);
+    throw e;
+  }
+}
+
+/** Test hook: forget the session's "lite model missing" flag. */
+export const _resetLiteMissing = () => void (liteMissing = false);

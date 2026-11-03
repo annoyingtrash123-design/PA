@@ -16,7 +16,23 @@ interface Cached {
   days: Record<string, Weather>;
 }
 
+let resolveFirst: () => void = () => {};
+let settled: Promise<void> = new Promise((r) => (resolveFirst = r));
+
+/** Resolves once the first forecast fetch has finished (or after `ms`), so AI texts see the weather. */
+export function weatherSettled(ms = 4000): Promise<void> {
+  return Promise.race([settled, new Promise<void>((r) => setTimeout(r, ms))]);
+}
+
 export async function refreshWeather(force = false): Promise<void> {
+  try {
+    await refreshInner(force);
+  } finally {
+    resolveFirst();
+  }
+}
+
+async function refreshInner(force: boolean): Promise<void> {
   const { latitude: lat, longitude: lon } = getState().settings;
   if (typeof lat !== "number" || typeof lon !== "number") return;
   const cached = await kvGet<Cached>(DB, "forecast");

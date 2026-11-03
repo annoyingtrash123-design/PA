@@ -1002,6 +1002,16 @@ pub fn template_for(env: &mut Env, kind: Kind, date: NaiveDate) -> String {
     template_text(&c, &weather)
 }
 
+/// The prompt with every done state removed (done flags, the suggested key task, workout-completed lines),
+/// so a cache key built from it only changes when the day's plan changes.
+fn plan_only(user: &str) -> String {
+    user.replace("; done: yes", "; done: no")
+        .lines()
+        .filter(|l| !l.starts_with("Suggested key task") && !l.starts_with("Workout"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `GET /api/briefing?kind=&date=`
 pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     let ctx = build_ctx(env, kind, date);
@@ -1009,7 +1019,8 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     let weather = if kind == Kind::Weekly { None } else { env.ctx.weather.get(&ds).cloned() };
     let system = system_prompt(&ctx);
     let user = context_text(&ctx, &weather);
-    let hash = fnv(&format!("{system}\n{user}"));
+    // The morning briefing is a plan for the day: ticking things off must not change its cache key.
+    let hash = if kind == Kind::Morning { fnv(&format!("{system}\n{}", plan_only(&user))) } else { fnv(&format!("{system}\n{user}")) };
     let text = template_text(&ctx, &weather);
     let affirmation = match &ctx.week {
         Some(w) => week_line(w),

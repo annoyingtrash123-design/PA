@@ -1,4 +1,4 @@
-# Sunny: Personal Assistant
+# Miranda: Personal Assistant
 
 An installable web app (PWA) that runs entirely on your phone: a spoken daily summary, a weekly task planner, goals, and a gym tracker.
 

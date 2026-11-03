@@ -383,7 +383,7 @@ pub fn digest(env: &mut Env, date: NaiveDate) -> Res<Value> {
     let mem = env.st.memory.clone();
     let weather = env.ctx.weather.get(&ds).cloned();
     let user = context(&items, date, &goals, &mem, &weather, &workout, &info);
-    let hash = fnv(&format!("{SYSTEM}\n{user}"));
+    let hash = fnv(&format!("{SYSTEM}\n{}", user.replace("; done: yes", "; done: no")));
     let weather_comment = weather.as_ref().map(|w| weather_comment_template(w, &mem, &items, &workout, &info, date));
     let overview = overview_template(&items, &goals, &workout, &info, date);
     Ok(json!({

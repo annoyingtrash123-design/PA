@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 5;
+pub const STATE_VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -19,7 +19,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            assistant_name: "Sunny".into(),
+            assistant_name: "Miranda".into(),
             user_name: String::new(),
             voice: String::new(),
             location_name: "Sydney".into(),

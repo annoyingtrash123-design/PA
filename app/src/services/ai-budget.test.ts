@@ -1,0 +1,73 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { canReuseLast, clockText, DAILY_BUDGET, formatDuration, getPausedUntil, isPaused, nextPacificMidnight, parseRetryInMs, pauseUntilFor, quotaMessage, recordUse, remaining, restingNotice, setPausedUntil, usedToday, type Store } from "./ai-budget";
+
+const mem = (): Store => {
+  const m = new Map<string, string>();
+  return { get: (k) => m.get(k) ?? "", set: (k, v) => void (v ? m.set(k, v) : m.delete(k)) };
+};
+let store: Store;
+beforeEach(() => (store = mem()));
+
+describe("daily budget", () => {
+  it("counts per date and resets on a new date", () => {
+    expect(remaining("2026-11-03", store)).toBe(DAILY_BUDGET);
+    recordUse("2026-11-03", store);
+    recordUse("2026-11-03", store);
+    expect(usedToday("2026-11-03", store)).toBe(2);
+    expect(remaining("2026-11-03", store)).toBe(DAILY_BUDGET - 2);
+    expect(usedToday("2026-11-04", store)).toBe(0);
+    recordUse("2026-11-04", store);
+    expect(usedToday("2026-11-04", store)).toBe(1);
+    expect(usedToday("2026-11-03", store)).toBe(0);
+  });
+  it("never goes below zero remaining", () => {
+    for (let i = 0; i < DAILY_BUDGET + 3; i++) recordUse("d", store);
+    expect(remaining("d", store)).toBe(0);
+  });
+});
+
+describe("retry-in parsing", () => {
+  it("parses hours, minutes and seconds", () => {
+    expect(parseRetryInMs("quota. Please retry in 5h48m34.5s.")).toBe(((5 * 60 + 48) * 60 + 34.5) * 1000);
+    expect(parseRetryInMs("Please retry in 28s")).toBe(28000);
+    expect(parseRetryInMs("Please retry in 3m10s")).toBe(190000);
+  });
+  it("returns null without a hint", () => {
+    expect(parseRetryInMs("You exceeded your current quota")).toBeNull();
+  });
+  it("falls back to the next Pacific midnight", () => {
+    const now = Date.UTC(2026, 10, 3, 12, 0, 0); // 04:00 PST
+    const until = nextPacificMidnight(now);
+    expect(until - now).toBe(20 * 3600 * 1000);
+    expect(pauseUntilFor("no hint", now)).toBe(until);
+    expect(pauseUntilFor("retry in 10s", now)).toBe(now + 11000);
+  });
+});
+
+describe("pause logic", () => {
+  it("is paused only until the stored time", () => {
+    expect(isPaused(1000, store)).toBe(false);
+    setPausedUntil(5000, store);
+    expect(getPausedUntil(store)).toBe(5000);
+    expect(isPaused(4999, store)).toBe(true);
+    expect(isPaused(5000, store)).toBe(false);
+  });
+  it("words the friendly messages", () => {
+    expect(formatDuration(((5 * 60) + 48) * 60000 - 20000)).toBe("5h 48m");
+    expect(quotaMessage(((5 * 60) + 48) * 60000, 0)).toBe("Google's free daily limit is used up. It resets in about 5h 48m.");
+    const until = Date.UTC(2026, 10, 3, 18, 59);
+    expect(clockText(until, "UTC")).toBe("6:59 pm");
+    setPausedUntil(until, store);
+    expect(restingNotice("Miranda", "d", until - 1000, "UTC", store)).toBe("Miranda's AI writing is resting until about 6:59 pm — this is the built-in summary.");
+    expect(restingNotice("Miranda", "d", until + 1000, "UTC", store)).toBeNull();
+  });
+});
+
+describe("reuse", () => {
+  it("reuses the last text for 3 hours", () => {
+    const last = { at: 1_000_000, key: "k" };
+    expect(canReuseLast(last, last.at + 2 * 3600_000)).toBe(true);
+    expect(canReuseLast(last, last.at + 3 * 3600_000)).toBe(false);
+    expect(canReuseLast(undefined, 5)).toBe(false);
+  });
+});

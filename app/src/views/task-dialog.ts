@@ -1,8 +1,6 @@
 // Add / edit task dialog.
 import { api, ApiError, getState } from "../core";
 import { icon } from "../icons";
-import { refineCategory } from "../services/ai-text";
-import { hasKey } from "../services/cache";
 import { button, confirmDialog, field, h, openModal, select, textInput, toast, toggle } from "../ui";
 import { derivePart, TIME_RE, WEEKDAY_SHORT } from "../util/dates";
 import { PART_LABELS } from "../util/nextup";
@@ -97,13 +95,6 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
     if (body.category_id === "auto") {
       const name = getState().categories.find((c) => c.id === saved.category_id)?.name;
       if (name) msg = `Filed under ${name}`;
-      if (hasKey())
-        void refineCategory(saved.id).then((better) => {
-          if (better && better !== name) {
-            toast(`Filed under ${better}`);
-            opts.onSaved();
-          }
-        });
     }
     toast(msg);
     opts.onSaved();

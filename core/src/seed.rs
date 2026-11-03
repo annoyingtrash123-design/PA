@@ -207,6 +207,10 @@ pub fn migrate(st: &mut State, today: &str) -> bool {
     if st.version < 5 {
         st.gym.next_since = Some(today.to_string());
     }
+    // v5 -> v6: the app and assistant are now called Miranda (custom names are left alone)
+    if st.version < 6 && st.settings.assistant_name == "Sunny" {
+        st.settings.assistant_name = "Miranda".into();
+    }
     st.version = STATE_VERSION;
     true
 }

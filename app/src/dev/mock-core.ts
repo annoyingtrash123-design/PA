@@ -25,8 +25,8 @@ const TPL: [string, number[]][] = [
 
 export function init_state(today: string): string {
   const s: Any = {
-    version: 5, next_id: 100,
-    settings: { assistant_name: "Sunny", user_name: "", voice: "", location_name: "Sydney", latitude: -33.8688, longitude: 151.2093, timezone: "Australia/Sydney" },
+    version: 6, next_id: 100,
+    settings: { assistant_name: "Miranda", user_name: "", voice: "", location_name: "Sydney", latitude: -33.8688, longitude: 151.2093, timezone: "Australia/Sydney" },
     categories: CATS.map(([name, color], i) => ({ id: i + 1, name, color })),
     tasks: [], completions: {}, checklist_done: {}, rolled_over: {}, days_off: [], goals: [],
     memory: {
@@ -301,7 +301,7 @@ function route(s: Any, ctx: Any, method: string, path: string, body: Any): { bod
   }
   if (M(/^\/api\/sessions\/(\d+)\/sets$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.sets = body.sets; return mut(x); }
   if (M(/^\/api\/sessions\/(\d+)\/cardio$/) && is("PUT")) { const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.cardio = { activity: body.activity, minutes: body.minutes }; return mut(x); }
-  if (is("GET") && p === "/api/state/migrate") return ro({ version: 5 });
+  if (is("GET") && p === "/api/state/migrate") return ro({ version: 6 });
   if (M(/^\/api\/sessions\/(\d+)\/complete$/) && is("POST")) {
     const x = s.gym.sessions.find((y: Any) => y.id === +m![1]); if (!x) throw nf(); x.completed = true;
     const r = s.gym.rotation; const n = r.items.length;

@@ -8,7 +8,7 @@ Errors: non-2xx with `{"error": "message"}`.
 `PUT /api/settings` body: partial `Settings` → `Settings`
 ```json
 Settings = {
-  "assistant_name": "Sunny",
+  "assistant_name": "Miranda",
   "user_name": "",                // what the assistant calls you
   "voice": "en-US-JennyNeural",   // or "en-US-AriaNeural"
   "location_name": "Sydney",

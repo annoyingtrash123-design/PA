@@ -23,9 +23,9 @@ AI-generated texts are cached by the UI in IndexedDB (`pa-ai-cache`, keyed by th
 
 ```json
 State = {
-  "version": 2,
+  "version": 6,
   "next_id": 100,
-  "settings": {"assistant_name":"Sunny","user_name":"","voice":"", "location_name":"Sydney",
+  "settings": {"assistant_name":"Miranda","user_name":"","voice":"", "location_name":"Sydney",
                "latitude":-33.8688,"longitude":151.2093,"timezone":"Australia/Sydney"},
   "categories": [Category],
   "tasks": [Task],                          // incl. "category_auto"
@@ -75,9 +75,12 @@ The core cannot call the network, so these return everything the UI needs to do 
   Gemini reply is JSON `{"weather_comment","overview"}` (parse tolerantly; guard only the overview).
 - `GET /api/day-note?date=` → `{"date","cache_key","system_prompt","user_prompt","template_text"}`.
 - Auto-categorisation: `POST/PUT /api/tasks` with `"category_id":"auto"` categorises immediately with the
-  keyword table (so it works offline), sets `category_auto: true`. Then, if a key is saved, the UI calls
-  `GET /api/tasks/{id}/categorise-prompt` → `{"system_prompt","user_prompt","names":[...]}`, asks Gemini,
-  and if the reply matches a name (case-insensitive) calls `PUT /api/tasks/{id}/category {"name": "...", "auto": true}`.
+  keyword table (so it works offline), sets `category_auto: true`. Gemini is not used for this (the free tier is tiny).
+- Gemini budget (`app/src/services/ai-budget.ts`, `gemini.ts`): at most 12 requests per local date (localStorage
+  `pa-ai-usage`); a 429/RESOURCE_EXHAUSTED stores `pa-ai-paused-until` (from "Please retry in XhYmZs", else next US Pacific
+  midnight) and blocks all calls; the main model's own pause (`pa-ai-main-paused-until`) falls back to `gemini-3.8-flash-lite`.
+  Home makes one request per kind per day (the morning one returns `{"weather_comment","briefing"}`); the morning key ignores
+  done states; evening/weekly texts are reused for 3 hours per date.
 - Holidays: UI fetches `https://date.nager.at/api/v3/PublicHolidays/{year}/AU` (country from the region prefix),
   then `POST /api/holidays/filter {"region":"AU-NSW","raw":[...]}` → `[{"date","name"}]`; caches per year+region; passes in ctx.
 - TTS: entirely UI (Web Speech API).
@@ -94,8 +97,8 @@ no notes); gym: the owner's routine (Push 1/2, Pull 1/2, Legs + Abs 1/2, Cardio;
 counterweight machines) and rotation Push 1, Pull 1, Legs + Abs 1, Cardio, Push 2, Pull 2, Legs + Abs 2, Cardio; no sessions, tasks or goals.
 
 ### State versions and migration
-`State.version` is 2. Every `call` first upgrades an older state (`seed::migrate`) and, when it did, returns the upgraded state
-in `state` even for a GET, so the UI persists it; `startCore` additionally calls `GET /api/state/migrate` (body `{"version":2}`) once
+`State.version` is 6. Every `call` first upgrades an older state (`seed::migrate`) and, when it did, returns the upgraded state
+in `state` even for a GET, so the UI persists it; `startCore` additionally calls `GET /api/state/migrate` (body `{"version":6}`) once
 for a stored v1 state. v1 -> v2: if the gym templates are exactly the six old generic ones (Push A, Push B, Pull A, Pull B, Legs A,
 Legs B; never customised) the whole gym section is replaced by the new defaults (sessions are dropped when all belong to those
 templates; otherwise they are kept with the exercises they reference). Any other state only gains the new fields (serde defaults).

@@ -79,4 +79,4 @@ export function api<T = any>(method: string, path: string, body?: unknown): T {
 
 export const now = () => zonedNow(getState().settings.timezone);
 export const today = () => now().today;
-export const assistantName = () => getState().settings.assistant_name || "Sunny";
+export const assistantName = () => getState().settings.assistant_name || "Miranda";

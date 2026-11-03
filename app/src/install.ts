@@ -37,7 +37,7 @@ function showBanner() {
     "div",
     { class: "install-banner", role: "dialog", "aria-label": "Install app" },
     h("img", { src: `${import.meta.env.BASE_URL}icon-192.png`, alt: "" }),
-    h("div", { class: "install-text" }, h("strong", null, "Install Sunny"), h("span", null, ios ? "Tap the Share button, then “Add to Home Screen”." : "Add it to your home screen. Works offline.")),
+    h("div", { class: "install-text" }, h("strong", null, "Install Miranda"), h("span", null, ios ? "Tap the Share button, then “Add to Home Screen”." : "Add it to your home screen. Works offline.")),
     ios ? null : button("Install", async () => { const e = deferred; deferred = null; banner.remove(); if (e) { await e.prompt(); await e.userChoice; } }),
     h("button", { type: "button", class: "icon-btn sm", "aria-label": "Close", onclick: close }, "×"),
   );

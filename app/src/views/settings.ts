@@ -1,11 +1,13 @@
 import { api, ApiError, assistantName, getState, resetEverything } from "../core";
-import { testKey } from "../services/ai-text";
+import { aiUsage, testKey } from "../services/ai-text";
 import { DEFAULT_MODEL, getKey, getModel, hasKey, setKey, setModel } from "../services/cache";
 import { refreshHolidays } from "../services/holidays";
 import { kvClear } from "../services/idb";
 import { listVoices } from "../services/speech";
 import { resetWeather } from "../services/weather";
 import { button, card, clear, confirmDialog, field, h, iconBtn, muted, openModal, readAloud, select, textInput, toast, toggle } from "../ui";
+import { quotaMessage } from "../services/ai-budget";
+import { GeminiError } from "../services/gemini";
 import { isValidTimezone, WEEKDAY_SHORT } from "../util/dates";
 import type { Category, Memory } from "../types";
 
@@ -65,6 +67,11 @@ function build(redraw: () => void): HTMLElement[] {
   const fKey = h("input", { class: "input", type: "password", autocomplete: "off", placeholder: hasKey() ? "Key saved (leave empty to keep it)" : "Paste your key", "aria-label": "Gemini API key" });
   const fModel = textInput(getModel(), { placeholder: DEFAULT_MODEL });
   const keyStatus = h("p", { class: "small", hidden: true });
+  const usageText = () => {
+    const u = aiUsage();
+    return `AI uses today: ${u.used} of ${u.limit}`;
+  };
+  const usageLine = h("p", { class: "muted small" }, usageText());
   const runTest = async () => {
     const key = fKey.value.trim() || getKey();
     if (!key) return setStatus("Paste a key first.", true);
@@ -72,8 +79,11 @@ function build(redraw: () => void): HTMLElement[] {
     try {
       await testKey(key, fModel.value.trim() || DEFAULT_MODEL);
       setStatus("Key works.", false, true);
+      usageLine.textContent = usageText();
     } catch (e) {
-      setStatus(`That didn't work: ${(e as Error).message}`, true);
+      if (e instanceof GeminiError && e.quota) setStatus(quotaMessage(e.pausedUntil ?? Date.now() + 3600_000, Date.now()), true);
+      else setStatus(`That didn't work: ${(e as Error).message}`, true);
+      usageLine.textContent = usageText();
     }
   };
   const setStatus = (t: string, bad: boolean, ok = false) => {
@@ -91,7 +101,7 @@ function build(redraw: () => void): HTMLElement[] {
     const tz = fTz.value.trim() || "Australia/Sydney";
     if (!isValidTimezone(tz)) return toast("That timezone isn't recognised. Try something like Australia/Sydney.");
     const before = getState().settings;
-    const body: Record<string, unknown> = { assistant_name: fAssistant.value.trim() || "Sunny", user_name: fUser.value.trim(), voice: fVoice.value, location_name: fLoc.value.trim(), timezone: tz };
+    const body: Record<string, unknown> = { assistant_name: fAssistant.value.trim() || "Miranda", user_name: fUser.value.trim(), voice: fVoice.value, location_name: fLoc.value.trim(), timezone: tz };
     if (lat !== undefined) body.latitude = lat;
     if (lon !== undefined) body.longitude = lon;
     try {
@@ -163,19 +173,19 @@ function build(redraw: () => void): HTMLElement[] {
   return [
     h("h2", { class: "title-lg", style: { fontSize: "22px" } }, "Settings"),
     card("stack", h("h3", { class: "title-sm" }, "About you"), field("Assistant name", fAssistant), field("Your name", fUser)),
-    card("stack", h("h3", { class: "title-sm" }, "Voice"), field("Voice", fVoice, "Voices come from your device, so the list differs between phones and browsers."), readAloud(() => `Hi! I'm ${fAssistant.value.trim() || "Sunny"}. This is how I'll sound when I brief you.`, () => fVoice.value, "Preview voice", false, false)),
+    card("stack", h("h3", { class: "title-sm" }, "Voice"), field("Voice", fVoice, "Voices come from your device, so the list differs between phones and browsers."), readAloud(() => `Hi! I'm ${fAssistant.value.trim() || "Miranda"}. This is how I'll sound when I brief you.`, () => fVoice.value, "Preview voice", false, false)),
     card("stack", h("h3", { class: "title-sm" }, "Weather location"), field("Location name", fLoc), h("div", { class: "pair" }, field("Latitude", fLat), field("Longitude", fLon)), button("Use my location", useLocation, { kind: "outline", icon: "place" }), geoStatus, field("Timezone", fTz, "Decides what \"today\" means, e.g. Australia/Sydney")),
     card("stack", h("h3", { class: "title-sm" }, "AI (Gemini)"),
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
       field("Gemini API key", fKey, hasKey() ? "A key is saved." : undefined),
       h("a", { class: "link small", href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener noreferrer" }, "Get a free key at Google AI Studio"),
-      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus),
+      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
     memoryCard(name),
     categoriesCard(),
     card("stack", h("h3", { class: "title-sm" }, "Backup"), muted("Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick),
     card("stack", h("h3", { class: "title-sm" }, "Data"), h("div", { class: "row wrap" }, button("Load sample data", () => void loadSample(), { kind: "outline", icon: "add" }), button("Reset everything", () => void reset(), { kind: "text", icon: "delete", cls: "danger" }))),
-    h("p", { class: "muted small", style: { textAlign: "center" } }, "Sunny runs entirely on your device."),
+    h("p", { class: "muted small", style: { textAlign: "center" } }, "Miranda runs entirely on your device."),
   ].filter(Boolean) as HTMLElement[];
 }
 

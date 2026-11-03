@@ -1,4 +1,4 @@
-# Sunny: web app
+# Miranda: web app
 
 Vanilla TypeScript + Vite + vite-plugin-pwa. The Rust core (`../core`, wrapped by `../wasm`) runs in the browser
 as WebAssembly; the whole state is one JSON document kept in IndexedDB (`pa-state`). No server.
