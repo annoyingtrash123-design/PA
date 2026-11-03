@@ -119,9 +119,9 @@ export function renderHome(root: HTMLElement): () => void {
   clear(
     root,
     h("div", null, h("h2", { class: "title-lg" }, hello), h("p", { class: "muted", style: { marginTop: "2px", fontSize: "14px" } }, longDay(clock.today))),
-    playHolder,
     weatherHolder,
     affHolder,
+    playHolder,
     segHolder,
     dayHolder,
   );
