@@ -55,34 +55,69 @@ export interface GenerateOptions {
 
 export class GeminiError extends Error {}
 
-/** One generateContent call; resolves to the raw reply text. */
+/** How long one request may take before we give up and use the template text instead. */
+export const GEMINI_TIMEOUT_MS = 45_000;
+
+/** Thinking settings per model family: keep thinking minimal so replies come back quickly. */
+export function thinkingFor(model: string): Record<string, unknown> | null {
+  if (/2\.5/.test(model)) return { thinkingBudget: 0 };
+  if (/^gemini-[3-9]/.test(model)) return { thinkingLevel: "low" };
+  return null;
+}
+
+async function post(model: string, key: string, body: unknown, signal: AbortSignal): Promise<Response> {
+  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": key },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+async function errorMessage(res: Response): Promise<string> {
+  try {
+    const j = await res.json();
+    if (j?.error?.message) return String(j.error.message);
+  } catch {
+    // keep default
+  }
+  return `Gemini said ${res.status}`;
+}
+
+/** One generateContent call; resolves to the raw reply text. Times out after GEMINI_TIMEOUT_MS. */
 export async function generate(o: GenerateOptions): Promise<string> {
   const key = o.key ?? getKey();
   if (!key) throw new GeminiError("No Gemini key saved");
   const model = o.model ?? getModel();
-  const generationConfig: Record<string, unknown> = { temperature: 0.8, maxOutputTokens: o.maxTokens ?? 2048 };
+  const generationConfig: Record<string, unknown> = { temperature: 0.8, maxOutputTokens: o.maxTokens ?? 4096 };
   if (o.json) generationConfig.responseMimeType = "application/json";
-  if (/2\.5/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: o.system }] },
-      contents: [{ role: "user", parts: [{ text: o.user }] }],
-      generationConfig,
-    }),
-    signal: o.signal,
-  });
-  if (!res.ok) {
-    let msg = `Gemini said ${res.status}`;
-    try {
-      const j = await res.json();
-      if (j?.error?.message) msg = String(j.error.message);
-    } catch {
-      // keep default
+  const thinking = thinkingFor(model);
+  if (thinking) generationConfig.thinkingConfig = thinking;
+  const body = {
+    systemInstruction: { parts: [{ text: o.system }] },
+    contents: [{ role: "user", parts: [{ text: o.user }] }],
+    generationConfig,
+  };
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), GEMINI_TIMEOUT_MS);
+  o.signal?.addEventListener("abort", () => ctl.abort());
+  let res: Response;
+  try {
+    res = await post(model, key, body, ctl.signal);
+    // a model that doesn't accept our thinking setting: try once more without it
+    if (!res.ok && res.status === 400 && thinking) {
+      const msg = await errorMessage(res.clone());
+      if (/thinking/i.test(msg)) {
+        delete generationConfig.thinkingConfig;
+        res = await post(model, key, body, ctl.signal);
+      }
     }
-    throw new GeminiError(msg);
+  } catch (e) {
+    throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
+  } finally {
+    clearTimeout(timer);
   }
+  if (!res.ok) throw new GeminiError(await errorMessage(res));
   const j = await res.json();
   const parts: { text?: string }[] = j?.candidates?.[0]?.content?.parts ?? [];
   const text = parts.map((p) => p.text ?? "").join("");

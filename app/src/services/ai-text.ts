@@ -53,11 +53,22 @@ export function getBriefing(kind: "morning" | "evening" | "weekly", date: string
   });
 }
 
+/** The instant template version of a briefing (no network), shown while the AI one is written. */
+export function templateBriefing(kind: "morning" | "evening" | "weekly", date: string): string {
+  return api<BriefingPrep>("GET", `/api/briefing?kind=${kind}&date=${date}`).template_text;
+}
+
 export interface Digest {
   weather: Weather | null;
   weather_comment: string | null;
   overview: string;
   source: "gemini" | "template";
+}
+
+/** The instant template version of the digest (no network). */
+export function templateDigest(date: string): Digest {
+  const prep = api<DigestPrep>("GET", `/api/digest?date=${date}`);
+  return { weather: prep.weather, weather_comment: prep.template.weather_comment, overview: prep.template.overview, source: "template" };
 }
 
 export function getDigest(date: string): Promise<Digest> {
@@ -101,5 +112,5 @@ export async function refineCategory(taskId: number): Promise<string | null> {
 }
 
 export async function testKey(key: string, model: string): Promise<string> {
-  return generate({ system: "You are a friendly assistant.", user: "Reply with exactly: Hello, your key works.", key, model, maxTokens: 32 });
+  return generate({ system: "You are a friendly assistant.", user: "Reply with exactly: Hello, your key works.", key, model, maxTokens: 512 });
 }
