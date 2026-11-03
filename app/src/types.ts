@@ -199,6 +199,8 @@ export interface BriefingPrep {
   affirmation?: string;
   template_text: string;
   cache_key: string;
+  /** hash of the plan the text is about (no weather); changes when plans change */
+  plan_fingerprint?: string;
   system_prompt: string;
   user_prompt: string;
   max_words?: number;

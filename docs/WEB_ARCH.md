@@ -79,8 +79,12 @@ The core cannot call the network, so these return everything the UI needs to do 
 - Gemini budget (`app/src/services/ai-budget.ts`, `gemini.ts`): at most 12 requests per local date (localStorage
   `pa-ai-usage`); a 429/RESOURCE_EXHAUSTED stores `pa-ai-paused-until` (from "Please retry in XhYmZs", else next US Pacific
   midnight) and blocks all calls; the main model's own pause (`pa-ai-main-paused-until`) falls back to `gemini-3.8-flash-lite`.
-  Home makes one request per kind per day (the morning one returns `{"weather_comment","briefing"}`); the morning key ignores
-  done states; evening/weekly texts are reused for 3 hours per date.
+  Texts are written once per (kind, date) (weekly: per week start), stored in `pa-ai-cache` as `morning:DATE` / `evening:DATE` /
+  `week:MONDAY` with the briefing's `plan_fingerprint` (core: items' titles/times/parts of day + workout name; evening also
+  done states; weekly done titles + sessions; never weather). Only the first text is automatic; weather refreshes, edits and
+  done-states never regenerate. If the fingerprint differs, a "Plans changed — update summary" button regenerates on tap
+  (budget/pause respected, toast if blocked). Weekly is automatic for the current week only; other weeks show a cached text or
+  the template with a "Write overview" button. Rules live in `services/ai-policy.ts` (unit tested).
 - Holidays: UI fetches `https://date.nager.at/api/v3/PublicHolidays/{year}/AU` (country from the region prefix),
   then `POST /api/holidays/filter {"region":"AU-NSW","raw":[...]}` → `[{"date","name"}]`; caches per year+region; passes in ctx.
 - TTS: UI only. Phone voice = Web Speech API; Natural voice = Gemini TTS (see "Natural voice" below).

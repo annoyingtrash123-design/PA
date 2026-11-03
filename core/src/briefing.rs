@@ -1012,6 +1012,31 @@ fn plan_only(user: &str) -> String {
         .join("\n")
 }
 
+/// A short fingerprint of what the text is about: the plan (titles, times, parts of the day, workout name),
+/// plus done states for the evening; for the weekly overview what was done and the gym sessions.
+/// Never includes weather. The UI regenerates a written text only when the person asks and this changed.
+fn plan_fingerprint(ctx: &Ctx) -> String {
+    let mut s = String::new();
+    match &ctx.week {
+        Some(w) => {
+            s.push_str(&format!("done:{}|sessions:{}", w.done_titles.join(";"), w.sessions.join(";")));
+        }
+        None => {
+            for o in &ctx.items {
+                s.push_str(&format!("{}|{}|{}|{}", o.task_id, o.title, o.time.clone().unwrap_or_default(), o.part_of_day));
+                if ctx.kind == Kind::Evening {
+                    s.push_str(if o.done { "|y" } else { "|n" });
+                }
+                s.push('\n');
+            }
+            if let Some(wp) = &ctx.workout {
+                s.push_str(&format!("workout:{}", if wp.rest { "rest" } else { wp.name.as_str() }));
+            }
+        }
+    }
+    fnv(&s)
+}
+
 /// `GET /api/briefing?kind=&date=`
 pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
     let ctx = build_ctx(env, kind, date);
@@ -1038,6 +1063,7 @@ pub fn briefing(env: &mut Env, kind: Kind, date: NaiveDate) -> Res<Value> {
         "affirmation": affirmation,
         "template_text": text,
         "cache_key": format!("briefing:{}:{ds}:{hash}", kind.name()),
+        "plan_fingerprint": plan_fingerprint(&ctx),
         "system_prompt": system,
         "user_prompt": user,
         "max_words": kind.max_words(),

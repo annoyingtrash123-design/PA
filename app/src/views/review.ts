@@ -1,8 +1,8 @@
 import { api, getState, today } from "../core";
-import { getBriefing } from "../services/ai-text";
+import { getBriefing, type BriefingResult } from "../services/ai-text";
 import { stop as stopSpeech } from "../services/speech";
 import { icon } from "../icons";
-import { button, card, clear, h, iconBtn, readAloud } from "../ui";
+import { button, card, clear, h, iconBtn, readAloud, toast } from "../ui";
 import { addDays, dayMonth, mondayOf } from "../util/dates";
 import { paragraphs } from "../util/text";
 import type { Day } from "../types";
@@ -41,12 +41,27 @@ export function renderReview(root: HTMLElement): void {
       bars,
     );
 
-    void getBriefing("weekly", anchor).then((b) => {
-      if (my !== token) return;
+    const show = (b: BriefingResult) => {
       const gym = b.prep.stats?.gym_sessions;
-      if (typeof gym === "number") tiles.appendChild(tile("Gym sessions", String(gym), "gym"));
+      if (typeof gym === "number" && !tiles.querySelector(".tile-gym")) tiles.appendChild(tile("Gym sessions", String(gym), "gym"));
       const text = b.text || "I couldn't put the week into words just now.";
-      clear(textHolder, ...paragraphs(text).map((p) => h("p", null, p)), readAloud(() => text, () => getState().settings.voice));
+      const ask = async () => {
+        clear(textHolder, h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, "Looking back over the week…")));
+        const r = await getBriefing("weekly", anchor, { force: true }).catch(() => null);
+        if (my !== token) return;
+        if (r?.notice) toast(r.notice);
+        show(r ?? b);
+      };
+      clear(
+        textHolder,
+        ...paragraphs(text).map((p) => h("p", null, p)),
+        b.canWrite ? button("Write overview", () => void ask(), { kind: "tonal", icon: "insights" }) : null,
+        b.outdated ? button("Plans changed — update summary", () => void ask(), { kind: "text", cls: "small" }) : null,
+        readAloud(() => text, () => getState().settings.voice),
+      );
+    };
+    void getBriefing("weekly", anchor).then((b) => {
+      if (my === token) show(b);
     }).catch(() => {
       if (my === token) clear(textHolder, h("p", { class: "muted" }, "I couldn't put the week into words just now."));
     });
@@ -55,5 +70,5 @@ export function renderReview(root: HTMLElement): void {
 }
 
 function tile(label: string, value: string, ic: string): HTMLElement {
-  return h("div", { class: "tile" }, icon(ic, 22), h("span", { class: "val" }, value), h("span", { class: "lbl" }, label));
+  return h("div", { class: `tile tile-${ic}` }, icon(ic, 22), h("span", { class: "val" }, value), h("span", { class: "lbl" }, label));
 }

@@ -31,7 +31,6 @@ export const USAGE_KEY = "pa-ai-usage";
 export const PAUSED_KEY = "pa-ai-paused-until";
 export const MAIN_PAUSED_KEY = "pa-ai-main-paused-until";
 export const TTS_PAUSED_KEY = "pa-tts-paused-until";
-export const REGEN_MS = 3 * 60 * 60 * 1000;
 
 // ---- daily budget (counter per local date)
 export function usedToday(date: string, store: Store = lsStore): number {
@@ -119,11 +118,3 @@ export function restingNotice(name: string, date: string, nowMs: number, timeZon
   if (remaining(date, store) <= 0) return `${name} has used today's AI writing allowance — this is the built-in summary.`;
   return null;
 }
-
-// ---- reuse rules
-export interface LastEntry {
-  at: number;
-  key: string;
-}
-/** Evening and weekly texts are regenerated at most once per 3 hours for the same date. */
-export const canReuseLast = (last: LastEntry | undefined, nowMs: number): boolean => !!last && nowMs - last.at < REGEN_MS;

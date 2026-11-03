@@ -182,7 +182,7 @@ function build(redraw: () => void): HTMLElement[] {
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
       field("Gemini API key", fKey, hasKey() ? `A key is saved, ending in …${getKey().slice(-4)}. Match it on aistudio.google.com/apikey to see which Google account it belongs to.` : undefined),
       h("a", { class: "link small", href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener noreferrer" }, "Get a free key at Google AI Studio"),
-      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine),
+      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
     memoryCard(name),
     categoriesCard(),

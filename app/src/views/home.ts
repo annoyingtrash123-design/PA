@@ -1,9 +1,10 @@
 import { assistantName, getState, now, today } from "../core";
+import type { BriefingResult } from "../services/ai-text";
 import { aiNotice, cachedWeatherComment, getBriefing, templateBriefing, templateDigest, type Digest } from "../services/ai-text";
 import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
-import { card, chip, clear, h, readAloud, segmented } from "../ui";
+import { button, card, chip, clear, h, readAloud, segmented, toast } from "../ui";
 import { greeting, longDay } from "../util/dates";
 import { paragraphs } from "../util/text";
 
@@ -33,7 +34,7 @@ export function renderHome(root: HTMLElement): () => void {
     clear(weatherHolder, card("raised stack", h("div", { class: "weather-top" }, icon(weatherIconName(w.summary), 26), h("div", null, h("div", { class: "title-sm", style: { color: "var(--text)" } }, w.summary), loc ? h("div", { class: "muted small" }, loc) : null)), h("div", { class: "row wrap", style: { gap: "8px" } }, ...chips), digest?.weather_comment ? h("p", { class: "comment" }, digest.weather_comment) : null));
   };
 
-  const drawDay = (text: string | null | undefined, busy: boolean, note?: string, resting?: string | null) => {
+  const drawDay = (text: string | null | undefined, busy: boolean, note?: string, resting?: string | null, onUpdate?: (() => void) | null) => {
     if (busy) return clear(dayHolder, card("raised", h("div", { class: "row", style: { gap: "12px" } }, h("span", { class: "spinner" }), h("span", { class: "muted" }, `${name} is looking at your day…`))));
     const body = text || "I couldn't put your day into words just now. Check the Tasks tab for what's on.";
     const title = kind === "morning" ? "Your day" : "Your wind-down";
@@ -45,9 +46,25 @@ export function renderHome(root: HTMLElement): () => void {
         note ? h("div", { class: "row muted small", style: { gap: "8px" } }, h("span", { class: "spinner" }), note) : null,
         ...paragraphs(body).map((p) => h("p", null, p)),
         resting ? h("p", { class: "muted small" }, resting) : null,
+        onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
         readAloud(() => body, () => getState().settings.voice, "Read it to me", !text),
       ),
     );
+  };
+
+  const show = (b: BriefingResult | null, shown: string | null, date: string) => {
+    const update = b?.outdated ? () => void regenerate(date) : null;
+    drawDay(b?.text || shown, false, undefined, b?.source === "template" ? aiNotice() : null, update);
+  };
+  const regenerate = async (date: string) => {
+    const my = ++token;
+    drawDay(null, true);
+    const b = await getBriefing(kind!, date, { force: true }).catch(() => null);
+    if (my !== token) return;
+    if (b?.notice) toast(b.notice);
+    if (digest && b?.weather_comment) digest = { ...digest, weather_comment: b.weather_comment };
+    drawWeather();
+    show(b, templateBriefing(kind!, date), date);
   };
 
   const load = async () => {
@@ -63,14 +80,14 @@ export function renderHome(root: HTMLElement): () => void {
     } catch {
       drawDay(null, true);
     }
-    // ONE Gemini request per kind per day: the morning one also writes the weather comment
+    // Only the first text of the day is automatic (the morning one also writes the weather comment); later changes need a tap
     const b = await getBriefing(kind!, date).catch(() => null);
     if (my !== token) return;
     const wc = b?.weather_comment ?? (b ? await cachedWeatherComment(date) : null);
     if (my !== token) return;
     if (digest && wc) digest = { ...digest, weather_comment: wc };
     drawWeather();
-    drawDay(b?.text || shown, false, undefined, b?.source === "template" ? aiNotice() : null);
+    show(b, shown, date);
   };
 
   const segHolder = h("div", { class: "row", style: { justifyContent: "center" } });
@@ -91,7 +108,7 @@ export function renderHome(root: HTMLElement): () => void {
   );
   void load();
   return onContextUpdate(() => {
-    // weather arrived after first paint: refresh the weather card + day text (cached AI text is reused)
+    // weather arrived after first paint: refresh the weather card; the stored AI text is reused, never rewritten
     void load();
   });
 }

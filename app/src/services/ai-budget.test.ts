@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { canReuseLast, clockText, DAILY_BUDGET, formatDuration, getPausedUntil, isPaused, nextPacificMidnight, parseRetryInMs, pauseUntilFor, quotaMessage, recordUse, remaining, restingNotice, setPausedUntil, usedToday, type Store } from "./ai-budget";
+import { clockText, DAILY_BUDGET, formatDuration, getPausedUntil, isPaused, nextPacificMidnight, parseRetryInMs, pauseUntilFor, quotaMessage, recordUse, remaining, restingNotice, setPausedUntil, usedToday, type Store } from "./ai-budget";
 
 const mem = (): Store => {
   const m = new Map<string, string>();
@@ -60,14 +60,5 @@ describe("pause logic", () => {
     setPausedUntil(until, store);
     expect(restingNotice("Miranda", "d", until - 1000, "UTC", store)).toBe("Miranda's AI writing is resting until about 6:59 pm — this is the built-in summary.");
     expect(restingNotice("Miranda", "d", until + 1000, "UTC", store)).toBeNull();
-  });
-});
-
-describe("reuse", () => {
-  it("reuses the last text for 3 hours", () => {
-    const last = { at: 1_000_000, key: "k" };
-    expect(canReuseLast(last, last.at + 2 * 3600_000)).toBe(true);
-    expect(canReuseLast(last, last.at + 3 * 3600_000)).toBe(false);
-    expect(canReuseLast(undefined, 5)).toBe(false);
   });
 });
