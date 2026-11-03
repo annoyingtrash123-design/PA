@@ -56,11 +56,9 @@ fn qty(n: usize) -> &'static str {
     }
 }
 
+/// The task as it reads mid-sentence ("making some book club inquiries", "coffee with Alex at 6 PM").
 fn phrase(o: &Occurrence) -> String {
-    match &o.time {
-        Some(t) => format!("{} at {}", o.title, say_time(t)),
-        None => o.title.clone(),
-    }
+    crate::taskvoice::inline_phrase(o)
 }
 
 fn title_words(o: &Occurrence) -> Vec<String> {
@@ -207,7 +205,7 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
     };
     v(vec![
         format!("It's a steady day, and it's spread out nicely. Start with {kp}.{then_second} {breather}"),
-        format!("Nothing is crowded today. {kp} is the anchor, so begin there. {breather}"),
+        format!("Nothing is crowded today. {} is the anchor, so begin there. {breather}", cap(&kp)),
     ])
 }
 

@@ -732,7 +732,7 @@ fn morning_template_parts_are_separate_and_specific() {
             }
             // affirmation: short, specific (names a task from the plan), no stats, no cliches
             let titles: Vec<String> = a.get(&format!("/api/days?start={day}&days=1"))[0]["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap().to_string()).collect();
-            assert!(titles.iter().any(|t| aff.contains(t.as_str())), "{day}: affirmation names no task: {aff} / {titles:?}");
+            assert!(titles.iter().any(|t| aff.to_lowercase().contains(&t.to_lowercase()) || aff.contains(crate::taskvoice::task_phrase(t).text())), "{day}: affirmation names no task: {aff} / {titles:?}");
             assert!(words_in(&aff) <= 60, "{aff}");
             for part in [&greeting, &aff, &body, &s("weather_comment")] {
                 assert!(!has_stats(part), "{part}");
@@ -755,7 +755,7 @@ fn morning_template_parts_are_separate_and_specific() {
 fn morning_template_prefers_meaningful_fixed_points() {
     let mut a = App::with_sample(TODAY);
     let text = morning(&mut a, TODAY);
-    assert!(text.contains("Team stand-up at 10:15 AM"), "{text}");
+    assert!(text.contains("team stand-up at 10:15 AM"), "{text}");
     // the 7:30 routine is not presented as a fixed point or the one to watch
     for s in text.split(". ") {
         if s.contains("fixed points") || s.contains("one to watch") || s.contains("only get one thing") || s.starts_with("Start with") {
@@ -814,7 +814,7 @@ fn digest_and_day_note_prepare() {
     assert!(n["template_text"].as_str().unwrap().len() > 20);
     assert_eq!(n["skip_ai"], false);
     assert!(n["cache_key"].as_str().unwrap().starts_with("daynote:2026-11-02:"));
-    assert!(n["template_text"].as_str().unwrap().contains("Team stand-up"), "{}", n["template_text"]);
+    assert!(n["template_text"].as_str().unwrap().contains("team stand-up"), "{}", n["template_text"]);
     // an empty day skips AI
     let e = a.get("/api/day-note?date=2026-12-26");
     assert_eq!(e["skip_ai"], false); // recurring sample tasks exist
