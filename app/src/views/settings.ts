@@ -180,7 +180,7 @@ function build(redraw: () => void): HTMLElement[] {
     card("stack", h("h3", { class: "title-sm" }, "Weather location"), field("Location name", fLoc), h("div", { class: "pair" }, field("Latitude", fLat), field("Longitude", fLon)), button("Use my location", useLocation, { kind: "outline", icon: "place" }), geoStatus, field("Timezone", fTz, "Decides what \"today\" means, e.g. Australia/Sydney")),
     card("stack", h("h3", { class: "title-sm" }, "AI (Gemini)"),
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
-      field("Gemini API key", fKey, hasKey() ? "A key is saved." : undefined),
+      field("Gemini API key", fKey, hasKey() ? `A key is saved, ending in …${getKey().slice(-4)}. Match it on aistudio.google.com/apikey to see which Google account it belongs to.` : undefined),
       h("a", { class: "link small", href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener noreferrer" }, "Get a free key at Google AI Studio"),
       field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
