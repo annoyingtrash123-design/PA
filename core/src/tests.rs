@@ -701,7 +701,7 @@ fn morning_template_word_count_on_sample_data() {
             }
             let text = morning(&mut a, &day);
             let n = words_in(&text);
-            assert!((360..=720).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
+            assert!((360..=780).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
             assert!(!has_stats(&text), "{day}: {text}");
         }
     }
@@ -1822,7 +1822,7 @@ fn templates_walk_through_every_task_with_we_phrasing() {
         assert!(t.contains("we've got") || t.contains("you've got") || t.contains("we have") || t.contains("for us") || t.contains("your day"), "{t}");
         assert!(t.contains("says reminder letter is in the drawer"), "notes missing\n{t}");
         assert!(t.contains("the first step is gathering last quarter's numbers"), "checklist step missing\n{t}");
-        assert!(t.contains("half hour") && t.contains("ten minutes"), "size hints missing\n{t}");
+        assert!(t.contains("usually takes") || (t.contains("half hour") && t.contains("ten minutes")), "size hints missing\n{t}");
         assert!(!has_stats(&t));
         assert_spoken(kind, &t);
         if kind == "evening" {
@@ -2185,4 +2185,36 @@ fn briefings_carry_the_editor_brief_the_persona_and_full_story_news() {
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
     assert!(b["system_prompt"].as_str().unwrap().contains("Cover BOTH stories"));
     assert!(b["user_prompt"].as_str().unwrap().contains("Article: "));
+}
+
+#[test]
+fn common_sense_durations() {
+    use crate::durations::{range_text, typical_for};
+    let hc = typical_for("Haircut").unwrap();
+    assert!(hc.min >= 30 && hc.outing, "{hc:?}");
+    assert_eq!(range_text(&hc), "about 30 to 45 minutes");
+    // booking the haircut is quick; the haircut itself is not
+    assert!(typical_for("Book haircut").unwrap().max <= 10);
+    assert!(typical_for("Book club").is_some_and(|t| t.max >= 90));
+    assert!(typical_for("Dentist check-up").unwrap().max >= 45);
+    assert!(typical_for("Call Mum").unwrap().max <= 20);
+    assert!(typical_for("Call the bank about my card").unwrap().max >= 30);
+    assert!(typical_for("Grocery shopping").unwrap().outing);
+    assert!(typical_for("Fix the leaky tap").is_none());
+    assert_eq!(range_text(&typical_for("Pay electricity bill").unwrap()), "five or ten minutes");
+    // the template never calls a haircut a ten-minute job, and doesn't suggest it for the lunch break
+    let days = days_from(1);
+    let mut a = task_app_for_days(&days, &["Haircut"]);
+    let t = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"))["template_text"].as_str().unwrap().to_string();
+    let hair: Vec<&str> = t.split(". ").filter(|s| s.to_lowercase().contains("haircut")).collect();
+    assert!(!hair.is_empty(), "{t}");
+    for s in &hair {
+        assert!(!s.contains("ten minutes") && !s.contains("quick one"), "{s}");
+    }
+    assert!(t.contains("30 to 45 minutes"), "{t}");
+    assert!(!t.contains("middle of the day, haircut") && !t.contains("haircut would fit in nicely"), "{t}");
+    // the AI is told too
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert!(b["user_prompt"].as_str().unwrap().contains("usually takes about 30 to 45 minutes, plus getting there"));
+    assert!(b["system_prompt"].as_str().unwrap().contains("COMMON SENSE ABOUT TIME"));
 }

@@ -8,7 +8,8 @@ use crate::util::*;
 use chrono::{Datelike, NaiveDate};
 
 /// Prompt rules for the per-task treatment, gym, weather, leisure and sign-off (morning and evening only).
-pub const PROMPT_RULES: &str = "TASK TALK (morning: today's tasks; evening: tomorrow's tasks): speak warmly and naturally, mixing a collaborative 'we' ('so looking at what we've got on today, <name>…') with plain 'you' ('you've got the dentist at three', 'you might want to…') the way a real friend or assistant would; don't overuse either, and use the person's name now and then, never in every sentence. \
+pub const PROMPT_RULES: &str = "COMMON SENSE ABOUT TIME: give realistic durations the way a sensible person would. Use a task's 'usually takes' hint when the context gives one. Anything that means going somewhere (a haircut, the dentist, a GP visit, a grocery shop, a pick-up) also needs travel and often a wait, so never call it a ten-minute job: a haircut is about half an hour to 45 minutes in the chair plus getting there, a GP or dentist visit about an hour all up. Only suggest the lunch break for things that genuinely fit in it with travel (a quick call, a bill, booking something, a nearby errand). Booking or phoning about something is quick even when the thing itself is not. Never squeeze an outing into a gap that is too short, and keep times and suggestions physically possible on the day. \
+TASK TALK (morning: today's tasks; evening: tomorrow's tasks): speak warmly and naturally, mixing a collaborative 'we' ('so looking at what we've got on today, <name>…') with plain 'you' ('you've got the dentist at three', 'you might want to…') the way a real friend or assistant would; don't overuse either, and use the person's name now and then, never in every sentence. \
 Go through EVERY undone task for that day by name. Never say 'plus a few more', 'a few other things' or leave a task out; if there are many, give the bigger or timed ones a sentence or two each and group the very small ones into one breath, but still name each of them. \
 For EACH task say, in one or two natural sentences: (a) what it practically involves, with a concrete first step (use its notes and steps if they are given, otherwise a sensible common-sense first step, without inventing facts about the person's life); (b) why it is worthwhile, linking it to one of the goals or the person's interests ONLY where that genuinely fits (never forced; linking is fine for tasks but never for news); (c) when and for how long to fit it, using its time, part of day, size hint and the work block ('set aside fifteen to twenty minutes in the morning if you can, otherwise save it for an evening read'); (d) where it fits, with a touch of genuine, thoughtful commentary such as a pro and a con or what to watch for. \
 Illustration with made-up tasks (match the style, never reuse these tasks): 'So looking at what we've got on today, we've got a few things to do. First, renewing the car registration, which is mostly finding the reminder letter and paying online. It's worth doing now because a late fee is a silly way to lose money, so set aside ten minutes before work. Then there's sorting the garden shed, and I'd start by clearing just the floor. It'll feel good to get it done, though it can swallow an afternoon, so give it a proper hour on a day with no plans.' \
@@ -268,7 +269,10 @@ pub fn blurb(o: &Occurrence, i: usize, lk: &Look, used: &mut Used, goal: Option<
         Some(g) => Some(format!("{} {}", GOAL_TIES[i % 3], goals::goal_ref(g))),
         None => fresh(&why_pool(&cat), salt, used).map(String::from),
     };
-    let when = fresh(&timing_pool(o, big, lk), salt, used).map(String::from);
+    let when = match crate::durations::typical(o) {
+        Some(t) => Some(crate::durations::timing_line(o, &t, lk.work)),
+        None => fresh(&timing_pool(o, big, lk), salt, used).map(String::from),
+    };
     let mut s2 = match (reason, when) {
         (Some(r), Some(w)) => match salt % 3 {
             0 => format!("{}, and {w}.", cap(&r)),

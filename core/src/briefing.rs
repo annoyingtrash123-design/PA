@@ -368,6 +368,9 @@ const QUICK_WORDS: [&str; 10] = ["call", "pay", "reply", "book", "email", "text"
 
 /// Rough size guess from title, notes and checklist (there is no size field).
 pub fn is_big(o: &Occurrence) -> bool {
+    if let Some(t) = crate::durations::typical(o) {
+        return t.max >= 40;
+    }
     let words: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
     let hit = |list: &[&str]| words.iter().any(|w| list.iter().any(|k| w == k || (k.len() >= 5 && w.starts_with(k))));
     if hit(&BIG_WORDS) || o.checklist.len() >= 6 || o.notes.len() > 160 {
@@ -382,7 +385,8 @@ pub fn is_big(o: &Occurrence) -> bool {
 /// Quick, errand-like things that plausibly fit a lunch break.
 fn lunchable(o: &Occurrence) -> bool {
     let w: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
-    o.time.is_none() && !is_big(o) && o.part_of_day != "evening" && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
+    let far = crate::durations::typical(o).is_some_and(|t| (t.outing && t.max > 30) || t.max > 45);
+    o.time.is_none() && !far && !is_big(o) && o.part_of_day != "evening" && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
 }
 
 fn cat_name(o: &Occurrence) -> String {
@@ -1175,7 +1179,11 @@ fn context_text(c: &Ctx, weather: &Option<Weather>) -> String {
                 n => format!("; notes: {n}"),
             };
             let cat = format!("; category: {}", group_name(i));
-            let size = if is_big(i) { "; looks bigger" } else { "; looks quick" };
+            let size = match crate::durations::typical(i) {
+                Some(t) => format!("; {}", crate::durations::context_hint(&t)),
+                None if is_big(i) => "; looks bigger".to_string(),
+                None => "; looks quick".to_string(),
+            };
             o.push_str(&format!("  - {} ({when}; done: {}{cat}{routine}{size}{notes}{steps}{roll})\n", i.title, if i.done { "yes" } else { "no" }));
         }
         o
