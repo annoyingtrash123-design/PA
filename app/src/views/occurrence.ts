@@ -1,6 +1,6 @@
 import { api } from "../core";
 import { icon } from "../icons";
-import { chip, dot, h, toast } from "../ui";
+import { chip, dot, h, holdButton, toast } from "../ui";
 import { PART_LABELS } from "../util/nextup";
 import type { Occurrence } from "../types";
 
@@ -26,6 +26,20 @@ export function occurrenceTile(o: Occurrence, onChanged: () => void, onOpen: (o:
     h("div", { class: "occ-sub" }, h("span", null, timeOrPart(o)), o.rolled_over_from ? chip("carried over", { icon: "redo", tone: "lav" }) : null, o.recurring ? icon("repeat", 13) : null),
   );
   const row = h("div", { class: "occ-row" }, tick, dot(o.category?.color, 10), main);
+  // one-off, unfinished: press and hold to move it to the next day (repeating tasks come back on their own)
+  if (!o.done && !o.recurring) {
+    row.appendChild(
+      holdButton("Move to tomorrow", () => {
+        try {
+          api("POST", "/api/occurrences/move", { task_id: o.task_id, date: o.date });
+          toast(`Moved “${o.title}” to the next day`);
+          onChanged();
+        } catch (e) {
+          toast((e as Error).message);
+        }
+      }, { icon: "redo", cls: "icon-only", hint: "Press and hold the arrow to move this to the next day" }),
+    );
+  }
   const wrap = h("div", { class: `occ ${o.done ? "done" : ""}` }, row);
   if (o.checklist.length) {
     const nDone = o.checklist.filter((c) => c.done).length;

@@ -33,7 +33,8 @@ describe("stats guard", () => {
 
 describe("fallback reasons and the source label", () => {
   it("names the reason", () => {
-    expect(whyFromError({ message: "Gemini said 503", status: 503 }).text).toBe("Google replied with an error (503)");
+    expect(whyFromError({ message: "Gemini said 503", status: 503 }).text).toContain("too busy");
+    expect(whyFromError({ message: "x", status: 400 }).text).toBe("Google replied with an error (400)");
     expect(whyFromError({ message: "Couldn't reach Gemini (x)" }).code).toBe("network");
     expect(whyFromError({ message: "Gemini took too long to answer" }).code).toBe("timeout");
     expect(whyFromError({ message: "No Gemini key saved" }).code).toBe("no-key");

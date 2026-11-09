@@ -33,6 +33,7 @@ export function whyFromError(e: unknown, tz?: string): Why {
   if (x.pausedUntil && (x.blocked || x.quota)) return whyPaused(x.pausedUntil, tz);
   if (x.blocked) return whyBudget();
   if (x.quota) return { code: "paused", text: "Google's limit is resting for now" };
+  if (x.status === 503 || x.status === 500 || x.status === 502 || x.status === 504) return { code: "http", text: "Google's AI was too busy just now (it happens at peak times); tap 'Try again' in a minute" };
   if (typeof x.status === "number") return { code: "http", text: `Google replied with an error (${x.status})` };
   if (/took too long/i.test(msg)) return { code: "timeout", text: "Google took too long to answer" };
   if (/couldn't reach/i.test(msg)) return { code: "network", text: "couldn't reach Google" };

@@ -106,7 +106,7 @@ pub const ENTRIES: &[Entry] = &[
     e(Thought, &["freeday"], "A free day doesn't need a plan; it's fine to just see where it goes."),
     // ------------------------------------------------------------ wind-down lines (evening only)
     e(WindDown, &["evening"], "Let the day settle now; nothing else needs doing tonight."),
-    e(WindDown, &["evening", "asmr"], "Maybe a few slow breaths before your ASMR tonight, just to let the day go."),
+    e(WindDown, &["evening", "asmr"], "Maybe a few slow breaths before you settle in tonight, just to let the day go."),
     e(WindDown, &["evening"], "Perhaps dim the lights a little earlier than usual, and let the evening get slow and quiet."),
     e(WindDown, &["evening"], "Tomorrow's list can wait in the app; it'll still be there in the morning, I promise."),
     e(WindDown, &["evening", "cold", "rain"], "Cosy covers, a quiet room and something soft to listen to sounds like the perfect plan."),

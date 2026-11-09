@@ -8,7 +8,8 @@ use crate::util::*;
 use chrono::{Datelike, NaiveDate};
 
 /// Prompt rules for the per-task treatment, gym, weather, leisure and sign-off (morning and evening only).
-pub const PROMPT_RULES: &str = "COMMON SENSE ABOUT TIME: give realistic durations the way a sensible person would. Use a task's 'usually takes' hint when the context gives one. Anything that means going somewhere (a haircut, the dentist, a GP visit, a grocery shop, a pick-up) also needs travel and often a wait, so never call it a ten-minute job: a haircut is about half an hour to 45 minutes in the chair plus getting there, a GP or dentist visit about an hour all up. Only suggest the lunch break for things that genuinely fit in it with travel (a quick call, a bill, booking something, a nearby errand). Booking or phoning about something is quick even when the thing itself is not. Never squeeze an outing into a gap that is too short, and keep times and suggestions physically possible on the day. \
+pub const PROMPT_RULES: &str = "WORK TASKS: tasks in the Work category are done AT work, inside the work block, as part of the workday. Talk about them together with the work hours ('once you're at work, you've got…', 'at work today, between ten and five, there's…'), never as something separate from work, and never suggest doing them before work, after work, at lunch or in the evening. On a day off, a holiday or the weekend, a Work task can wait for the next workday unless it is dated that day. \
+COMMON SENSE ABOUT TIME: give realistic durations the way a sensible person would. Use a task's 'usually takes' hint when the context gives one. Anything that means going somewhere (a haircut, the dentist, a GP visit, a grocery shop, a pick-up) also needs travel and often a wait, so never call it a ten-minute job: a haircut is about half an hour to 45 minutes in the chair plus getting there, a GP or dentist visit about an hour all up. Only suggest the lunch break for things that genuinely fit in it with travel (a quick call, a bill, booking something, a nearby errand). Booking or phoning about something is quick even when the thing itself is not. Never squeeze an outing into a gap that is too short, and keep times and suggestions physically possible on the day. \
 TASK TALK (morning: today's tasks; evening: tomorrow's tasks): speak warmly and naturally, mixing a collaborative 'we' ('so looking at what we've got on today, <name>…') with plain 'you' ('you've got the dentist at three', 'you might want to…') the way a real friend or assistant would; don't overuse either, and use the person's name now and then, never in every sentence. \
 Go through EVERY undone task for that day by name. Never say 'plus a few more', 'a few other things' or leave a task out; if there are many, give the bigger or timed ones a sentence or two each and group the very small ones into one breath, but still name each of them. \
 For EACH task say, in one or two natural sentences: (a) what it practically involves, with a concrete first step (use its notes and steps if they are given, otherwise a sensible common-sense first step, without inventing facts about the person's life); (b) why it is worthwhile, linking it to one of the goals or the person's interests ONLY where that genuinely fits (never forced; linking is fine for tasks but never for news); (c) when and for how long to fit it, using its time, part of day, size hint and the work block ('set aside fifteen to twenty minutes in the morning if you can, otherwise save it for an evening read'); (d) where it fits, with a touch of genuine, thoughtful commentary such as a pro and a con or what to watch for. \
@@ -65,6 +66,10 @@ const VERBS: &[(&str, &str)] = &[
     ("gather", "gathering"), ("collect", "collecting"), ("drink", "drinking"), ("stretch", "stretching"), ("meet", "meeting"),
     ("empty", "emptying"), ("vacuum", "vacuuming"), ("mop", "mopping"), ("fold", "folding"), ("hang", "hanging"), ("feed", "feeding"),
     ("study", "studying"), ("revise", "revising"), ("register", "registering"),
+    ("use", "using"), ("add", "adding"), ("transfer", "transferring"), ("move", "moving"), ("upload", "uploading"),
+    ("share", "sharing"), ("scan", "scanning"), ("fill", "filling in"), ("migrate", "migrating"), ("compile", "compiling"),
+    ("finalise", "finalising"), ("finalize", "finalizing"), ("edit", "editing"), ("proofread", "proofreading"),
+    ("summarise", "summarising"), ("summarize", "summarizing"), ("translate", "translating"), ("archive", "archiving"),
 ];
 /// Verbs that take "some" before a bare plural ("making some book club inquiries").
 const SOME_VERBS: &[&str] = &["make", "buy", "send", "write", "order", "print", "book"];
@@ -269,10 +274,13 @@ pub fn blurb(o: &Occurrence, i: usize, lk: &Look, used: &mut Used, goal: Option<
         Some(g) => Some(format!("{} {}", GOAL_TIES[i % 3], goals::goal_ref(g))),
         None => fresh(&why_pool(&cat), salt, used).map(String::from),
     };
-    let when = match crate::durations::typical(o) {
+    let at_work = cat == "Work" && lk.work && o.time.is_none();
+    let when = if at_work {
+        fresh(&["it's one for the workday, so tuck it in once you're at your desk", "that's a work-hours job, so fit it in between everything else at work", "it belongs to the workday, so do it at work rather than in your own time"], salt, used).map(String::from)
+    } else { match crate::durations::typical(o) {
         Some(t) => Some(crate::durations::timing_line(o, &t, lk.work)),
         None => fresh(&timing_pool(o, big, lk), salt, used).map(String::from),
-    };
+    } };
     let mut s2 = match (reason, when) {
         (Some(r), Some(w)) => match salt % 3 {
             0 => format!("{}, and {w}.", cap(&r)),

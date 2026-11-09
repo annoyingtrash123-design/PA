@@ -1,5 +1,5 @@
 // Google Gemini (generateContent) client and reply cleaning. No key -> callers use template texts.
-import { DAILY_BUDGET, getMainPausedUntil, getPausedUntil, isMainPaused, isPaused, pauseUntilFor, quotaMessage, recordUse, remaining, setMainPausedUntil, setPausedUntil } from "./ai-budget";
+import { DAILY_BUDGET, getMainPausedUntil, getPausedUntil, isMainPaused, isPaused, pauseUntilFor, quotaMessage, recordUse, remaining, setMainPausedUntil, setPausedUntil, unrecordUse } from "./ai-budget";
 import { getKey, getModel } from "./cache";
 
 /** The cheaper model tried once when the main one is out of quota. */
@@ -198,6 +198,12 @@ export class GeminiError extends Error {
   pausedUntil?: number;
 }
 
+/** Google is busy (overloaded or briefly down): worth one more try after a short wait. */
+export const isBusy = (status?: number) => status === 500 || status === 502 || status === 503 || status === 504;
+/** How long to wait before trying a busy model again. */
+export let BUSY_RETRY_MS = 4000;
+export const _setBusyRetryMs = (ms: number) => void (BUSY_RETRY_MS = ms);
+
 /** How long one request may take before we give up and use the template text instead. */
 export const GEMINI_TIMEOUT_MS = 45_000;
 
@@ -277,6 +283,14 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
         res = await post(model, key, body, ctl.signal);
       }
     }
+    // Google is overloaded right now (503 and friends): it didn't count, so wait a moment and try once more
+    if (!res.ok && isBusy(res.status)) {
+      unrecordUse(budgetDate());
+      await new Promise((r) => setTimeout(r, BUSY_RETRY_MS));
+      recordUse(budgetDate());
+      res = await post(model, key, body, ctl.signal);
+      if (!res.ok && isBusy(res.status)) unrecordUse(budgetDate());
+    }
   } catch (e) {
     throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
   } finally {
@@ -318,6 +332,15 @@ export async function generate(o: GenerateOptions): Promise<string> {
   try {
     return await callModel(o, model, key);
   } catch (e) {
+    // still busy after the retry: the lighter model is often free when the main one is overloaded
+    if (e instanceof GeminiError && isBusy(e.status) && canLite && (o.bypassBudget || remaining(budgetDate()) > 0)) {
+      try {
+        return await callModel(o, LITE_MODEL, key);
+      } catch (e2) {
+        if (e2 instanceof GeminiError && (e2.status === 404 || (e2.status === 400 && /not found|not supported/i.test(e2.message)))) liteMissing = true;
+        throw e;
+      }
+    }
     if (!(e instanceof GeminiError) || !e.quota) throw e;
     const until = e.pausedUntil ?? pauseUntilFor(e.message, Date.now());
     if (!canLite) {

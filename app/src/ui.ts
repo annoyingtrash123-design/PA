@@ -210,3 +210,46 @@ export function relativeScrollKeep(fn: () => void) {
   fn();
   window.scrollTo(0, y);
 }
+
+/**
+ * A button that only acts after being pressed and held (default 0.7 s), so it can't be triggered by a stray tap.
+ * A fill sweeps across while holding; a plain tap just explains what to do.
+ */
+export function holdButton(label: string, onHold: () => void, opts: { icon?: string; ms?: number; cls?: string; hint?: string } = {}): HTMLButtonElement {
+  const ms = opts.ms ?? 700;
+  const el = h(
+    "button",
+    { type: "button", class: `hold-btn ${opts.cls ?? ""}`.trim(), "aria-label": `${label} (press and hold)`, title: `${label}: press and hold` },
+    opts.icon ? icon(opts.icon, 18) : null,
+    opts.cls?.includes("icon-only") ? null : h("span", null, label),
+  ) as HTMLButtonElement;
+  el.style.setProperty("--hold-ms", `${ms}ms`);
+  let timer = 0;
+  let fired = false;
+  const reset = () => {
+    window.clearTimeout(timer);
+    el.classList.remove("holding");
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    fired = false;
+    el.classList.add("holding");
+    timer = window.setTimeout(() => {
+      fired = true;
+      reset();
+      try {
+        navigator.vibrate?.(30);
+      } catch {
+        // no vibration: fine
+      }
+      onHold();
+    }, ms);
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) el.addEventListener(ev, reset);
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!fired) toast(opts.hint ?? `Press and hold to ${label.toLowerCase()}`);
+  });
+  return el;
+}

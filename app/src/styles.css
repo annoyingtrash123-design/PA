@@ -274,3 +274,11 @@ a.link { color: var(--lav); }
 .collapse-head svg { transition: transform 0.15s; color: var(--muted); flex: none; }
 .card.open .collapse-head svg { transform: rotate(90deg); }
 .card.open .collapse-body { margin-top: 12px; }
+
+/* press-and-hold buttons: a fill sweeps across while held */
+.hold-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: transparent; color: var(--muted, inherit); border-radius: 999px; padding: 6px 12px; min-height: 36px; font: inherit; font-size: 14px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.hold-btn > * { position: relative; z-index: 1; }
+.hold-btn::before { content: ""; position: absolute; inset: 0; width: 0; background: var(--lav, #b8a6e3); opacity: .35; transition: width 0s; }
+.hold-btn.holding::before { width: 100%; transition: width var(--hold-ms, 700ms) linear; }
+.hold-btn.icon-only { width: 40px; height: 40px; padding: 0; justify-content: center; flex: none; border-color: transparent; }
+.menu-pop .hold-btn { width: 100%; border-radius: 10px; border: 0; justify-content: flex-start; padding: 10px 12px; color: var(--text); }

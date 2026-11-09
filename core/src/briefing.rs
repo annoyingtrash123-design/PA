@@ -384,6 +384,9 @@ pub fn is_big(o: &Occurrence) -> bool {
 
 /// Quick, errand-like things that plausibly fit a lunch break.
 fn lunchable(o: &Occurrence) -> bool {
+    if cat_name(o) == "Work" {
+        return false;
+    }
     let w: Vec<String> = o.title.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(|s| s.to_string()).collect();
     let far = crate::durations::typical(o).is_some_and(|t| (t.outing && t.max > 30) || t.max > 45);
     o.time.is_none() && !far && !is_big(o) && o.part_of_day != "evening" && w.iter().any(|x| ["call", "pay", "book", "buy", "grocery", "shopping", "post", "pick", "order", "bill", "dentist", "doctor", "bank"].contains(&x.as_str()))
@@ -660,7 +663,9 @@ fn morning_template(c: &Ctx) -> String {
     let timed: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_some()).cloned().collect();
     let fixed: Vec<String> = timed.iter().filter(|o| !is_routine(o)).map(|o| taskvoice::inline_phrase(o)).collect();
     let timed_routines: Vec<&Occurrence> = timed.iter().filter(|o| is_routine(o)).cloned().collect();
-    let loose: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_none() && cat_name(o) != "Exercise" && !is_routine(o)).cloned().collect();
+    // on a work day, untimed Work tasks belong inside the work block, not in the free time around it
+    let at_work: Vec<&Occurrence> = if c.info.work.is_some() { todo.iter().filter(|o| o.time.is_none() && cat_name(o) == "Work" && !is_routine(o)).cloned().collect() } else { vec![] };
+    let loose: Vec<&Occurrence> = todo.iter().filter(|o| o.time.is_none() && cat_name(o) != "Exercise" && !is_routine(o) && !(c.info.work.is_some() && cat_name(o) == "Work")).cloned().collect();
     let big: Vec<&Occurrence> = loose.iter().filter(|o| is_big(o)).cloned().collect();
     let quick: Vec<&Occurrence> = loose.iter().filter(|o| !is_big(o)).cloned().collect();
     let titles = |v: &[&Occurrence], k: usize| -> Vec<String> { v.iter().take(k).map(|o| taskvoice::inline_phrase(o)).collect() };
@@ -672,6 +677,22 @@ fn morning_template(c: &Ctx) -> String {
         });
     } else if let Some(r) = timed_routines.first() {
         must(&mut v, format!("Beyond your {}, nothing is pinned to the clock today, so the rest can flex around how you feel.", r.title.to_lowercase()));
+    }
+    if let (Some(w), false) = (&c.info.work, at_work.is_empty()) {
+        let list = limited(at_work.iter().map(|o| taskvoice::inline_phrase(o)).collect(), 4);
+        must(&mut v, format!(
+            "{} {list}.",
+            pick(
+                &[
+                    "Once you're at work, the work things slot into your day there, so between {s} and {e} you've got",
+                    "Your work list sits inside the workday itself, so from {s} to {e} that's",
+                ],
+                d,
+                63
+            )
+            .replace("{s}", &say_time(&w.start))
+            .replace("{e}", &say_time(&w.end))
+        ));
     }
     let lunch_pick = c.info.work.as_ref().and_then(|_| quick.iter().find(|o| lunchable(o)).map(|o| taskvoice::inline_phrase(o)));
     match (big.first(), quick.len()) {

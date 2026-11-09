@@ -39,3 +39,15 @@ describe("reading the linked news articles", () => {
     expect(bodies[0].tools).toBeUndefined();
   });
 });
+
+describe("Google busy (503)", () => {
+  it("waits, tries again, and doesn't count the busy reply", async () => {
+    const { _setBusyRetryMs } = await import("./gemini");
+    _setBusyRetryMs(1);
+    let n = 0;
+    vi.stubGlobal("fetch", async () => (++n === 1 ? new Response(JSON.stringify({ error: { message: "The model is overloaded" } }), { status: 503 }) : ok("hello")));
+    const t = await generate({ system: "s", user: "u", key: "k", model: "gemini-test-d", bypassBudget: true });
+    expect(t).toBe("hello");
+    expect(n).toBe(2);
+  });
+});

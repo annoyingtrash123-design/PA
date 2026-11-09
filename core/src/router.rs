@@ -158,6 +158,8 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         // days and occurrences
         ("GET", ["days"]) => tasks::days(env, q),
         ("POST", ["occurrences", "toggle"]) => ok(tasks::toggle(env, parse(body)?)?),
+        ("POST", ["occurrences", "move"]) => ok(tasks::move_next(env, parse(body)?)?),
+        ("POST", ["days", date, "move-unfinished"]) => tasks::move_unfinished(env, date),
         ("POST", ["occurrences", "checklist"]) => ok(tasks::toggle_checklist(env, parse(body)?)?),
         // missed timed tasks / appointments
         ("GET", ["missed"]) => Ok(tasks::missed(env)),
@@ -292,6 +294,7 @@ pub fn call_typed(state: &str, method: &str, path: &str, body: &str, ctx: &str) 
     // missed days count as the rest day when a rest item is next (workouts always wait)
     if !importing && needs_today(&method, path_only) {
         migrated |= gym::roll_missed_days(&mut st, today);
+        migrated |= tasks::recategorise_other(&mut st);
     }
     let mut env = Env { st: &mut st, ctx: &ctx_v, today, changed: migrated };
     match handle(&mut env, &method, path_only, &q, &body_v) {

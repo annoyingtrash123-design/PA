@@ -49,6 +49,13 @@ export function recordUse(date: string, store: Store = lsStore): number {
   return count;
 }
 
+/** Take back one use: a request Google turned away as overloaded (5xx) didn't produce anything. */
+export function unrecordUse(date: string, store: Store = lsStore): number {
+  const count = Math.max(0, usedToday(date, store) - 1);
+  store.set(USAGE_KEY, JSON.stringify({ date, count }));
+  return count;
+}
+
 // ---- separate daily budget for the natural voice (Google limits voice and text models separately)
 export const VOICE_BUDGET = 12;
 export const VOICE_USAGE_KEY = "pa-voice-usage";

@@ -85,7 +85,7 @@ export function renderHome(root: HTMLElement): () => void {
         ...(b?.news && b.layout && text
           ? [...paragraphs(b.layout.before).map((p) => h("p", null, p)), newsBlock(b.news, date!), ...paragraphs(b.layout.after).map((p) => h("p", null, p))]
           : paragraphs(body).map((p) => h("p", null, p))),
-        onUpdate ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
+        onUpdate ? button(b && b.source === "template" ? "Try again" : "Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
       ),
     );
     clear(playHolder, readAloud(() => script || body, () => getState().settings.voice, kind === "morning" ? "Read it to me" : "Read my wind-down", !text, true, { sections: () => sections }));
@@ -103,7 +103,9 @@ export function renderHome(root: HTMLElement): () => void {
     drawAffirmation(aff);
     script = b.script;
     sections = b.sections;
-    const update = b.outdated ? () => void regenerate(date) : null;
+    // a built-in text because Google hiccuped (busy, slow, garbled): offer a manual retry
+    const retryable = b.source === "template" && hasKey() && !!b.why && ["http", "timeout", "network", "empty", "parse", "cut-off", "other"].includes(b.why.code);
+    const update = b.outdated || retryable ? () => void regenerate(date) : null;
     drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy, b.reviewed), update, b, date);
   };
   const regenerate = async (date: string) => {

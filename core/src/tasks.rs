@@ -94,7 +94,7 @@ const KEYWORDS: &[(&str, &[&str])] = &[
     ("Chores", &["laundry", "hoover", "vacuum", "clean", "cleaning", "dishes", "dishwasher", "bins", "bin", "tidy", "iron", "ironing", "wash", "mop", "dust", "sweep", "declutter", "fix", "repair", "tap"]),
     ("Exercise", &["gym", "run", "running", "jog", "walk", "yoga", "swim", "workout", "cycle", "cycling", "stretch", "push", "pull", "leg", "legs", "pilates", "hike", "exercise", "lift", "cardio"]),
     ("Study", &["study", "studying", "revise", "revision", "essay", "read chapter", "chapter", "lecture", "homework", "exam", "assignment", "course", "coursework", "revising", "dissertation", "thesis", "read about", "research", "learn", "learning", "lesson", "lessons", "class", "tutorial", "flashcards", "vocab", "korean", "japanese", "chinese", "mandarin", "jlpt", "topik"]),
-    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "client", "deadline", "presentation", "shift", "project", "sprint", "colleague", "boss"]),
+    ("Work", &["meeting", "stand-up", "standup", "report", "email work", "client", "deadline", "presentation", "shift", "project", "sprint", "colleague", "boss", "compliance", "excel", "spreadsheet", "asx", "docs", "pinpoint", "audit", "agenda", "minutes", "timesheet", "roster", "work", "office", "academy", "newsroom", "stakeholder", "onboarding", "workshop", "training", "slides"]),
     ("Errands", &["shop", "shopping", "groceries", "grocery", "post office", "pick up", "collect", "buy", "return", "parcel", "pharmacy", "supermarket", "drop off"]),
     ("Appointments", &["dentist", "doctor", "gp", "appointment", "haircut", "vet", "optician", "checkup", "check-up", "physio", "hospital", "dermatologist"]),
     ("Social", &["call", "mum", "dad", "friend", "friends", "party", "dinner with", "drinks", "birthday", "visit", "coffee with", "lunch with", "date night", "catch up", "brunch", "book club", "text", "reply to"]),
@@ -119,6 +119,23 @@ pub fn keyword_category(text: &str, cats: &[Category]) -> Option<i64> {
         }
     }
     best.map(|(_, id)| id)
+}
+
+/// Tasks still filed under "Other" get another look with the current keyword table (it grows over time).
+/// A task the person filed somewhere else themselves is never touched. Returns true if anything changed.
+pub fn recategorise_other(st: &mut State) -> bool {
+    let Some(other) = st.categories.iter().find(|c| c.name.trim().eq_ignore_ascii_case("other")).map(|c| c.id) else { return false };
+    let mut changed = false;
+    let cats = st.categories.clone();
+    for t in st.tasks.iter_mut().filter(|t| t.category_id == Some(other)) {
+        if let Some(id) = keyword_category(&t.title, &cats).or_else(|| keyword_category(&format!("{} {}", t.title, t.notes), &cats)) {
+            if id != other {
+                t.category_id = Some(id);
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 fn other_category(st: &mut State) -> i64 {
@@ -675,6 +692,59 @@ fn locate(st: &State, task_id: i64, date: &str) -> Res<(Task, String, NaiveDate)
 
 fn occurrence(st: &State, task_id: i64, d: NaiveDate) -> Res<Occurrence> {
     resolve_items(st, d, 1).into_iter().flat_map(|(_, v)| v).find(|o| o.task_id == task_id).ok_or_else(|| ApiErr::not_found("occurrence not found"))
+}
+
+#[derive(Deserialize)]
+pub struct MoveIn {
+    task_id: i64,
+    date: String,
+}
+
+/// Move one unfinished one-off task to the day after its date. Repeating tasks come back on their own.
+fn move_one(st: &mut State, task_id: i64) -> Res<NaiveDate> {
+    let done = st.completions.contains_key(&format!("{task_id}|"));
+    let task = st.tasks.iter_mut().find(|t| t.id == task_id).ok_or_else(|| ApiErr::not_found("task not found"))?;
+    if task.recurrence.is_some() {
+        return Err(ApiErr::bad("Repeating tasks come back on their own, so they can't be moved."));
+    }
+    if done {
+        return Err(ApiErr::bad("That one's already done."));
+    }
+    let from = task.date.as_deref().and_then(parse_date).ok_or_else(|| ApiErr::bad("That task has no date."))?;
+    let to = from + Duration::days(1);
+    task.date = Some(fmt_date(to));
+    let id = task_id.to_string();
+    st.missed.remove(&id);
+    st.rolled_over.remove(&id);
+    Ok(to)
+}
+
+/// `POST /api/occurrences/move` {task_id, date}: the task moves to the next day.
+pub fn move_next(env: &mut Env, b: MoveIn) -> Res<Occurrence> {
+    locate(env.st, b.task_id, &b.date)?;
+    let to = move_one(env.st, b.task_id)?;
+    env.changed = true;
+    occurrence(env.st, b.task_id, to)
+}
+
+/// `POST /api/days/{date}/move-unfinished`: every unfinished one-off task on that day moves to the next day.
+pub fn move_unfinished(env: &mut Env, date: &str) -> Res<Value> {
+    let d = parse_date(date).ok_or_else(|| ApiErr::bad("date must be YYYY-MM-DD"))?;
+    let ds = fmt_date(d);
+    let ids: Vec<i64> = env
+        .st
+        .tasks
+        .iter()
+        .filter(|t| t.recurrence.is_none() && t.date.as_deref() == Some(ds.as_str()) && !env.st.completions.contains_key(&format!("{}|", t.id)))
+        .map(|t| t.id)
+        .collect();
+    for id in &ids {
+        move_one(env.st, *id)?;
+    }
+    if !ids.is_empty() {
+        env.changed = true;
+    }
+    Ok(json!({"moved": ids.len(), "to": fmt_date(d + Duration::days(1))}))
 }
 
 pub fn toggle(env: &mut Env, b: ToggleIn) -> Res<Occurrence> {

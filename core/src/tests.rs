@@ -2218,3 +2218,42 @@ fn common_sense_durations() {
     assert!(b["user_prompt"].as_str().unwrap().contains("usually takes about 30 to 45 minutes, plus getting there"));
     assert!(b["system_prompt"].as_str().unwrap().contains("COMMON SENSE ABOUT TIME"));
 }
+
+#[test]
+fn move_tasks_to_the_next_day() {
+    let mut a = App::new(TODAY);
+    let one = a.post("/api/tasks", json!({"title": "Use Google Pinpoint for council docs", "date": TODAY}));
+    let two = a.post("/api/tasks", json!({"title": "Add compliance notes to Excel", "date": TODAY}));
+    let done = a.post("/api/tasks", json!({"title": "Pay rent", "date": TODAY}));
+    let rep = a.post("/api/tasks", json!({"title": "Plan tomorrow", "recurrence": {"kind": "daily"}, "date": TODAY}));
+    a.post("/api/occurrences/toggle", json!({"task_id": done["id"], "date": TODAY, "done": true}));
+    let next = fmt_date(d(TODAY) + chrono::Duration::days(1));
+    // one task
+    let m = a.post("/api/occurrences/move", json!({"task_id": one["id"], "date": TODAY}));
+    assert_eq!(m["date"], next.as_str());
+    // a repeating task can't be moved
+    let r = a.req("POST", "/api/occurrences/move", json!({"task_id": rep["id"], "date": TODAY}));
+    assert_eq!(r.0, 400);
+    // the whole day: only unfinished one-offs move
+    let all = a.post(&format!("/api/days/{TODAY}/move-unfinished"), json!({}));
+    assert_eq!(all["moved"], 1);
+    let ids: Vec<i64> = a.get(&format!("/api/days?start={next}&days=1"))[0]["items"].as_array().unwrap().iter().map(|i| i["task_id"].as_i64().unwrap()).collect();
+    assert!(ids.contains(&one["id"].as_i64().unwrap()) && ids.contains(&two["id"].as_i64().unwrap()));
+    assert!(!ids.contains(&done["id"].as_i64().unwrap()));
+}
+
+#[test]
+fn work_tasks_are_filed_as_work_and_spoken_as_part_of_the_workday() {
+    let mut a = App::new(TODAY);
+    let work_id = a.get("/api/categories").as_array().unwrap().iter().find(|c| c["name"] == "Work").unwrap()["id"].clone();
+    let t = a.post("/api/tasks", json!({"title": "Add compliance notes to Excel", "date": TODAY, "category_id": "auto"}));
+    assert_eq!(t["category_id"], work_id, "{t}");
+    let t2 = a.post("/api/tasks", json!({"title": "Use Google Pinpoint for Burnside council docs", "date": TODAY, "category_id": "auto"}));
+    assert_eq!(t2["category_id"], work_id, "{t2}");
+    assert_eq!(crate::taskvoice::task_phrase("Use Google Pinpoint for Burnside council docs").text(), "using Google Pinpoint for Burnside council docs");
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    let text = b["template_text"].as_str().unwrap();
+    assert!(text.contains("at work") || text.contains("workday") || text.contains("at your desk"), "{text}");
+    assert!(!text.contains("before work is good for adding") && !text.contains("middle of the day, adding"), "{text}");
+    assert!(b["system_prompt"].as_str().unwrap().contains("WORK TASKS"));
+}

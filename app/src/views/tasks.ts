@@ -1,7 +1,7 @@
 import { api, today } from "../core";
 import { onContextUpdate } from "../services/events";
 import { icon } from "../icons";
-import { button, card, chip, clear, h, iconBtn, toast } from "../ui";
+import { button, card, chip, clear, h, holdButton, iconBtn, toast } from "../ui";
 import { addDays, dayMonth, longDay, mondayOf, WEEKDAY_SHORT, weekdayIndex } from "../util/dates";
 import { occurrenceTile } from "./occurrence";
 import { openTaskDialog } from "./task-dialog";
@@ -75,6 +75,21 @@ function dayMenu(d: Day, redraw: () => void): HTMLElement {
         toast((e as Error).message);
       }
     } }, icon(d.day_off ? "event" : "beach", 20), d.day_off ? "Undo day off" : "Mark as day off"));
+    // every unfinished one-off task on this day moves to the next day (press and hold, so it can't happen by accident)
+    if (d.items.some((o) => !o.done && !o.recurring)) {
+      pop.appendChild(
+        holdButton("Move unfinished to tomorrow", () => {
+          close();
+          try {
+            const r = api<{ moved: number }>("POST", `/api/days/${d.date}/move-unfinished`);
+            toast(r.moved === 1 ? "Moved 1 task to the next day" : `Moved ${r.moved} tasks to the next day`);
+            redraw();
+          } catch (e) {
+            toast((e as Error).message);
+          }
+        }, { icon: "redo", hint: "Press and hold to move every unfinished task to the next day" }),
+      );
+    }
     wrap.appendChild(pop);
     setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
   }, "muted");
