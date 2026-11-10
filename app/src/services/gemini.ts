@@ -167,6 +167,8 @@ export interface GenerateOptions {
   bypassBudget?: boolean;
   /** let the model read web pages linked in the prompt (Gemini's URL context tool), when the model allows it */
   readLinks?: boolean;
+  /** stream the reply: no fixed time limit while words keep arriving (for long texts like the briefings) */
+  stream?: boolean;
 }
 
 const NO_URL_TOOL = "pa-no-url-context";
@@ -214,8 +216,48 @@ export function thinkingFor(model: string): Record<string, unknown> | null {
   return null;
 }
 
-async function post(model: string, key: string, body: unknown, signal: AbortSignal): Promise<Response> {
-  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+/** Streaming: how long to wait for the first words, the longest quiet gap after that, and an overall cap. */
+export const FIRST_CHUNK_MS = 60_000;
+export const IDLE_MS = 30_000;
+export const STREAM_CAP_MS = 240_000;
+
+/** Read a streamed (server-sent events) reply: the text parts of every chunk, thoughts left out. */
+export async function readSse(res: Response, onChunk: () => void = () => {}): Promise<string> {
+  let out = "";
+  const take = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const d = line.slice(5).trim();
+    if (!d || d === "[DONE]") return;
+    const j = JSON.parse(d);
+    if (j?.error) throw new GeminiError(String(j.error.message ?? "Gemini sent an error"));
+    for (const p of j?.candidates?.[0]?.content?.parts ?? []) if (typeof p?.text === "string" && !p.thought) out += p.text;
+  };
+  if (!res.body) {
+    for (const l of (await res.text()).split(/\r?\n/)) take(l);
+    return out;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onChunk();
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      take(buf.slice(0, i).replace(/\r$/, ""));
+      buf = buf.slice(i + 1);
+    }
+  }
+  buf += dec.decode();
+  for (const l of buf.split(/\r?\n/)) take(l);
+  return out;
+}
+
+async function post(model: string, key: string, body: unknown, signal: AbortSignal, stream = false): Promise<Response> {
+  const method = stream ? "streamGenerateContent?alt=sse" : "generateContent";
+  return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${method}`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": key },
     body: JSON.stringify(body),
@@ -257,19 +299,21 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
   };
   if (useTool) body.tools = [{ url_context: {} }];
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), useTool ? GEMINI_TIMEOUT_MS + 30_000 : GEMINI_TIMEOUT_MS);
+  const stream = !!o.stream;
+  let timer = setTimeout(() => ctl.abort(), (stream ? FIRST_CHUNK_MS : GEMINI_TIMEOUT_MS) + (useTool ? 30_000 : 0));
+  const cap = stream ? setTimeout(() => ctl.abort(), STREAM_CAP_MS) : 0;
   o.signal?.addEventListener("abort", () => ctl.abort());
   let res: Response;
   try {
     recordUse(budgetDate());
-    res = await post(model, key, body, ctl.signal);
+    res = await post(model, key, body, ctl.signal, stream);
     // a model that doesn't accept our thinking setting: try once more without it
     if (!res.ok && res.status === 400 && thinking) {
       const msg = await errorMessage(res.clone());
       if (/thinking/i.test(msg)) {
         delete generationConfig.thinkingConfig;
         recordUse(budgetDate());
-        res = await post(model, key, body, ctl.signal);
+        res = await post(model, key, body, ctl.signal, stream);
       }
     }
     // a model that doesn't offer the URL tool: remember it and ask once more without it
@@ -280,7 +324,7 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
         delete body.tools;
         if (o.json) generationConfig.responseMimeType = "application/json";
         recordUse(budgetDate());
-        res = await post(model, key, body, ctl.signal);
+        res = await post(model, key, body, ctl.signal, stream);
       }
     }
     // Google is overloaded right now (503 and friends): it didn't count, so wait a moment and try once more
@@ -288,13 +332,17 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
       unrecordUse(budgetDate());
       await new Promise((r) => setTimeout(r, BUSY_RETRY_MS));
       recordUse(budgetDate());
-      res = await post(model, key, body, ctl.signal);
+      res = await post(model, key, body, ctl.signal, stream);
       if (!res.ok && isBusy(res.status)) unrecordUse(budgetDate());
     }
   } catch (e) {
-    throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
-  } finally {
     clearTimeout(timer);
+    clearTimeout(cap);
+    throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
+  }
+  if (!stream || !res.ok) {
+    clearTimeout(timer);
+    clearTimeout(cap);
   }
   if (!res.ok) {
     const info = await errorInfo(res);
@@ -306,9 +354,26 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
     }
     throw err;
   }
-  const j = await res.json();
-  const parts: { text?: string }[] = j?.candidates?.[0]?.content?.parts ?? [];
-  const text = parts.map((p) => p.text ?? "").join("");
+  let text: string;
+  if (stream) {
+    // words keep arriving: keep waiting; a long silence (or the overall cap) gives up
+    try {
+      text = await readSse(res, () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => ctl.abort(), IDLE_MS);
+      });
+    } catch (e) {
+      if (e instanceof GeminiError) throw e;
+      throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't read Gemini's reply (${(e as Error).message})`);
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(cap);
+    }
+  } else {
+    const j = await res.json();
+    const parts: { text?: string; thought?: boolean }[] = j?.candidates?.[0]?.content?.parts ?? [];
+    text = parts.filter((p) => !p.thought).map((p) => p.text ?? "").join("");
+  }
   if (!text.trim()) throw new GeminiError("Gemini returned an empty reply");
   return o.json ? text : cleanReply(text);
 }
@@ -332,8 +397,9 @@ export async function generate(o: GenerateOptions): Promise<string> {
   try {
     return await callModel(o, model, key);
   } catch (e) {
-    // still busy after the retry: the lighter model is often free when the main one is overloaded
-    if (e instanceof GeminiError && isBusy(e.status) && canLite && (o.bypassBudget || remaining(budgetDate()) > 0)) {
+    // still busy after the retry, or far too slow: the lighter, faster model is often free when the main one is overloaded
+    const slow = e instanceof GeminiError && /took too long/i.test(e.message);
+    if (e instanceof GeminiError && (isBusy(e.status) || slow) && canLite && (o.bypassBudget || remaining(budgetDate()) > 0)) {
       try {
         return await callModel(o, LITE_MODEL, key);
       } catch (e2) {

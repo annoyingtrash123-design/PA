@@ -51,3 +51,25 @@ describe("Google busy (503)", () => {
     expect(n).toBe(2);
   });
 });
+
+describe("streamed replies", () => {
+  it("joins the text of every chunk and leaves out thoughts", async () => {
+    const { readSse } = await import("./gemini");
+    const chunk = (parts: unknown[]) => `data: ${JSON.stringify({ candidates: [{ content: { parts } }] })}\n\n`;
+    const body = chunk([{ text: "thinking…", thought: true }]) + chunk([{ text: '{"briefing":"Morn' }]) + chunk([{ text: 'ing!"}' }]);
+    let n = 0;
+    const t = await readSse(new Response(body), () => n++);
+    expect(t).toBe('{"briefing":"Morning!"}');
+    expect(n).toBeGreaterThan(0);
+  });
+  it("asks the streaming endpoint when streaming", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (u: string) => {
+      urls.push(u);
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "hi there" }] } }] })}\n\n`);
+    });
+    const t = await generate({ system: "s", user: "u", key: "k", model: "gemini-test-e", bypassBudget: true, stream: true });
+    expect(t).toBe("hi there");
+    expect(urls[0]).toContain(":streamGenerateContent?alt=sse");
+  });
+});

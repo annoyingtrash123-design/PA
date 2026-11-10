@@ -55,7 +55,7 @@ export async function reviewDraft(o: {
     `THE BRIEF THE WRITER FOLLOWED:\n${prep.system_prompt}\n\nTHE CONTEXT IT WAS WRITTEN FROM:\n${prep.user_prompt}` +
     (recent.length ? `\n\nRECENTLY SPOKEN SUMMARIES (newest first):\n${recent.map((r) => `--- ${r.label} ---\n${r.text}`).join("\n")}` : "\n\nRECENTLY SPOKEN SUMMARIES: none on file.") +
     `\n\nDRAFT (JSON):\n${JSON.stringify(fields)}`;
-  const raw = await gen({ system: prep.review_prompt, user, json: true, maxTokens: MAX_TOKENS });
+  const raw = await gen({ system: prep.review_prompt, user, json: true, maxTokens: MAX_TOKENS, stream: true });
   const j = judgeReply(raw, true, hasStats);
   const r = j.r;
   if (!r || !r.briefing || j.salvaged) return null;

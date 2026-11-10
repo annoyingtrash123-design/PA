@@ -291,7 +291,7 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; h
       const ask = async (extra: string) => {
         // a briefing is five parts of JSON (about 750 words): ask for plenty of room, with thinking kept low.
         // With news, the model may read the linked articles so each story is told in full.
-        const raw = await generate({ system, user: prep.user_prompt + recentBlock(recent) + extra, json: jsonMode, maxTokens: BRIEFING_MAX_TOKENS, readLinks: hasNews });
+        const raw = await generate({ system, user: prep.user_prompt + recentBlock(recent) + extra, json: jsonMode, maxTokens: BRIEFING_MAX_TOKENS, stream: true });
         return judgeReply(raw, jsonMode, hasStats);
       };
       let j = await ask("");
@@ -352,7 +352,7 @@ export async function refreshNews(kind: "morning" | "evening", date: string): Pr
   const sel = api<NewsPrep | null>("POST", "/api/news/select", { kind, date, refresh: true });
   if (!sel || !sel.items.length) return { done: false, notice: "No new stories since the last ones." };
   try {
-    const raw = await generate({ system: sel.system_prompt, user: sel.user_prompt, json: true, readLinks: true });
+    const raw = await generate({ system: sel.system_prompt, user: sel.user_prompt, json: true, readLinks: true, stream: true });
     const text = parseNewsJson(raw);
     if (!text || !newsIsFaithful(text, sel.items.map((i) => i.title))) return { done: false, notice: "Couldn't write the news up just now. Try again later." };
     await kvSet(DB, newsKey(skey), { text, at: sel.generated_at, sources: sel.sources, position: sel.position } satisfies StoredNews);
