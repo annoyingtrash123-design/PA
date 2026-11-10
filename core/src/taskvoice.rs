@@ -8,7 +8,8 @@ use crate::util::*;
 use chrono::{Datelike, NaiveDate};
 
 /// Prompt rules for the per-task treatment, gym, weather, leisure and sign-off (morning and evening only).
-pub const PROMPT_RULES: &str = "WORK TASKS: tasks in the Work category are done AT work, inside the work block, as part of the workday. Talk about them together with the work hours ('once you're at work, you've got…', 'at work today, between ten and five, there's…'), never as something separate from work, and never suggest doing them before work, after work, at lunch or in the evening. On a day off, a holiday or the weekend, a Work task can wait for the next workday unless it is dated that day. \
+pub const PROMPT_RULES: &str = "TASK NAMES: the person types tasks as quick notes or commands ('go to the doctor', 'call mum', 'add compliance notes to Excel'). Never read a title out as typed or drop it into a sentence as a bare command (never 'you\'ve got go to the doctor'). Say each one the way a person would: 'you\'ve got a doctor\'s appointment later today', 'you\'ll be calling your mum', 'there\'s a haircut on the cards', 'you\'ve got the compliance notes to add to that Excel sheet'. Keep names, places and specifics exactly, but fix capitals and grammar. \
+WORK TASKS: tasks in the Work category are done AT work, inside the work block, as part of the workday. Talk about them together with the work hours ('once you're at work, you've got…', 'at work today, between ten and five, there's…'), never as something separate from work, and never suggest doing them before work, after work, at lunch or in the evening. On a day off, a holiday or the weekend, a Work task can wait for the next workday unless it is dated that day. \
 COMMON SENSE ABOUT TIME: give realistic durations the way a sensible person would. Use a task's 'usually takes' hint when the context gives one. Anything that means going somewhere (a haircut, the dentist, a GP visit, a grocery shop, a pick-up) also needs travel and often a wait, so never call it a ten-minute job: a haircut is about half an hour to 45 minutes in the chair plus getting there, a GP or dentist visit about an hour all up. Only suggest the lunch break for things that genuinely fit in it with travel (a quick call, a bill, booking something, a nearby errand). Booking or phoning about something is quick even when the thing itself is not. Never squeeze an outing into a gap that is too short, and keep times and suggestions physically possible on the day. \
 TASK TALK (morning: today's tasks; evening: tomorrow's tasks): speak warmly and naturally, mixing a collaborative 'we' ('so looking at what we've got on today, <name>…') with plain 'you' ('you've got the dentist at three', 'you might want to…') the way a real friend or assistant would; don't overuse either, and use the person's name now and then, never in every sentence. \
 Go through EVERY undone task for that day by name. Never say 'plus a few more', 'a few other things' or leave a task out; if there are many, give the bigger or timed ones a sentence or two each and group the very small ones into one breath, but still name each of them. \
@@ -102,6 +103,9 @@ pub fn task_phrase(title: &str) -> Phrase {
     let noun = || Phrase::Noun(mid_title(t));
     let rest: Vec<&str> = it.collect();
     let key = first.to_lowercase();
+    if let Some(n) = outing_noun(t) {
+        return Phrase::Noun(n);
+    }
     let Some((_, ger)) = VERBS.iter().find(|(v, _)| *v == key) else { return noun() };
     // "Book club", "Order of service" and the like are nouns
     if let Some(n) = rest.first().map(|w| w.to_lowercase()) {
@@ -130,12 +134,44 @@ pub fn task_phrase(title: &str) -> Phrase {
     Phrase::Gerund(out)
 }
 
+/// "Go to the doctor", "see dentist", "get a haircut", "go gym" read as what they are: "a doctor's appointment",
+/// "a dentist appointment", "a haircut", "a gym session", "a trip to the bank".
+pub fn outing_noun(title: &str) -> Option<String> {
+    let w: Vec<String> = title.to_lowercase().split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|x| !x.is_empty()).map(String::from).collect();
+    let verb = w.first()?.as_str();
+    if !["go", "see", "visit", "get", "attend", "have", "head", "pop"].contains(&verb) {
+        return None;
+    }
+    let mut i = 1;
+    while i < w.len() && ["to", "the", "a", "an", "my", "into", "down", "over", "off", "in", "at"].contains(&w[i].as_str()) {
+        i += 1;
+    }
+    let dest = w.get(i)?.as_str();
+    let rest_after = w.len() > i + 1 && !(w.len() == i + 2 && ["appointment", "appt", "visit", "office", "session", "trip"].contains(&w[i + 1].as_str()));
+    let place = |p: &str| if rest_after { None } else { Some(p.to_string()) };
+    match dest {
+        "doctor" | "doctors" | "doctor's" | "gp" | "gp's" => place("a doctor's appointment"),
+        "dentist" | "dentists" | "dentist's" | "dental" => place("a dentist appointment"),
+        "physio" | "physiotherapist" => place("a physio appointment"),
+        "specialist" => place("a specialist appointment"),
+        "optometrist" | "optician" | "optometrists" => place("an eye appointment"),
+        "vet" | "vets" => place("a vet visit"),
+        "haircut" | "hairdresser" | "hairdressers" | "barber" | "barbers" | "hair" => place("a haircut"),
+        "gym" => place("a gym session"),
+        "bank" | "library" | "pharmacy" | "chemist" | "supermarket" | "shops" | "council" => place(&format!("a trip to the {dest}")),
+        "post" if w.get(i + 1).map(String::as_str) == Some("office") && w.len() == i + 2 => Some("a trip to the post office".into()),
+        _ => None,
+    }
+}
+
 /// A plain title as it reads mid-sentence: sentence-case titles ("Coffee with Alex", "Team stand-up") lose their
 /// leading capital; names, possessives, acronyms, single words and Title Case ("Powerhouse Museum") keep it.
 pub fn mid_title(t: &str) -> String {
     let words: Vec<&str> = t.split_whitespace().collect();
     let first = words.first().copied().unwrap_or("");
-    let sentence_case = words.len() >= 2 && words[1..].iter().any(|w| w.chars().next().is_some_and(|c| c.is_lowercase()));
+    // a single common word ("Dentist", "Laundry") is a thing, not a name
+    let common_single = words.len() == 1 && crate::durations::typical_for(first).is_some();
+    let sentence_case = common_single || (words.len() >= 2 && words[1..].iter().any(|w| w.chars().next().is_some_and(|c| c.is_lowercase())));
     let lowerable = first.chars().skip(1).all(|c| c.is_lowercase() || c == '-') && !first.contains('\'') && first != "I";
     if sentence_case && lowerable {
         let mut c = t.chars();

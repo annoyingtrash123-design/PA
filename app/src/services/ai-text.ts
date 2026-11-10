@@ -9,7 +9,7 @@ import { mondayOf } from "../util/dates";
 import { generate, GeminiError, parseNewsJson, setDateProvider } from "./gemini";
 import { judgeReply } from "./ai-reply";
 import { previousSlots, recentBlock, reviewDraft } from "./ai-review";
-import { recallNewsWhy, recallWhy, rememberNewsWhy, rememberWhy, whyBudget, whyFromError, whyHeadlines, whyNoKey, whyPaused, whyParse, type Why } from "./ai-reason";
+import { recallNewsWhy, recallWhy, rememberNewsWhy, rememberWhy, whyBudget, whyCheckin, whyFromError, whyHeadlines, whyNoKey, whyPaused, whyParse, type Why } from "./ai-reason";
 import { hasNewerNews, loadNews, newsIsFaithful, newsSettled, updatedLabel } from "./news";
 import { weatherSettled } from "./weather";
 import { composeWithNews, eveningSections, mergeParts, morningScriptWithNews, morningSections, normalisePos, readEntry, splitForNews, type AiParts } from "./morning-script";
@@ -241,7 +241,7 @@ function recordNews(kind: Kind, date: string, news: NewsPrep | null | undefined)
  * The text for a kind/date. Reads the stored AI text first (never regenerates it on its own). A request is made only
  * when there is no text yet and shouldAutoGenerate() allows it, or when `force` is set (the person tapped a button).
  */
-export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } = {}): Promise<BriefingResult> {
+export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; hold?: boolean } = {}): Promise<BriefingResult> {
   const early = api<BriefingPrep>("GET", `/api/briefing?kind=${kind}&date=${date}`);
   const week = mondayOf(date);
   const currentWeek = week === mondayOf(today());
@@ -262,6 +262,8 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
     if (!stored && !opts.force && !shouldAutoGenerate(kind, null, { currentWeek })) {
       return result(kind, early, "template", null, { ...flags(null, early), why: recallWhy(skey) });
     }
+    // the morning check-in is open: wait for the answers so the day is written once, with them in it
+    if (!stored && !opts.force && opts.hold) return result(kind, early, "template", null, { ...flags(null, early), why: whyCheckin() });
     // Let the first forecast and news arrive so the first request is made once, with them in it. Later refreshes never trigger anything.
     if (!stored && kind !== "weekly") await Promise.all([weatherSettled(), newsSettled()]);
     const prep = api<BriefingPrep>("GET", `/api/briefing?kind=${kind}&date=${date}`);

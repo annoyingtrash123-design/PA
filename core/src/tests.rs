@@ -701,7 +701,7 @@ fn morning_template_word_count_on_sample_data() {
             }
             let text = morning(&mut a, &day);
             let n = words_in(&text);
-            assert!((360..=780).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
+            assert!((360..=820).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
             assert!(!has_stats(&text), "{day}: {text}");
         }
     }
@@ -1027,7 +1027,7 @@ fn cat_id(a: &mut App, name: &str) -> Value {
 }
 
 #[test]
-fn missed_untimed_rolls_timed_and_appointments_are_missed() {
+fn missed_untimed_rolls_and_only_clock_times_are_missed() {
     let mut a = App::new(TODAY);
     let appt = cat_id(&mut a, "Appointments");
     let plain = a.post("/api/tasks", json!({"title": "Pay rent", "date": "2026-10-30", "category_id": null}));
@@ -1036,21 +1036,20 @@ fn missed_untimed_rolls_timed_and_appointments_are_missed() {
     let rec = a.post("/api/tasks", json!({"title": "Stretch", "time": "07:00", "recurrence": {"kind": "daily"}, "category_id": null}));
     let m = a.get("/api/missed");
     let m = m.as_array().unwrap();
-    assert_eq!(m.len(), 2);
-    assert_eq!(m[0]["title"], "Dentist");
-    assert_eq!(m[0]["date"], "2026-10-29");
-    assert_eq!(m[1]["time"], "10:00");
-    assert_eq!(m[1]["category"], Value::Null);
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0]["time"], "10:00");
+    assert_eq!(m[0]["category"], Value::Null);
     assert_eq!(a.get(&format!("/api/tasks/{}", plain["id"]))["date"], TODAY);
     assert_eq!(a.get(&format!("/api/tasks/{}", timed["id"]))["date"], "2026-10-30");
-    assert_eq!(a.get(&format!("/api/tasks/{}", dent["id"]))["date"], "2026-10-29");
+    // an appointment with only a part of the day carries over like anything else
+    assert_eq!(a.get(&format!("/api/tasks/{}", dent["id"]))["date"], TODAY);
     assert_eq!(a.get(&format!("/api/tasks/{}", rec["id"]))["date"], Value::Null);
     // the days view does not carry them over
     let day = a.get("/api/days?start=2026-11-02&days=1");
     let titles: Vec<&str> = day[0]["items"].as_array().unwrap().iter().map(|o| o["title"].as_str().unwrap()).collect();
-    assert_eq!(titles, vec!["Stretch", "Pay rent"]);
+    assert_eq!(titles, vec!["Stretch", "Pay rent", "Dentist"]);
     assert_eq!(a.st().version, 8);
-    assert_eq!(a.st().missed.len(), 2);
+    assert_eq!(a.st().missed.len(), 1);
 }
 
 #[test]
@@ -1086,9 +1085,11 @@ fn missed_move_to_today_dismiss_edit_and_delete_clear() {
 fn morning_template_mentions_a_missed_appointment() {
     let mut a = App::new(TODAY);
     let appt = cat_id(&mut a, "Appointments");
-    a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "category_id": appt}));
+    a.post("/api/tasks", json!({"title": "Dentist", "date": "2026-10-29", "time": "15:00", "category_id": appt}));
+    a.post("/api/tasks", json!({"title": "Go to the doctor", "date": "2026-10-29", "time": "09:00", "category_id": appt}));
     let b = a.get("/api/briefing?kind=morning");
-    assert!(b["template_text"].as_str().unwrap().contains("Dentist from Thursday is waiting for a new time in Tasks."), "{}", b["template_text"]);
+    let t = b["template_text"].as_str().unwrap();
+    assert!(t.contains("The doctor's appointment from Thursday and the dentist from Thursday are waiting for new times in Tasks."), "{t}");
     assert!(b["user_prompt"].as_str().unwrap().contains("Missed and still waiting"));
     let mut c = App::new(TODAY);
     assert!(!c.get("/api/briefing?kind=morning")["template_text"].as_str().unwrap().contains("waiting for"));
@@ -2256,4 +2257,24 @@ fn work_tasks_are_filed_as_work_and_spoken_as_part_of_the_workday() {
     assert!(text.contains("at work") || text.contains("workday") || text.contains("at your desk"), "{text}");
     assert!(!text.contains("before work is good for adding") && !text.contains("middle of the day, adding"), "{text}");
     assert!(b["system_prompt"].as_str().unwrap().contains("WORK TASKS"));
+}
+
+#[test]
+fn typed_commands_become_natural_speech() {
+    use crate::taskvoice::{task_phrase, Phrase};
+    assert_eq!(task_phrase("go to the doctor"), Phrase::Noun("a doctor's appointment".into()));
+    assert_eq!(task_phrase("Go to the dentist"), Phrase::Noun("a dentist appointment".into()));
+    assert_eq!(task_phrase("get a haircut"), Phrase::Noun("a haircut".into()));
+    assert_eq!(task_phrase("go gym"), Phrase::Noun("a gym session".into()));
+    assert_eq!(task_phrase("Go to the bank"), Phrase::Noun("a trip to the bank".into()));
+    // anything more specific stays a gerund, never a bare command
+    assert_eq!(task_phrase("Go to the doctor about my knee").text(), "going to the doctor about my knee");
+    assert_eq!(task_phrase("Dentist"), Phrase::Noun("dentist".into()));
+    let days = days_from(1);
+    let mut a = task_app_for_days(&days, &["go to the doctor"]);
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    let t = b["template_text"].as_str().unwrap();
+    assert!(t.contains("a doctor's appointment"), "{t}");
+    assert!(!t.contains("go to the doctor"), "{t}");
+    assert!(b["system_prompt"].as_str().unwrap().contains("TASK NAMES"));
 }

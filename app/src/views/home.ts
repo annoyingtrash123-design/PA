@@ -1,4 +1,6 @@
-import { assistantName, getState, now, today } from "../core";
+import { api, assistantName, getState, now, today } from "../core";
+import type { Day, PartOfDay } from "../types";
+import { checkinAnsweredOn, markCheckin, needsSlot, showCheckin } from "../util/checkin";
 import type { BriefingResult } from "../services/ai-text";
 import { affirmationFor, getBriefing, refreshNews, templateBriefing, templateDigest, type Digest, type NewsView } from "../services/ai-text";
 import { sourceLabel } from "../services/ai-reason";
@@ -23,6 +25,7 @@ export function renderHome(root: HTMLElement): () => void {
 
   const weatherHolder = h("div", { hidden: true });
   const dayHolder = h("div");
+  const checkinHolder = h("div");
   const playHolder = h("div", { class: "play-top" });
   let token = 0;
   let digest: Digest | null = null;
@@ -117,9 +120,63 @@ export function renderHome(root: HTMLElement): () => void {
     await show(b ?? templateBriefing(kind!, date), date);
   };
 
+  /** The morning check-in: one quick question per unplaced task. No AI is used; the day is written once it's answered. */
+  const drawCheckin = (day: Day, onDone: () => void) => {
+    const items = needsSlot(day);
+    const parts: [PartOfDay, string][] = day.work ? [["morning", "Before work"], ["afternoon", "Afternoon"], ["evening", "After work"]] : [["morning", "Morning"], ["afternoon", "Afternoon"], ["evening", "Evening"]];
+    const rows = items.map((o) => {
+      const chips = h("div", { class: "chip-row", style: { marginTop: "6px" } });
+      const paint = (sel: string | null) =>
+        clear(
+          chips,
+          ...parts.map(([p, label]) =>
+            button(label, () => {
+              try {
+                api("PUT", `/api/tasks/${o.task_id}/part`, { part_of_day: p });
+                paint(p);
+              } catch (e) {
+                toast((e as Error).message);
+              }
+            }, { kind: sel === p ? "tonal" : "outline", cls: "small" }),
+          ),
+        );
+      paint(null);
+      return h("div", { class: "missed-item" }, h("div", { class: "occ-title" }, o.title), chips);
+    });
+    const finish = () => {
+      markCheckin(day.date);
+      clear(checkinHolder);
+      onDone();
+    };
+    clear(
+      checkinHolder,
+      card(
+        "compact stack",
+        h("div", { class: "summary-head" }, icon("event", 20), h("span", { class: "label-caps" }, "Quick check-in")),
+        h("p", { class: "muted" }, `Before I write up your day: roughly when do these fit? Work things will just happen at work.`),
+        ...rows,
+        h("div", { class: "row", style: { gap: "8px", justifyContent: "flex-end" } }, button("Skip today", finish, { kind: "text" }), button("All set", finish, { kind: "primary", icon: "check" })),
+      ),
+    );
+  };
+
   const load = async () => {
     const my = ++token;
     const date = today();
+    // morning: if some of today's tasks have no slot, ask first (once a day), and hold the AI write-up until then
+    let hold = false;
+    clear(checkinHolder);
+    if (kind === "morning") {
+      try {
+        const day = api<Day[]>("GET", `/api/days?start=${date}&days=1`)[0];
+        if (day && showCheckin(day, now().now, checkinAnsweredOn())) {
+          hold = true;
+          drawCheckin(day, () => void load());
+        }
+      } catch {
+        // no check-in: carry on
+      }
+    }
     // show the instant template version straight away; the AI version replaces it when it arrives
     let tpl: BriefingResult | null = null;
     try {
@@ -130,7 +187,7 @@ export function renderHome(root: HTMLElement): () => void {
       drawDay(null, null, true);
     }
     // Only the first text of the day is automatic (the morning one writes all four parts); later changes need a tap
-    const b = await getBriefing(kind!, date).catch(() => null);
+    const b = await getBriefing(kind!, date, { hold }).catch(() => null);
     if (my !== token) return;
     await show(b ?? tpl ?? templateBriefing(kind!, date), date);
   };
@@ -151,6 +208,7 @@ export function renderHome(root: HTMLElement): () => void {
     affHolder,
     playHolder,
     segHolder,
+    checkinHolder,
     dayHolder,
     weekCard(),
   );

@@ -282,3 +282,6 @@ a.link { color: var(--lav); }
 .hold-btn.holding::before { width: 100%; transition: width var(--hold-ms, 700ms) linear; }
 .hold-btn.icon-only { width: 40px; height: 40px; padding: 0; justify-content: center; flex: none; border-color: transparent; }
 .menu-pop .hold-btn { width: 100%; border-radius: 10px; border: 0; justify-content: flex-start; padding: 10px 12px; color: var(--text); }
+
+/* untimed work tasks, shown inside the work hours */
+.occ.in-work { margin-left: 14px; padding-left: 10px; border-left: 2px solid var(--line); }

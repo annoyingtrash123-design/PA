@@ -12,11 +12,9 @@ use crate::util::*;
 use chrono::{Datelike, NaiveDate};
 use serde_json::{json, Value};
 
+/// The task as it reads mid-sentence, the way a person would say it ("calling Mum at 6 PM", "a doctor's appointment").
 pub fn item_phrase(o: &Occurrence) -> String {
-    match &o.time {
-        Some(t) => format!("{} at {}", o.title, say_time(t)),
-        None => o.title.clone(),
-    }
+    crate::taskvoice::inline_phrase(o)
 }
 
 /// A warm one-liner about the work situation of a day, only when it is notable or useful.
@@ -103,7 +101,7 @@ fn has_word(text: &str, words: &[&str]) -> bool {
 /// What the day looks like, but only where a memory note or a task actually suggests it.
 fn plans(items: &[Occurrence], mem: &Memory, workout: &Option<WorkoutPlan>, info: &DayInfo) -> Plans {
     if let Some(o) = items.iter().find(|o| !o.done && has_word(&o.title, &["walk", "run", "park", "hike", "grocery", "groceries", "shopping", "errand", "errands", "picnic", "bbq", "barbecue"])) {
-        return Plans::Outdoor(o.title.clone());
+        return Plans::Outdoor(crate::taskvoice::task_phrase(&o.title).text().to_string());
     }
     if info.work.is_some() {
         return if mem.notes.iter().any(|n| has_word(&n.text, &["office"])) { Plans::Office } else { Plans::Desk };

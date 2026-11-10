@@ -52,12 +52,18 @@ function dayCard(d: Day, redraw: () => void): HTMLElement {
   const body: HTMLElement[] = [top];
   if (!d.items.length && !d.work) body.push(h("p", { class: "muted" }, "Nothing planned"));
   // merge the work band into the timed items by start time
-  const entries: { key: string; o: Day["items"][number] | null }[] = d.items.map((o) => ({ key: o.time ?? "99:99", o }));
+  // untimed Work tasks belong inside the work hours: they sit just under the work band, indented
+  const atWork = (o: Occurrence) => !!d.work && !o.time && o.category?.name === "Work";
+  const entries: { key: string; o: Day["items"][number] | null }[] = d.items.map((o) => ({ key: atWork(o) ? `${d.work!.start}:w` : o.time ?? "99:99", o }));
   if (d.work) entries.push({ key: d.work.start, o: null });
   entries.sort((a, b) => (a.key === b.key ? (a.o ? 1 : 0) - (b.o ? 1 : 0) : a.key < b.key ? -1 : 1));
   for (const e of entries) {
     if (!e.o) body.push(h("div", { class: "work-band" }, icon("work", 18), `Work ${d.work!.start}-${d.work!.end}`));
-    else body.push(occurrenceTile(e.o, redraw, (occ) => openTaskDialog({ date: occ.date, occ, onSaved: redraw })));
+    else {
+      const tile = occurrenceTile(e.o, redraw, (occ) => openTaskDialog({ date: occ.date, occ, onSaved: redraw }));
+      if (atWork(e.o)) tile.classList.add("in-work");
+      body.push(tile);
+    }
   }
   return card(`compact ${isToday ? "raised hl today" : ""}`, ...body);
 }

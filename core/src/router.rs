@@ -155,6 +155,7 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         ("DELETE", ["tasks", id]) => tasks::delete_task(env, id_of(id)?),
         ("GET", ["tasks", id, "categorise-prompt"]) => tasks::categorise_prompt(env, id_of(id)?),
         ("PUT", ["tasks", id, "category"]) => ok(tasks::set_category(env, id_of(id)?, body)?),
+        ("PUT", ["tasks", id, "part"]) => ok(tasks::set_part(env, id_of(id)?, body)?),
         // days and occurrences
         ("GET", ["days"]) => tasks::days(env, q),
         ("POST", ["occurrences", "toggle"]) => ok(tasks::toggle(env, parse(body)?)?),

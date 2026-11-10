@@ -308,6 +308,19 @@ pub fn create_task(env: &mut Env, b: TaskIn) -> Res<Task> {
     Ok(env.st.tasks[idx].clone())
 }
 
+/// `PUT /api/tasks/{id}/part` {"part_of_day"}: just the part of the day (the morning check-in).
+pub fn set_part(env: &mut Env, id: i64, b: &Value) -> Res<Task> {
+    let part = b["part_of_day"].as_str().unwrap_or("");
+    if !["morning", "afternoon", "evening", "anytime"].contains(&part) {
+        return Err(ApiErr::bad("part_of_day must be morning, afternoon, evening or anytime"));
+    }
+    let t = env.st.tasks.iter_mut().find(|t| t.id == id).ok_or_else(|| ApiErr::not_found("task not found"))?;
+    t.part_of_day = part.to_string();
+    let out = t.clone();
+    env.changed = true;
+    Ok(out)
+}
+
 pub fn update_task(env: &mut Env, id: i64, b: TaskIn) -> Res<Task> {
     let idx = env.st.tasks.iter().position(|t| t.id == id).ok_or_else(|| ApiErr::not_found("task not found"))?;
     let c = clean(&b)?;
@@ -473,12 +486,9 @@ fn days_in_month(d: NaiveDate) -> u32 {
     NaiveDate::from_ymd_opt(y, m, 1).unwrap().pred_opt().unwrap().day()
 }
 
-fn is_appointment(st: &State, task: &Task) -> bool {
-    task.category_id.and_then(|c| st.categories.iter().find(|x| x.id == c)).is_some_and(|c| c.name.trim().eq_ignore_ascii_case("appointments"))
-}
 
-/// Unfinished one-off tasks dated before `today`: untimed ones (outside the Appointments category) move to
-/// `today`; timed ones and appointments keep their date and are marked in `st.missed`. Returns true if anything changed.
+/// Unfinished one-off tasks dated before `today`: untimed ones (only a part of the day, or anytime) move to
+/// `today`; ones with a clock time keep their date and are marked in `st.missed`. Returns true if anything changed.
 pub fn rollover(st: &mut State, today: NaiveDate) -> bool {
     let t = fmt_date(today);
     let mut changed = false;
@@ -501,7 +511,8 @@ pub fn rollover(st: &mut State, today: NaiveDate) -> bool {
         }
         let Some(d) = task.date.clone() else { continue };
         if d.as_str() < t.as_str() && !done.contains(&format!("{}|", task.id)) {
-            if task.time.is_some() || is_appointment(st, task) {
+            // only things pinned to a clock time wait for a decision; anything with just a part of the day carries over
+            if task.time.is_some() {
                 missed.push((task.id.to_string(), d));
             } else {
                 moved.push((i, d));

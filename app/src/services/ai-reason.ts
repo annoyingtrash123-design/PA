@@ -2,7 +2,7 @@
 // Pure helpers (plus a tiny localStorage note so the reason survives a reload); no network.
 import { clockText } from "./ai-budget";
 
-export type WhyCode = "no-key" | "budget" | "paused" | "network" | "timeout" | "http" | "parse" | "cut-off" | "stats" | "empty" | "headlines" | "other";
+export type WhyCode = "no-key" | "budget" | "paused" | "network" | "timeout" | "http" | "parse" | "cut-off" | "stats" | "empty" | "headlines" | "checkin" | "other";
 export interface Why {
   code: WhyCode;
   /** short phrase for the label: "AI reply couldn't be read" */
@@ -17,6 +17,7 @@ interface ErrLike {
   pausedUntil?: number;
 }
 
+export const whyCheckin = (): Why => ({ code: "checkin", text: "answer the quick check-in above and I'll write up your day" });
 export const whyNoKey = (): Why => ({ code: "no-key", text: "add a Gemini key in Settings to turn on AI writing" });
 export const whyBudget = (): Why => ({ code: "budget", text: "today's AI allowance is used up" });
 export const whyPaused = (until: number, tz?: string): Why => ({ code: "paused", text: `Google's limit is resting until ${clockText(until, tz)}` });

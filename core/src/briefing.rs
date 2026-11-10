@@ -602,11 +602,19 @@ fn morning_template(c: &Ctx) -> String {
         let mut parts: Vec<String> = vec![];
         for o in c.missed.iter().take(2) {
             let wd = parse_date(&o.date).map(weekday_name).unwrap_or_else(|| "earlier".into());
-            parts.push(format!("{} from {wd}", o.title));
+            let what = match taskvoice::task_phrase(&o.title) {
+                taskvoice::Phrase::Gerund(g) => g,
+                taskvoice::Phrase::Noun(n) => {
+                    let n = n.strip_prefix("a ").or_else(|| n.strip_prefix("an ")).unwrap_or(&n).to_string();
+                    let lower = n.to_lowercase();
+                    if ["the ", "my ", "your "].iter().any(|p| lower.starts_with(p)) { n } else { format!("the {n}") }
+                }
+            };
+            parts.push(format!("{what} from {wd}"));
         }
         let verb = if c.missed.len() == 1 { "is" } else { "are" };
         let what = if c.missed.len() == 1 { "a new time" } else { "new times" };
-        must(&mut v, format!("The {} {verb} waiting for {what} in Tasks.", parts.join(" and the ")));
+        must(&mut v, format!("{} {verb} waiting for {what} in Tasks.", cap(&parts.join(" and "))));
     }
 
     // 3. today by category
@@ -784,7 +792,7 @@ fn morning_template(c: &Ctx) -> String {
         add(&mut v, format!("Put together, {}", lower_first(&digest::overview_template(&c.items, &[], &None, &c.info, d))), PK::Extra(2));
     }
     if let Some(o) = todo.iter().find(|o| !o.notes.trim().is_empty() && words_in(&o.notes) <= 25) {
-        add(&mut v, format!("You left yourself a note on {}, and it says {}", o.title, o.notes.trim()), PK::Extra(3));
+        add(&mut v, format!("You left yourself a note on {}, and it says {}", taskvoice::inline_phrase(o), crate::util::lower_first_word(o.notes.trim())), PK::Extra(3));
     }
     let mut further: Vec<String> = vec![];
     for (wd, items) in c.ahead.iter().take(2) {

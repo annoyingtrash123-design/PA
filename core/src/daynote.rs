@@ -129,8 +129,8 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
     let key = key_task(items).unwrap();
     if done == total {
         return v(vec![
-            format!("Everything on the list is already ticked off, {} included, so the rest of the day is yours.", key.title),
-            format!("The list is clear, {} and all, so anything else you do today is a bonus.", key.title),
+            format!("Everything on the list is already ticked off, {} included, so the rest of the day is yours.", phrase(key)),
+            format!("The list is clear, {} and all, so anything else you do today is a bonus.", phrase(key)),
         ]);
     }
 
@@ -163,9 +163,9 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
                 format!("There's only {kp} on the list today, so do it whenever it feels right and spend the spare time on something you chose."),
             ])
         } else {
-            let s = second.map(|s| s.title.clone()).unwrap_or_default();
+            let s = second.map(phrase).unwrap_or_default();
             v(vec![
-                format!("It's a light day, with {} and {s} on the list. There's plenty of slack, so leave room for a proper break.", key.title),
+                format!("It's a light day, with {} and {s} on the list. There's plenty of slack, so leave room for a proper break.", phrase(key)),
                 format!("There's just {kp}, and then {s}. That leaves most of the day free, so use it deliberately."),
             ])
         };
@@ -185,7 +185,7 @@ fn template_core(items: &[Occurrence], d: NaiveDate) -> String {
                     "The morning is quiet, so use it to get ahead.".to_string()
                 } else {
                     let m = items.iter().find(|o| !o.done && part_idx(o) == Some(0)).unwrap_or(key);
-                    format!("Get {} done in the morning so the afternoon only has to be the afternoon.", m.title)
+                    format!("Get {} done in the morning so the afternoon only has to be the afternoon.", phrase(m))
                 };
                 v(vec![
                     format!("The afternoon is where the day gets busy, with {kp} among it. {lead}"),
