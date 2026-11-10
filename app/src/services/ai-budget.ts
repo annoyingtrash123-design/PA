@@ -42,7 +42,49 @@ export function usedToday(date: string, store: Store = lsStore): number {
   }
   return 0;
 }
-export const remaining = (date: string, store: Store = lsStore): number => Math.max(0, DAILY_BUDGET - usedToday(date, store));
+/** Extra requests the person allowed for one day ("Allow 3 more today" in Settings). */
+export const EXTRA_KEY = "pa-ai-extra";
+export function extraToday(date: string, store: Store = lsStore): number {
+  try {
+    const j = JSON.parse(store.get(EXTRA_KEY) || "null");
+    if (j && j.date === date && Number.isFinite(j.n)) return Math.max(0, j.n);
+  } catch {
+    // fall through
+  }
+  return 0;
+}
+export function addExtra(date: string, n = 3, store: Store = lsStore): number {
+  const v = extraToday(date, store) + n;
+  store.set(EXTRA_KEY, JSON.stringify({ date, n: v }));
+  return v;
+}
+export const limitToday = (date: string, store: Store = lsStore): number => DAILY_BUDGET + extraToday(date, store);
+export const remaining = (date: string, store: Store = lsStore): number => Math.max(0, limitToday(date, store) - usedToday(date, store));
+
+// ---- automatic attempts: a summary that failed is tried again automatically only a limited number of times a day
+// (reopening the app used to try again every time, each one using a request); after that it waits for "Try again"
+export const AUTO_TRIES_KEY = "pa-ai-auto-tries";
+export const MAX_AUTO_TRIES = 2;
+export function autoTries(date: string, key: string, store: Store = lsStore): number {
+  try {
+    const j = JSON.parse(store.get(AUTO_TRIES_KEY) || "null");
+    if (j && j.date === date && j.tries && Number.isFinite(j.tries[key])) return j.tries[key];
+  } catch {
+    // fall through
+  }
+  return 0;
+}
+export function noteAutoTry(date: string, key: string, store: Store = lsStore): void {
+  let tries: Record<string, number> = {};
+  try {
+    const j = JSON.parse(store.get(AUTO_TRIES_KEY) || "null");
+    if (j && j.date === date && j.tries) tries = j.tries;
+  } catch {
+    // start fresh
+  }
+  tries[key] = (tries[key] ?? 0) + 1;
+  store.set(AUTO_TRIES_KEY, JSON.stringify({ date, tries }));
+}
 export function recordUse(date: string, store: Store = lsStore): number {
   const count = usedToday(date, store) + 1;
   store.set(USAGE_KEY, JSON.stringify({ date, count }));

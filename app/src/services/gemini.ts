@@ -338,6 +338,8 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
   } catch (e) {
     clearTimeout(timer);
     clearTimeout(cap);
+    // the request never reached Google (no connection): it didn't count
+    if (!ctl.signal.aborted) unrecordUse(budgetDate());
     throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
   }
   if (!stream || !res.ok) {

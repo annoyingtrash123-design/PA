@@ -3,7 +3,7 @@
 import { api, assistantName, getState, hasStats, today } from "../core";
 import type { BriefingPrep, DigestPrep, MorningParts, NewsPrep, Weather } from "../types";
 import { ctxCache, hasKey } from "./cache";
-import { DAILY_BUDGET, getPausedUntil, isPaused, LOW_BUDGET, remaining, restingNotice, usedToday, VOICE_BUDGET, voiceUsedToday } from "./ai-budget";
+import { autoTries, getPausedUntil, limitToday, MAX_AUTO_TRIES, noteAutoTry, isPaused, LOW_BUDGET, remaining, restingNotice, usedToday, VOICE_BUDGET, voiceUsedToday } from "./ai-budget";
 import { shouldAutoGenerate, showUpdateButton, showWriteButton, storeKey, type StoredText } from "./ai-policy";
 import { mondayOf } from "../util/dates";
 import { generate, GeminiError, parseNewsJson, setDateProvider } from "./gemini";
@@ -205,7 +205,7 @@ export function aiNotice(): string | null {
 }
 
 /** AI uses so far today and the daily limit, for Settings. */
-export const aiUsage = () => ({ used: usedToday(today()), limit: DAILY_BUDGET, voiceUsed: voiceUsedToday(today()), voiceLimit: VOICE_BUDGET });
+export const aiUsage = () => ({ used: usedToday(today()), limit: limitToday(today()), voiceUsed: voiceUsedToday(today()), voiceLimit: VOICE_BUDGET });
 
 export interface BriefingResult extends Briefing {
   /** an AI text exists but the plan changed since: offer "Plans changed — update summary" */
@@ -277,6 +277,9 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; h
       return stored ? result(kind, prep, "gemini", stored.ai, { ...flags(stored, prep), notice, storedNews, newsWhy: prep.news && !storedNews ? newsWhy ?? "not written by the AI" : null }) : result(kind, prep, "template", null, { ...flags(null, prep), notice, why: w });
     };
     if (!opts.force && recentlyFailed(skey)) return fallback();
+    // a summary that already failed today is retried automatically only once more; then it waits for "Try again"
+    if (!opts.force && !stored && autoTries(today(), skey) >= MAX_AUTO_TRIES) return fallback();
+    if (!opts.force && !stored) noteAutoTry(today(), skey);
     const d = today();
     if (isPaused(Date.now())) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyPaused(getPausedUntil(), tz));
     if (remaining(d) <= 0) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyBudget());

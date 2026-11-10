@@ -83,3 +83,26 @@ describe("cleanKey", () => {
     expect(cleanKey(" AIzaSyAbc​123\n ")).toBe("AIzaSyAbc123");
   });
 });
+
+import { addExtra, autoTries, MAX_AUTO_TRIES, noteAutoTry, remaining as rem2, limitToday } from "./ai-budget";
+describe("extra allowance and automatic tries", () => {
+  const mem = () => {
+    const m = new Map<string, string>();
+    return { get: (k: string) => m.get(k) ?? "", set: (k: string, v: string) => void (v ? m.set(k, v) : m.delete(k)) };
+  };
+  it("'Allow 3 more today' raises today's limit only", () => {
+    const s = mem();
+    expect(limitToday("2026-11-10", s)).toBe(12);
+    addExtra("2026-11-10", 3, s);
+    expect(limitToday("2026-11-10", s)).toBe(15);
+    expect(rem2("2026-11-10", s)).toBe(15);
+    expect(limitToday("2026-11-11", s)).toBe(12);
+  });
+  it("counts automatic tries per summary per day", () => {
+    const s = mem();
+    for (let i = 0; i < MAX_AUTO_TRIES; i++) noteAutoTry("2026-11-10", "morning:2026-11-10", s);
+    expect(autoTries("2026-11-10", "morning:2026-11-10", s)).toBe(MAX_AUTO_TRIES);
+    expect(autoTries("2026-11-10", "evening:2026-11-10", s)).toBe(0);
+    expect(autoTries("2026-11-11", "morning:2026-11-10", s)).toBe(0);
+  });
+});

@@ -1,4 +1,4 @@
-import { api, ApiError, assistantName, getState, resetEverything } from "../core";
+import { api, ApiError, assistantName, getState, resetEverything, today } from "../core";
 import { aiUsage, testKey } from "../services/ai-text";
 import { cleanKey, DEFAULT_MODEL, getKey, getModel, hasKey, setKey, setModel } from "../services/cache";
 import { refreshHolidays } from "../services/holidays";
@@ -10,7 +10,7 @@ import { stopAll, previewNatural, refreshSpeed } from "../services/readaloud";
 import { STYLES, VOICES } from "../services/gemini-tts";
 import { icon } from "../icons";
 import { DEFAULT_SPEED, getGeminiVoice, getFavourites, getSpeed, getStyle, getVoiceType, orderVoices, toggleFavourite, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
-import { quotaMessage } from "../services/ai-budget";
+import { addExtra, quotaMessage } from "../services/ai-budget";
 import { GeminiError } from "../services/gemini";
 import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
 import { isValidTimezone } from "../util/dates";
@@ -120,6 +120,12 @@ function build(redraw: () => void): HTMLElement[] {
     return `AI writing today: ${u.used} of ${u.limit} · Voice clips today: ${u.voiceUsed} of ${u.voiceLimit} (a summary is read in about 3 clips)`;
   };
   const usageLine = h("p", { class: "muted small" }, usageText());
+  // the app's own daily limit is a safety net below Google's; this lets a few more through today when it's run out
+  const extraBtn = button("Allow 3 more today", () => {
+    addExtra(today(), 3);
+    usageLine.textContent = usageText();
+    toast("Three more for today. If Google's own free limit is reached, Miranda will wait until it resets.");
+  }, { kind: "text", cls: "small", icon: "add" });
   const runTest = async () => {
     const key = cleanKey(fKey.value) || getKey();
     if (!key) return setStatus("Paste a key first.", true);
@@ -227,7 +233,7 @@ function build(redraw: () => void): HTMLElement[] {
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
       field("Gemini API key", fKey, hasKey() ? `A key is saved, ending in …${getKey().slice(-4)}. Match it on aistudio.google.com/apikey to see which Google account it belongs to.` : undefined),
       h("a", { class: "link small", href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener noreferrer" }, "Get a free key at Google AI Studio"),
-      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
+      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, extraBtn, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
     memoryCard(name),
     profileCard(redraw),
