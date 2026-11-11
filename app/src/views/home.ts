@@ -86,11 +86,13 @@ export function renderHome(root: HTMLElement): () => void {
         h("div", { class: "summary-head" }, icon(kind === "morning" ? "sun" : "moon", 20), h("span", { class: "label-caps" }, `${title} with ${name}`)),
         note ? h("div", { class: "row muted small", style: { gap: "8px" } }, h("span", { class: "spinner" }), note) : null,
         resting ? h("p", { class: "muted small", "data-testid": "source-label" }, resting) : null,
+        // after a Google hiccup the retry sits right here under the reason, not at the bottom of a long card
+        onUpdate && b?.source === "template" ? button("Try again", onUpdate, { kind: "tonal", icon: "redo", cls: "small" }) : null,
         greetingLine ? h("p", { class: "day-greeting" }, greetingLine) : null,
         ...(b?.news && b.layout && text
           ? [...paragraphs(b.layout.before).map((p) => h("p", null, p)), newsBlock(b.news, date!), ...paragraphs(b.layout.after).map((p) => h("p", null, p))]
           : paragraphs(body).map((p) => h("p", null, p))),
-        onUpdate ? button(b && b.source === "template" ? "Try again" : "Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
+        onUpdate && b?.source !== "template" ? button("Plans changed — update summary", onUpdate, { kind: "text", cls: "small" }) : null,
       ),
     );
     clear(playHolder, readAloud(() => script || body, () => getState().settings.voice, kind === "morning" ? "Read it to me" : "Read my wind-down", !text, true, { sections: () => sections }));
