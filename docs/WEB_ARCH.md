@@ -32,7 +32,9 @@ State = {
   "completions": {"<task_id>|<date>": true},       // recurring: per date; one-off: date ""
   "checklist_done": {"<task_id>|<date>|<item_id>": true},
   "rolled_over": {"<task_id>": "<original date>"},
-  "missed": {"<task_id>": "<original date>"},     // timed / Appointments one-offs that were not done in time (date unchanged)
+  "missed": {"<task_id>": "<original date>"},     // one-offs with a clock time that were not done in time (date unchanged)
+  "learned_minutes": {"<task title, lower case>": 30},  // durations the user set, remembered per title
+  "news_used": {"<date>|<kind>": [NewsItem]},           // stories already used in summaries
   "days_off": ["YYYY-MM-DD"],
   "goals": [Goal],
   "leisure": [Leisure],                      // things to watch/read/listen/play/try (API.md "Leisure")
@@ -69,17 +71,25 @@ maps WMO codes using `GET /api/weather-summary?code=61` (core owns the WMO table
 The core cannot call the network, so these return everything the UI needs to do it:
 
 - `GET /api/briefing?kind=morning|evening|weekly&date=` → body
-  `{"kind","date","weather","stats", "affirmation", "template_text", "cache_key", "system_prompt", "user_prompt", "max_words"}`.
-  UI: if a key is saved and `pa-ai-cache[cache_key]` is missing, call Gemini with the prompts; accept the reply if
-  `!has_stats(reply)` (retry once with a stricter reminder appended, as the old backend did), else use `template_text`.
-  Cache accepted Gemini replies. Shown text = cached/Gemini text or template_text.
+  `{"kind","date","weather","stats","affirmation","template_text","template_body","template_parts","news","cache_key","plan_fingerprint","system_prompt","user_prompt","opening","max_words"}`.
+  `system_prompt`/`user_prompt` are for the plain-text "day" request. For mornings, `opening` = `{system_prompt, user_prompt}` is a separate small
+  request for the greeting, weather comment and affirmation (null for evening and weekly); `news` carries its own prompts (see News).
+  UI (`services/ai-text.ts`): if a key is saved and the cache has no entry for `cache_key`, it sends up to THREE small independent Gemini requests in
+  parallel: the opening (JSON, morning only), the day (plain text, streamed) and the news (JSON, streamed). Each can fail on its own and falls back to the
+  built-in version of just that part. There is no editor or review pass. The day reply is accepted if `!has_stats(reply)` (one retry with a stricter reminder
+  while the budget is comfortable), else the built-in `template_text` is shown. Recent summaries (`services/ai-review.ts`: for a morning, last night's,
+  yesterday morning's and the night before's; for an evening, this morning's, last night's and yesterday morning's) are appended to the prompts so the writer
+  doesn't repeat itself. Accepted replies are cached. Shown text = cached/Gemini text or the built-in text.
 - `GET /api/digest?date=` → `{"date","weather","cache_key","system_prompt","user_prompt","template":{"weather_comment","overview"}}`.
   Gemini reply is JSON `{"weather_comment","overview"}` (parse tolerantly; guard only the overview).
 - `GET /api/day-note?date=` → `{"date","cache_key","system_prompt","user_prompt","template_text"}`.
 - Auto-categorisation: `POST/PUT /api/tasks` with `"category_id":"auto"` categorises immediately with the
   keyword table (so it works offline), sets `category_auto: true`. Gemini is not used for this (the free tier is tiny).
-- Gemini budget (`app/src/services/ai-budget.ts`, `gemini.ts`): at most 12 requests per local date (localStorage
-  `pa-ai-usage`); a 429/RESOURCE_EXHAUSTED stores `pa-ai-paused-until` (from "Please retry in XhYmZs", else next US Pacific
+- Gemini budget (`app/src/services/ai-budget.ts`, `gemini.ts`): at most 12 text requests per local date (localStorage
+  `pa-ai-usage`), plus "Allow 3 more today" in Settings (`pa-ai-extra`, that day only). A summary that failed is retried automatically at most
+  twice a day (`pa-ai-auto-tries`, `MAX_AUTO_TRIES`), then waits for the "Try again" button, so reopening the app doesn't use up requests. Long replies
+  are streamed (no fixed time limit while words keep arriving, with a cap). A 503 and similar "busy" errors don't count: wait a moment and retry once, then
+  try the lite model; timeouts also fall back to the lite model. A 429/RESOURCE_EXHAUSTED stores `pa-ai-paused-until` (from "Please retry in XhYmZs", else next US Pacific
   midnight) and blocks all calls; the main model's own pause (`pa-ai-main-paused-until`) falls back to `gemini-3.8-flash-lite`.
   Texts are written once per (kind, date) (weekly: per week start), stored in `pa-ai-cache` as `morning:DATE` / `evening:DATE` /
   `week:MONDAY` with the briefing's `plan_fingerprint` (core: items' titles/times/parts of day + workout name; evening also
@@ -89,7 +99,7 @@ The core cannot call the network, so these return everything the UI needs to do 
   the template with a "Write overview" button. Rules live in `services/ai-policy.ts` (unit tested).
 - Holidays: UI fetches `https://date.nager.at/api/v3/PublicHolidays/{year}/AU` (country from the region prefix),
   then `POST /api/holidays/filter {"region":"AU-NSW","raw":[...]}` → `[{"date","name"}]`; caches per year+region; passes in ctx.
-- TTS: UI only. Phone voice = Web Speech API; Natural voice = Gemini TTS (see "Natural voice" below).
+- TTS: UI only. Natural voice = Gemini TTS (the default when a key is saved, see "Natural voice" below); the phone's Web Speech API is only the fallback.
 
 ### Extra endpoints
 - `POST /api/sample-data` → loads the old seed's demo tasks/goals/sessions into the state (for trying the app).
@@ -116,7 +126,7 @@ counts as taken and the rotation advances (state returned); workouts never advan
 
 ## Natural voice (Gemini TTS)
 UI only (`services/gemini-tts.ts`, `readaloud.ts`, `voice-prefs.ts`); no core changes. Core settings have a fixed field set, so prefs live in
-localStorage `pa-voice-prefs` `{type:"gemini"|"phone", voice, style}` (default type: Natural if a key is saved, else Phone).
+localStorage `pa-voice-prefs` `{type:"gemini"|"phone", voice, style, speed, favs}` (default type: Natural if a key is saved, else Phone).
 
 **Research caveat:** `ai.google.dev` was unreachable from the build sandbox, so this comes from search snippets/mirrors of the docs
 and prior knowledge. Re-verify against https://ai.google.dev/gemini-api/docs/speech-generation before relying on it.
@@ -127,50 +137,76 @@ and prior knowledge. Re-verify against https://ai.google.dev/gemini-api/docs/spe
   `generationConfig:{responseModalities:["AUDIO"], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName}}}}`. Text input only.
 - Response: `candidates[0].content.parts[0].inlineData{mimeType:"audio/L16;codec=pcm;rate=24000", data:<base64>}` = raw 16-bit
   mono little-endian PCM at 24 kHz. We read the rate from the mimeType (default 24000) and wrap it in a WAV header.
-- Voices (30): Zephyr Bright, Puck Upbeat, Charon Informative, Kore Firm, Fenrir Excitable, Leda Youthful, Orus Firm, Aoede Breezy,
-  Callirrhoe Easy-going, Autonoe Bright, Enceladus Breathy, Iapetus Clear, Umbriel Easy-going, Algieba Smooth, Despina Smooth,
-  Erinome Clear, Algenib Gravelly, Rasalgethi Informative, Laomedeia Upbeat, Achernar Soft, Alnilam Firm, Schedar Even,
-  Gacrux Mature, Pulcherrima Forward, Achird Friendly, Zubenelgenubi Casual, Vindemiatrix Gentle, Sadachbia Lively,
-  Sadaltager Knowledgeable, Sulafat Warm. Default for Miranda: **Sulafat** (Warm).
+- Voices: only female voices are offered (`VOICES` in `gemini-tts.ts`, 14 of them): Sulafat Warm, Achernar Soft, Aoede Breezy, Vindemiatrix Gentle,
+  Callirrhoe Easy-going, Despina Smooth, Laomedeia Upbeat, Leda Youthful, Zephyr Bright, Autonoe Bright, Erinome Clear, Kore Firm, Gacrux Mature,
+  Pulcherrima Forward. Default for Miranda: **Sulafat** (Warm). Settings also has a speed slider (0.7 to 1.15, default 0.88; applied at playback with
+  `playbackRate`, so it needs no new synthesis) and favourite voices (stars; `pa-voice-prefs.favs`, listed first).
 - Style: natural-language instruction in the text, e.g. `Say warmly and chattily: <text>` (presets: Warm & chatty, Calm & soothing,
-  Upbeat, Matter-of-fact). One request per script (a 2-3 minute script is ~700 tokens, far under the limit); text over 12,000 chars is cut at a paragraph/sentence.
+  Upbeat, Matter-of-fact). Each summary is read as three clips (see "Spoken sections" below), so a request is short; text over 12,000 chars is cut at a paragraph/sentence.
 - Free tier: TTS preview models have small per-minute/per-day request limits (not confirmed here; historically ~3 RPM / ~10 RPD for 2.5 flash TTS).
-  So each request counts toward the 12/day app budget (`recordUse`), a 429 stores `pa-tts-paused-until` (TTS only; text keeps working
+  So voice has its own separate budget of 12 clips a day (`VOICE_BUDGET`, `pa-voice-usage`), a 429 stores `pa-tts-paused-until` (TTS only; text keeps working
   unless the global pause is set), the timeout is 90 s, and results are cached.
-- Cache: IndexedDB `pa-tts-cache`, key = hash(first model id + voice + style + text); newest 10 clips kept, clips older than 3 days pruned;
+- Cache: IndexedDB `pa-tts-cache`, key = hash(first model id + voice + style + text); newest 16 clips kept, clips older than 3 days pruned;
   voice previews (fixed sentence) are kept forever. Replays are instant and free.
 - Playback: `HTMLAudioElement` (a silent clip is played inside the tap to unlock iOS audio). Any failure (no key, paused, over budget,
   error, autoplay refusal) falls back to the phone voice with a toast.
 
 ## News in the summaries
-- `scripts/news/fetch-news.mjs` (+ `sources.json`) is run by the scheduled workflow (`pages.yml`, ~05:45 and ~16:45 Sydney) and writes
+- `scripts/news/fetch-news.mjs` (+ `sources.json`) is run by the scheduled workflow (`pages.yml`) at about 05:45 and 16:45 Sydney time all year round. GitHub
+  crons are UTC and Sydney moves between UTC+11 and UTC+10, so four crons are listed (`45 18`, `45 19`, `45 5`, `45 6`) and a "gate" job lets through only the
+  run that lands in the right Sydney window (pushes and manual runs always go ahead). It writes
   `app/public/news.json` = `{generated_at, items:[{id, source, title, summary (the feed's lead, <=700 chars), link, published, topics}]}`
   (last 36 h, near-duplicate titles merged, <=80 items). Topics: australia, world, east-asia, science-tech, life; the script and the core add
   `industry-tech` by keywords. Feeds that fail are skipped; article pages are only read (<=25/run) when a feed gives a lead under 120 chars.
 - App: `services/news.ts` fetches `./news.json` (network first, last copy in IndexedDB `pa-news`) into `ctxCache.news`; `core.ts` passes it as
   `ctx.news` / `ctx.news_generated_at` to `/api/briefing` and `/api/news/*` calls only. news.json is never precached by the service worker.
 - Core (`news.rs`): `GET /api/briefing` (morning/evening, today only) adds `news` (items, sources, position 0/1/2, recorded, template_text, ...) and
-  `template_body`, and puts the NEWS instructions + story block (title + lead) into the prompts. Morning 3-5 stories, evening 3-4 ("since this morning":
-  published after `news_morning_cutoff[date]`); Australia first, then world, a "life" story most days, an industry-tech story on about half the days,
-  East Asia, science/tech; one story per event, spread over sources. `POST /api/news/select {kind,date,refresh?,items?}` returns the same plus a
+  `template_body`, and puts the NEWS instructions + story block (title + lead) into the prompts. Two stories in the morning and two in the evening ("since this morning":
+  published after `news_morning_cutoff[date]`): an Australian lead, then a second that rotates by day (mostly a lighter "life" story, else world and so on);
+  one story per event, spread over sources. Each is told as a short, complete story (about 110 to 160 words), not a headline. `POST /api/news/select {kind,date,refresh?,items?}` returns the same plus a
   news-only prompt; `POST /api/news/record {kind,date,items,generated_at?}` stores the stories a summary used in `State.news_used["date|kind"]`
   (and the morning cutoff) when its news is first generated (AI or template); nothing used in the last ~48 h is picked again, and re-viewing
   returns the recorded stories.
 - The news sits inside the summary: morning position varies by date hash (0 after greeting/weather/affirmation, 1 after the first paragraph of the
-  briefing, 2 before the last paragraph); the evening is always 2. Gemini still makes one request: the morning JSON has a fifth field `news`,
-  the evening reply becomes `{briefing, news}`; the AI news is kept only if it quotes at least half of the headlines word for word, else the
-  template segment is used. News text is stored under `<morning:DATE>:news` in `pa-ai-cache`. "Get the latest news" = one news-only request.
+  briefing, 2 before the last paragraph); the evening is always 2. The news is its own small JSON request (`news` in the briefing prep has its own prompts), so it can fail without
+  losing the day text; the AI news is kept only if it quotes at least half of the headlines word for word, else the template segment is used. News text is
+  stored under `<kind:DATE>:news` in `pa-ai-cache`. "Get the latest news" = one news-only request.
 
 ## Reliability, sections and voice (update)
-- AI replies: briefings ask for `maxOutputTokens` 8192 (thinking stays low). `parseMorningJson` strips fences and salvages the complete fields of a truncated
+- AI replies: thinking stays low. `parseMorningJson` strips fences and salvages the complete fields of a truncated
   reply (a usable `briefing` is enough; missing parts use the template). `has_stats` (core) ignores text inside quotation marks and the app guards only the
   non-news parts. The news must quote at least half of the headlines after normalising quotes, case, accents and punctuation (`normHeadline`).
-  Why the built-in text was shown is classified in `services/ai-reason.ts` and shown under the card ("Written by Miranda's AI" / "Built-in summary — <reason>").
+  Why the built-in text was shown is classified in `services/ai-reason.ts` and shown as a label at the top of the summary card ("Written by Miranda's AI" /
+  "Built-in summary — <reason>"), with a "Try again" button after a Google hiccup.
 - Spoken sections: each briefing is three sections (`morningSections` / `eveningSections`; the news sits first or last, never in the middle: core `news::position`
   is 0 or 2). The screen shows one continuous text; "Read it to me" synthesises one clip per section (a section over ~300 words is split at paragraph/sentence
   ends; without sections `chunkScript` splits at ~240 words), prefetches the next clip while one plays, pauses ~1 s between sections, shows progress across clips
   and continues with the phone voice if a later clip fails. Each clip is cached by its text (newest 16 kept). Voice budget: 12 clips per day.
-- Favourite voices: `pa-voice-prefs.favs`; Settings lists them first under "Favourites".
 - Prompts carry the shared SPOKEN STYLE GUIDE (`lib.rs` `style_guide!`/`STYLE_GUIDE`): light natural fillers and pauses; headlines stay verbatim.
-- Template (no AI): imperative titles become gerund phrases (`taskvoice::task_phrase`), stock lines never repeat within a summary, at most one goal mention
-  (`goals::find_link` ignores generic words), a varied closing well-wish, greetings are hellos.
+- Built-in summary (no AI): deliberately short and plain, not an imitation of the AI voice. Morning: today, the order, tomorrow, closing. Evening: look back,
+  tomorrow, goodnight (news, when there is any, before the goodnight). Imperative titles become gerund phrases (`taskvoice::task_phrase`), stock lines never
+  repeat within a summary, at most one goal mention (`goals::find_link` ignores generic words), a varied closing well-wish, greetings are hellos.
+- Knowledge base (`knowledge.rs`): Miranda's own small memories, facts, tips and thoughts, written in our own words. A few are picked per summary to fit the
+  day (weather, tasks, time of day, goals) and stepped through by date so they don't repeat; the model may use one or two, or none.
+
+## Task brain and task moves
+- `taskbrain.rs` is the single table deciding a task's category, typical duration, whether it is an outing (travel on top) and the natural wording
+  ("go to the doctor" becomes "a doctor's appointment"). Category guessing, duration hints in the prompts and `taskvoice` all use it.
+- Tasks and Occurrences have an optional `minutes` (how long the user says it takes). Setting it is remembered per task title in `State.learned_minutes`
+  and beats the table's guess; clearing it (null) on update also forgets the remembered figure. `GET /api/tasks/guess?title=` returns what Miranda would
+  say about a title (`says`, `category`, `takes`, `learned`); the task dialog shows it as "Miranda reads this as: ..." next to the "How long does it take?" field.
+- Rollover: any unfinished one-off with no clock time (including untimed appointments) moves to today automatically; only clock-time tasks go to `missed`.
+  Untimed Work tasks are shown inside the work band and spoken as part of the workday.
+- Moving: press-and-hold the arrow on a one-off task (`POST /api/occurrences/move`), or the day menu "Move unfinished to tomorrow"
+  (`POST /api/days/{date}/move-unfinished`). Recurring and done tasks can't be moved.
+- Evening check-in (`util/checkin.ts`, Home wind-down): asks once about tomorrow's unplaced tasks (no time, no part of day, not Work on a work day) with
+  Before work / Afternoon / After work buttons (`PUT /api/tasks/{id}/part`). It uses no AI, never holds a summary back, and is remembered per day (`pa-checkin`).
+
+## Safety and testing
+- `vite.config.ts` adds a Content-Security-Policy meta tag to built pages: scripts from the app only (plus wasm), and network only to Gemini, Open-Meteo and
+  Nager.Date. This protects the saved Gemini key.
+- `core.ts` asks the browser to keep storage (`navigator.storage.persist()`).
+- Whole-app phone-screen tests: `app/e2e/run.cjs` (Playwright, `npm run test:app`) opens the BUILT app in a phone-sized browser, with stand-ins for Google
+  (one for each of the three small requests), weather and news. `pages.yml` runs it after the build and before publishing (skipped for the scheduled news refresh).
+- Tabs: Home, Tasks, Plans (goals + leisure), Gym, Settings. A private profile code (`POST /api/profile/apply`) can fill in interests, notes, work hours,
+  weather preferences, goals, leisure and tasks; `/api/profile/clear` resets them.

@@ -1,6 +1,6 @@
-# Backend API contract (v0 draft)
+# Core API contract
 
-Base URL: `http://localhost:8080` (env `BACKEND_URL` in the frontend). All bodies JSON. Dates `YYYY-MM-DD`, times `HH:MM` (24h). IDs are integers.
+There is no server. These are the routes of the Rust core (`core/src/router.rs`), reached through the wasm `call(state, method, path, body, ctx)` (see `docs/WEB_ARCH.md`). All bodies JSON. Dates `YYYY-MM-DD`, times `HH:MM` (24h). IDs are integers.
 Errors: non-2xx with `{"error": "message"}`.
 
 ## Settings
@@ -10,10 +10,10 @@ Errors: non-2xx with `{"error": "message"}`.
 Settings = {
   "assistant_name": "Miranda",
   "user_name": "",                // what the assistant calls you
-  "voice": "en-US-JennyNeural",   // or "en-US-AriaNeural"
+  "voice": "",                    // phone-voice name for the fallback speech; the natural voice, speed and favourites live in the UI (localStorage `pa-voice-prefs`)
   "location_name": "Sydney",
   "latitude": -33.8688, "longitude": 151.2093,
-  "timezone": "Australia/Sydney", // IANA name; defines "today"/"now" on the (UTC) server; PUT validates it
+  "timezone": "Australia/Sydney", // IANA name; the UI uses it to compute "today"/"now"; PUT validates it
   "gemini_api_key_set": false     // read-only; key is written via "gemini_api_key" in PUT body, never returned
 }
 ```
@@ -34,15 +34,18 @@ Task = {
   "category_id": 2,               // nullable
   "notes": "",
   "recurrence": null,             // null, or {"kind":"daily"} | {"kind":"weekdays"} | {"kind":"weekly","days":[0,2,4]}  (0=Mon..6=Sun)
+  "minutes": 30,                  // optional: how long it takes, set by the user; null = Miranda guesses. Remembered per title (State.learned_minutes) and beats the guess
   "checklist": [{"id": 5, "text": "Make bed"}]
 }
 ```
+`GET /api/tasks/guess?title=Go%20to%20the%20doctor` → `{"says":"a doctor's appointment","category":"Appointments","takes":"...","learned":null|30}` (what Miranda reads from a title; all null for an empty title; `learned` is the remembered figure for that exact title)
+`PUT /api/tasks/{id}/part` body `{"part_of_day":"morning"|"afternoon"|"evening"|"anytime"}` → Task (just the part of the day; used by the evening check-in)
 `POST /api/tasks` body: Task without id (checklist items without id) → `Task`
-`PUT /api/tasks/{id}` body: full Task (checklist replaced) → `Task`
+`PUT /api/tasks/{id}` body: full Task (checklist replaced) → `Task`. Sending `"minutes": null` also forgets the remembered figure for that title.
 `DELETE /api/tasks/{id}`
 
 ### Auto-categorisation
-`POST /api/tasks` and `PUT /api/tasks/{id}` accept `"category_id": "auto"`. The backend then picks one category from the existing list (never creates new ones): Gemini if a key is set (prompt with the title, notes and the category names; answer must be one exact name), else keyword matching; no match → "Other". The returned Task has the chosen numeric `category_id` and `"category_auto": true`. Tasks store `category_auto` so the UI can show "Auto" as the selection on edit; choosing a category manually sets it false.
+`POST /api/tasks` and `PUT /api/tasks/{id}` accept `"category_id": "auto"`. The core then picks one category from the existing list (never creates new ones) using the task brain (`taskbrain.rs`) and then the keyword table, so it works offline; no match → "Other". Gemini is not used for this. The returned Task has the chosen numeric `category_id` and `"category_auto": true`. Tasks store `category_auto` so the UI can show "Auto" as the selection on edit; choosing a category manually sets it false.
 Default categories (seeded on a fresh DB): Chores, Exercise, Study, Work, Errands, Appointments, Social, Self-care, Admin & Money, Other — muted colours that read well on a dark warm-grey background.
 
 ### Day / week views (resolved occurrences)
@@ -62,6 +65,7 @@ Occurrence = {
   "title": "...", "time": "07:30", "part_of_day": "morning",
   "category": Category | null, "notes": "",
   "recurring": true,
+  "minutes": 30,                  // as on Task (null when not set)
   "rolled_over_from": null,       // "2026-11-01" if this one-off was carried over
   "done": false,
   "checklist": [{"id":5,"text":"Make bed","done":true}]
@@ -70,13 +74,17 @@ Occurrence = {
 `POST /api/occurrences/toggle` body `{"task_id":1,"date":"2026-11-02","done":true}` → Occurrence
 `POST /api/occurrences/checklist` body `{"task_id":1,"date":"2026-11-02","item_id":5,"done":true}` → Occurrence
 
+`POST /api/occurrences/move` body `{"task_id":1,"date":"2026-11-02"}` → Occurrence on the next day: moves an unfinished one-off task to the day after its date (400 for recurring or done tasks)
+`POST /api/days/{date}/move-unfinished` → `{"moved":3,"to":"2026-11-03"}`: moves every unfinished one-off task on that day to the next day
+
 Rollover rule: when today is requested, any one-off task with `date < today` and not done is handled by kind:
-- untimed and not in the "Appointments" category: moved to today (its `date` becomes today; `rolled_over_from` keeps the original date).
-- timed (`time` set) or in the "Appointments" category: NOT moved. Its `date` stays and it is recorded in `State.missed` (`{"<task_id>": "<original date>"}`).
+- no clock time (only a part of the day, or anytime), including untimed appointments: moved to today automatically (its `date` becomes today; `rolled_over_from` keeps the original date).
+- with a clock time (`time` set): NOT moved. Its `date` stays and it is recorded in `State.missed` (`{"<task_id>": "<original date>"}`).
+Untimed Work tasks show inside the work band and are spoken as part of the workday.
 - recurring tasks are unaffected.
 
 Missed items:
-`GET /api/missed` -> `[Occurrence]` on each item's original date (oldest first; done items and deleted tasks are not listed). Also runs the rollover.
+`GET /api/missed` -> `[Occurrence]` (clock-time tasks only) on each item's original date (oldest first; done items and deleted tasks are not listed). Also runs the rollover.
 `POST /api/missed/{id}/today` -> Occurrence: moves the task to today keeping its time; clears the missed mark (404 if not missed).
 `POST /api/missed/{id}/dismiss` -> `{"ok":true}`: marks it done on its original date and clears the mark (404 if not missed).
 `PUT /api/tasks/{id}` clears the mark when the date becomes today or later (or the task becomes recurring); `DELETE /api/tasks/{id}` clears it too.
@@ -161,7 +169,7 @@ Seed defaults are the values above with one example note (also returned for exis
 Work is a time block, not a task. Lunch is a flexible-time break of `lunch_minutes` (good for a quick call, bill, booking or shop). "Before work" means the window between waking and `work.start`; evening suggestions finish comfortably before `rhythm.sleep_from`.
 
 Days off: `GET /api/days-off` -> `["2026-12-24", ...]`; `POST /api/days-off` `{"date"}` -> list; `DELETE /api/days-off/{date}` -> list.
-Public holidays: fetched from Nager.Date (`https://date.nager.at/api/v3/PublicHolidays/{year}/AU`, no key), keeping entries where `global` is true or `counties` contains `holiday_region`; cached per (year, region) in the DB; any failure means no holidays (requests never fail). Env `PA_FAKE_HOLIDAYS="2026-12-25:Christmas Day,2026-12-28:Boxing Day (observed)"` overrides for testing.
+Public holidays: fetched from Nager.Date (`https://date.nager.at/api/v3/PublicHolidays/{year}/AU`, no key), keeping entries where `global` is true or `counties` contains `holiday_region`; fetched by the UI and passed in `ctx.holidays` (cached per year and region); any failure means no holidays.
 All text (briefings, digest, day note) knows the work hours: on work days the day is framed as before work / during work / after work; holidays and days off are mentioned warmly ("no work today").
 
 ## Digest (home screen)
@@ -171,31 +179,49 @@ All text (briefings, digest, day note) knows the work hours: on work days the da
  "weather": {"summary":"Light rain","temp_max":14,"temp_min":8,"precip_prob":80,"uv_max":1.5} | null,
  "weather_comment": "A proper rainy one, 14 at most. Cosy if you're home, and nice to listen to from your desk.",
  "overview": "...",
- "source": "gemini" | "template"}
+ "cache_key": "digest:2026-11-02:<hash>", "system_prompt": "...", "user_prompt": "...",   // for the UI's Gemini request (JSON reply {weather_comment, overview})
+ "template": {"weather_comment": "...", "overview": "..."},
+ "source": "template"}      // weather_comment / overview at the top level are the built-in text
 ```
 - `weather_comment`: 1-2 sentences, interprets the forecast against the memory weather prefs (cool is comfortable, warn kindly when hot/too hot, suggest sun cream / shade when UV >= 3 and avoid_sunburn, enjoy rain if likes_rain), and relates it to the day's plans where natural (e.g. office day vs home day, outdoor tasks, gym). Null if no weather.
 - `overview`: the assistant's digest and organisation of the day in prose, 2-4 short sentences, chatty and natural; groups the day into its shape (e.g. what the morning is about, the afternoon, the evening), names the key things, points out a breather, ties to goals where plausible. No raw counts/percentages. Never a bare list of every task. May mention the workout briefly.
-- Gemini when a key is set, cached by (date, hash of items + goals + memory + weather); template fallback otherwise. The day-note endpoint remains for the briefing's `affirmation` field.
+- The UI asks Gemini when a key is saved, cached by (date, hash of items + goals + memory + weather); built-in text otherwise. The day-note endpoint remains for the briefing's `affirmation` field.
 - Digest cache key also includes work/holiday/day-off info and the workout name.
-- Weather now also fetched with `precipitation_probability_max` and `uv_index_max` from Open-Meteo. Env `PA_FAKE_WEATHER` (e.g. `Light rain,14,8,80,1.5`) overrides the lookup for testing.
+- Weather comes from Open-Meteo (including `precipitation_probability_max` and `uv_index_max`), fetched by the UI and passed in `ctx.weather`.
  (home screen "affirmation")
-`GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","text":"...","source":"gemini"|"template"}`
+`GET /api/day-note?date=2026-11-02` → `{"date":"2026-11-02","cache_key","system_prompt","user_prompt","template_text","skip_ai","max_words"}` (prepare response; `skip_ai` is true for an empty or finished day)
 A short (1–2 sentences, max ~40 words), grounded, specific note about *this* day — not generic or soppy. It references the actual shape of the day (how busy, when the busy stretch is, the one thing that matters most, a breather) and offers one practical, encouraging angle. Examples of the style: "Three things land before noon, then the afternoon opens up. Get the stand-up and Sam's email done early and the rest of the day is yours." / "A light day with just two tasks, both flexible. Good day to get the dentist booked and have a proper evening."
-Gemini when a key is set; cached in the DB keyed by (date, hash of that day's items) so it is generated at most once per distinct day plan. Template fallback builds the same kind of note from the day's data. Never mentions the gym/workout.
+The UI caches the AI reply by `cache_key` (date, hash of that day's items) so it is generated at most once per distinct day plan. Built-in fallback builds the same kind of note from the day's data. Never mentions the gym/workout.
 The briefing's `affirmation` field returns the same day note text.
 
+Profile codes (private data kept out of the repo): `POST /api/profile/apply` body `{v, updated, interests?, notes?, work?, weather?, add_goals?, add_leisure?, add_tasks?}` (all-or-nothing); `POST /api/profile/clear` resets interests, notes, work hours, weather preferences and the profile date.
+
 ## Briefings
-`GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02[&ai=false]` → (`ai=false` skips Gemini; template text only)
+The core never calls Gemini. Each AI endpoint returns a "prepare" response: the built-in text, a cache key and the prompts for the UI to send.
+
+`GET /api/briefing?kind=morning|evening|weekly&date=2026-11-02` →
 ```json
-{"kind":"morning","date":"2026-11-02","text":"Good morning! ...","source":"gemini"|"template",
+{"kind":"morning","date":"2026-11-02",
  "weather":{"summary":"Light rain","temp_max":14,"temp_min":8,"precip_prob":80,"uv_max":1.5} | null,
- "affirmation":"You don't have to do it all today, just the next thing.",
- "stats":{"total":6,"done":2,"next_up":Occurrence|null}}
+ "stats":{"total":6,"done":2,"next_up":Occurrence|null},
+ "affirmation":"...",            // the built-in day note
+ "template_text":"...",          // the whole built-in summary
+ "template_body":{...}, "template_parts":{...},   // the built-in summary in parts, so AI and built-in parts can be mixed
+ "news": {...} | null,           // the stories picked, their sources, position, template_text and the news request's own system_prompt/user_prompt
+ "cache_key":"briefing:morning:2026-11-02:<hash>",
+ "plan_fingerprint":"...",       // changes when the plan changes (titles, times, parts of day, workout; evening also done states), never for weather
+ "system_prompt":"...", "user_prompt":"...",       // the plain-text "day" request
+ "opening": {"system_prompt":"...","user_prompt":"..."} | null,   // mornings only: the small JSON request for greeting, weather_comment and affirmation
+ "max_words": 450}
 ```
-Morning is the main daily summary (shown as text on Home and read aloud): about 2-3 minutes spoken, roughly 320-450 words, flowing spoken prose (no markdown or lists): (1) warm hello + the weather interpreted through the memory preferences (and a holiday/day-off/work-hours note); (2) a kind look back at yesterday (what got done by name, what rolled over); (3) today broken down by task category/theme (life admin, work, chores, errands, study, exercise/gym with goal tie-ins, social, appointments with times); (4) a suggested order (quick small tasks first for momentum, or the big one first while fresh, with why; size is inferred from title/notes/checklist; respects fixed-time items and the work block, uses the window between waking and work start, puts a short errand in the flexible lunch hour, keeps the evening ending before bedtime); (5) a peek at tomorrow's notable things; (6) a grounded close. Evening stays about 150-250 words and nudges toward winding down for sleep. Weekly is unchanged.
-Briefing text from Gemini is cached in the DB by (kind, date, hash of the full prompt context incl. done states, goals, memory, work info and weather), so reloading Home does not call Gemini again; changing done states may regenerate.
+A summary is written by up to three small independent requests: `opening` (mornings; JSON `{greeting, weather_comment, affirmation}`), the day (`system_prompt`/`user_prompt`, plain text) and the news (JSON). Each can fail on its own and the UI uses the matching built-in part instead. There is no review or editor pass (`review_prompt` no longer exists). The UI appends the recent summaries to the prompts so the writer avoids repeating them.
 
-Tone: warm best friend: chatty, natural and human, like a real personal assistant who knows you. Never read out raw counts, fractions or percentages ("0 of 24 tasks", "50 percent"); talk about specific things done or coming up instead, and tie them to goals where they genuinely relate. Kind and low-key about quiet days/weeks (no guilt, no stats). Morning: weather, the day in order, workout, an affirmation. Evening: what got done (kindly), what's left, a gentle look at tomorrow. Weekly: tasks done over the Mon–Sun week of `date`, gym sessions, progress highlights, a look at next week.
-Gemini model via env `GEMINI_MODEL` (default `gemini-3.8-flash`); on any failure or no key, fall back to template text.
+Morning is the main daily summary: the opening, then four short paragraphs (look back and today by theme, the suggested order, tomorrow, a closing line ending in a well-wish), about 2-3 minutes spoken, flowing prose with no markdown or lists. It is read aloud as three sections: greeting/weather/affirmation, the day, then tomorrow/news/closing. Evening is three paragraphs (look back, tomorrow, a closing that winds down); the news sits before the closing. Weekly looks back over the Mon-Sun week of `date` and ahead to next week. Mornings and evenings may include two news stories, each told as a short full story.
 
-`POST /api/tts` body `{"text":"...","voice":"en-US-JennyNeural"}` → `audio/mpeg` bytes. Uses `edge-tts` CLI; falls back to `piper` if installed; else 503.
+The built-in summary (`template_text`) is deliberately short and plain. Morning: today, the order, tomorrow, closing. Evening: look back, tomorrow, goodnight. It is not an imitation of the AI voice.
+
+Tone for all AI text: warm best friend, chatty and natural, written for speaking (shared STYLE_GUIDE in `core/src/lib.rs`, plus a few picks from the knowledge base in `core/src/knowledge.rs`). Never read out raw counts, fractions or percentages (`has_stats` guards the plan text; quoted headlines are exempt); talk about specific things done or coming up and tie them to goals where they genuinely relate. Kind and low-key about quiet days.
+
+News endpoints: `POST /api/news/select` body `{kind, date?, items?, generated_at?, morning_generated_at?, busy?, refresh?}` → the same `news` object as in the briefing (null when there is nothing to say); `POST /api/news/record` body `{kind, date, items, generated_at?}` → `{"ok":true}` (stories used are not picked again for about 48 hours).
+
+Other helpers: `POST /api/holidays/filter` body `{"region":"AU-NSW","raw":[...]}` → `[{"date","name"}]`; `GET /api/weather-summary?code=61` → `{"summary","icon"}`; `GET /api/state/migrate` → `{"version":8}`; `POST /api/sample-data`; `GET /api/export`; `POST /api/import`.
