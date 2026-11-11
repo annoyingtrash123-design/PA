@@ -138,6 +138,15 @@ export function parseMorningJson(raw: string): { greeting: string | null; weathe
   return { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation"), briefing, news: get("news"), ...(salvaged ? { salvaged: true as const } : {}) };
 }
 
+/** Parse the morning opening {"greeting","weather_comment","affirmation"}; null when nothing usable came back. */
+export function parseOpeningJson(raw: string): { greeting: string | null; weather_comment: string | null; affirmation: string | null } | null {
+  const o = parseJsonObject(raw);
+  if (!o) return null;
+  const get = (k: string) => (typeof o[k] === "string" ? cleanReply(o[k] as string) : "") || null;
+  const out = { greeting: get("greeting"), weather_comment: get("weather_comment"), affirmation: get("affirmation") };
+  return out.greeting || out.affirmation || out.weather_comment ? out : null;
+}
+
 /** Parse a news-only reply {"news": string}. Tolerant of fences and chatter; null when there is no usable news. */
 export function parseNewsJson(raw: string): string | null {
   const o = parseJsonObject(raw);

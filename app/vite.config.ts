@@ -13,6 +13,29 @@ export default defineConfig({
   clearScreen: false,
   resolve: { alias: { "pa-wasm": mock ? src("./src/dev/mock-core.ts") : src("./src/core-wasm/pa_wasm.js") } },
   plugins: [
+    // Built pages only: scripts may come from the app itself and nowhere else, and the app may only talk to the
+    // services it uses (Gemini, the weather, the public-holiday list). This protects the saved Gemini key.
+    {
+      name: "pa-csp",
+      apply: "build",
+      transformIndexHtml(html: string) {
+        const csp = [
+          "default-src 'self'",
+          "script-src 'self' 'wasm-unsafe-eval'",
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data: blob:",
+          "media-src 'self' blob: data:",
+          "font-src 'self' data:",
+          "connect-src 'self' https://generativelanguage.googleapis.com https://api.open-meteo.com https://date.nager.at",
+          "worker-src 'self'",
+          "manifest-src 'self'",
+          "object-src 'none'",
+          "base-uri 'self'",
+          "form-action 'none'",
+        ].join("; ");
+        return html.replace("<meta charset=\"UTF-8\" />", `<meta charset="UTF-8" />\n    <meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+      },
+    },
     VitePWA({
       registerType: "autoUpdate",
       injectRegister: false, // registered by src/updates.ts, which also handles reloading

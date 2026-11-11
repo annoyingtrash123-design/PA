@@ -6,13 +6,16 @@ on:
   push:
     paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
-  # Refresh the news twice a day (the feeds can't be read from the browser, so news.json is built here and published with the site).
-  # UTC crons for about 05:45 and 16:45 Sydney time while it is AEDT (UTC+11, Oct-Apr): 18:45 and 05:45 UTC.
-  # During AEST (UTC+10, Apr-Oct) they land an hour earlier (04:45 and 15:45 Sydney), which is fine.
+  # Refresh the news twice a day, at about 05:45 and 16:45 Sydney time all year round (the feeds can't be read from
+  # the browser, so news.json is built here and published with the site). GitHub crons are in UTC and Sydney moves
+  # between UTC+11 (summer) and UTC+10 (winter), so both sets of times are listed and the "gate" job below lets
+  # through only the runs that land in the right Sydney window.
   # Scheduled runs only ever run on the default branch (main), so the deploy condition below passes for them.
   schedule:
-    - cron: "45 18 * * *"
-    - cron: "45 5 * * *"
+    - cron: "45 18 * * *" # 05:45 Sydney in summer
+    - cron: "45 19 * * *" # 05:45 Sydney in winter
+    - cron: "45 5 * * *" # 16:45 Sydney in summer
+    - cron: "45 6 * * *" # 16:45 Sydney in winter
 
 permissions:
   contents: read
@@ -24,7 +27,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Pushes and manual runs always go ahead. A scheduled run goes ahead only inside the Sydney news windows
+  # (05:30-06:29 and 16:30-17:29), so each window gets one run whatever the season.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        run: |
+          run=true
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            m=$(( 10#$(TZ=Australia/Sydney date +%H) * 60 + 10#$(TZ=Australia/Sydney date +%M) ))
+            if { [ $m -ge 330 ] && [ $m -lt 390 ]; } || { [ $m -ge 990 ] && [ $m -lt 1050 ]; }; then run=true; else run=false; fi
+            echo "Sydney minute of day: $m -> run=$run"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +86,15 @@ jobs:
         run: |
           npm ci
           npm run build:web
+      - name: Whole-app tests on a phone-sized screen (nothing is published if these fail; skipped for the news refresh)
+        if: github.event_name != 'schedule'
+        working-directory: app
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: |
+          npm install --no-save playwright@1
+          npx playwright install --with-deps chromium
+          node e2e/run.cjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app/dist

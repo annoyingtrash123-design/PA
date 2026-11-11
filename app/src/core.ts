@@ -27,6 +27,12 @@ export async function startCore(): Promise<void> {
   const saved = await kvGet<State>(STATE_DB, "state");
   state = saved && saved.version ? saved : JSON.parse(init_state(zonedNow(undefined).today));
   ready = true;
+  // ask the browser to keep this app's data even when the phone is short of space (installed apps are normally granted it)
+  try {
+    void navigator.storage?.persist?.();
+  } catch {
+    // not supported: nothing to do
+  }
   if (!saved) void persist();
   // upgrade an older stored state (the core does it on any call; this one makes it persist right away)
   else api("GET", "/api/state/migrate"); // no-op unless the stored state is older than the core

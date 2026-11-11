@@ -37,6 +37,8 @@ export interface Task {
   notes: string;
   recurrence: Recurrence;
   checklist: ChecklistItem[];
+  /** how long the person says it takes, in minutes (absent: Miranda guesses) */
+  minutes?: number | null;
 }
 
 export interface Occurrence {
@@ -47,6 +49,7 @@ export interface Occurrence {
   part_of_day: PartOfDay | null;
   category: Category | null;
   notes: string;
+  minutes?: number | null;
   recurring: boolean;
   rolled_over_from: string | null;
   done: boolean;
@@ -264,8 +267,8 @@ export interface BriefingPrep {
   plan_fingerprint?: string;
   system_prompt: string;
   user_prompt: string;
-  /** the editor's brief for the second (review) pass */
-  review_prompt?: string;
+  /** morning only: the small separate request for the hello, the weather line and the "for today" line */
+  opening?: { system_prompt: string; user_prompt: string } | null;
   max_words?: number;
 }
 

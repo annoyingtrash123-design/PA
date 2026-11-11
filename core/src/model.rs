@@ -71,6 +71,9 @@ pub struct Task {
     pub recurrence: Option<Recurrence>,
     #[serde(default)]
     pub checklist: Vec<ChecklistItem>,
+    /// how long the person says it takes, in minutes (None: Miranda guesses)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u32>,
 }
 
 fn anytime() -> String {
@@ -353,6 +356,9 @@ pub struct State {
     pub checklist_done: BTreeMap<String, bool>,
     /// "<task_id>" -> original date
     pub rolled_over: BTreeMap<String, String>,
+    /// what the person has taught Miranda: a task title (lower case) and how many minutes it takes
+    #[serde(default)]
+    pub learned_minutes: BTreeMap<String, u32>,
     /// "<task_id>" -> original date: timed / Appointments one-offs whose day passed undone (their date is NOT moved)
     pub missed: BTreeMap<String, String>,
     pub days_off: Vec<String>,
@@ -377,6 +383,7 @@ impl Default for State {
             completions: BTreeMap::new(),
             checklist_done: BTreeMap::new(),
             rolled_over: BTreeMap::new(),
+            learned_minutes: BTreeMap::new(),
             missed: BTreeMap::new(),
             days_off: vec![],
             goals: vec![],

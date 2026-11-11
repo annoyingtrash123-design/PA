@@ -9,7 +9,7 @@ import { hasKey } from "../services/cache";
 import { onContextUpdate } from "../services/events";
 import { icon, weatherIconName } from "../icons";
 import { button, card, chip, clear, h, readAloud, segmented, toast } from "../ui";
-import { greeting, longDay } from "../util/dates";
+import { addDays, greeting, longDay } from "../util/dates";
 import { paragraphs } from "../util/text";
 import { weekCard } from "./week-card";
 
@@ -28,6 +28,8 @@ export function renderHome(root: HTMLElement): () => void {
   const checkinHolder = h("div");
   const playHolder = h("div", { class: "play-top" });
   let token = 0;
+  /** the view (kind:date) whose final text is on screen */
+  let shown = "";
   let digest: Digest | null = null;
   const affHolder = h("div", { hidden: true });
   /** what "Read it to me" says right now: morning = greeting, weather, affirmation, briefing; evening = the wind-down text */
@@ -109,7 +111,7 @@ export function renderHome(root: HTMLElement): () => void {
     // a built-in text because Google hiccuped (busy, slow, garbled): offer a manual retry
     const retryable = b.source === "template" && hasKey() && !!b.why && ["http", "timeout", "network", "empty", "parse", "cut-off", "other"].includes(b.why.code);
     const update = b.outdated || retryable ? () => void regenerate(date) : null;
-    drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy, b.reviewed), update, b, date);
+    drawDay(b.text, p?.greeting, false, note, note ? null : sourceLabel(b.source, b.why, name, b.newsWhy), update, b, date);
   };
   const regenerate = async (date: string) => {
     const my = ++token;
@@ -120,7 +122,7 @@ export function renderHome(root: HTMLElement): () => void {
     await show(b ?? templateBriefing(kind!, date), date);
   };
 
-  /** The morning check-in: one quick question per unplaced task. No AI is used; the day is written once it's answered. */
+  /** The evening check-in: one quick question per unplaced task of tomorrow. No AI is used. */
   const drawCheckin = (day: Day, onDone: () => void) => {
     const items = needsSlot(day);
     const parts: [PartOfDay, string][] = day.work ? [["morning", "Before work"], ["afternoon", "Afternoon"], ["evening", "After work"]] : [["morning", "Morning"], ["afternoon", "Afternoon"], ["evening", "Evening"]];
@@ -152,10 +154,10 @@ export function renderHome(root: HTMLElement): () => void {
       checkinHolder,
       card(
         "compact stack",
-        h("div", { class: "summary-head" }, icon("event", 20), h("span", { class: "label-caps" }, "Quick check-in")),
-        h("p", { class: "muted" }, `Before I write up your day: roughly when do these fit? Work things will just happen at work.`),
+        h("div", { class: "summary-head" }, icon("event", 20), h("span", { class: "label-caps" }, "Tomorrow check-in")),
+        h("p", { class: "muted" }, `Looking at tomorrow: roughly when do these fit? Work things will just happen at work.`),
         ...rows,
-        h("div", { class: "row", style: { gap: "8px", justifyContent: "flex-end" } }, button("Skip today", finish, { kind: "text" }), button("All set", finish, { kind: "primary", icon: "check" })),
+        h("div", { class: "row", style: { gap: "8px", justifyContent: "flex-end" } }, button("Skip", finish, { kind: "text" }), button("All set", finish, { kind: "primary", icon: "check" })),
       ),
     );
   };
@@ -163,33 +165,36 @@ export function renderHome(root: HTMLElement): () => void {
   const load = async () => {
     const my = ++token;
     const date = today();
-    // morning: if some of today's tasks have no slot, ask first (once a day), and hold the AI write-up until then
-    let hold = false;
+    // wind-down: if some of tomorrow's tasks have no slot, ask (once), so the morning summary is ready with the answers.
+    // It never holds anything back; answering just changes the plan (the "update summary" button appears if needed).
     clear(checkinHolder);
-    if (kind === "morning") {
+    if (kind === "evening") {
       try {
-        const day = api<Day[]>("GET", `/api/days?start=${date}&days=1`)[0];
-        if (day && showCheckin(day, now().now, checkinAnsweredOn())) {
-          hold = true;
-          drawCheckin(day, () => void load());
-        }
+        const day = api<Day[]>("GET", `/api/days?start=${addDays(date, 1)}&days=1`)[0];
+        if (day && showCheckin(day, checkinAnsweredOn())) drawCheckin(day, () => void load());
       } catch {
         // no check-in: carry on
       }
     }
-    // show the instant template version straight away; the AI version replaces it when it arrives
+    // First paint for this view: show the instant built-in version straight away; the AI version replaces it when it
+    // arrives. Later refreshes (the weather or the news arriving) keep what is on screen until the new result is ready,
+    // so the text never flicks back to the built-in one.
     let tpl: BriefingResult | null = null;
+    const first = shown !== `${kind}:${date}`;
     try {
       digest = templateDigest(date);
-      tpl = templateBriefing(kind!, date);
-      await show(tpl, date, hasKey() ? `${name} is putting this into words…` : undefined);
+      if (first) {
+        tpl = templateBriefing(kind!, date);
+        await show(tpl, date, hasKey() ? `${name} is putting this into words…` : undefined);
+      } else drawWeather();
     } catch {
-      drawDay(null, null, true);
+      if (first) drawDay(null, null, true);
     }
     // Only the first text of the day is automatic (the morning one writes all four parts); later changes need a tap
-    const b = await getBriefing(kind!, date, { hold }).catch(() => null);
+    const b = await getBriefing(kind!, date).catch(() => null);
     if (my !== token) return;
     await show(b ?? tpl ?? templateBriefing(kind!, date), date);
+    shown = `${kind}:${date}`;
   };
 
   const segHolder = h("div", { class: "row", style: { justifyContent: "center" } });

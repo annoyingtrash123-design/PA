@@ -320,6 +320,7 @@ pub fn sample_data(env: &mut Env) -> Value {
             notes: t.notes.into(),
             recurrence: t.rec.clone(),
             checklist,
+            minutes: None,
         });
         added_tasks += 1;
     }

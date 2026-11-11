@@ -109,6 +109,12 @@ fn words(s: &str) -> String {
 
 /// Keyword match against existing category names only. Best score wins, ties go to table order.
 pub fn keyword_category(text: &str, cats: &[Category]) -> Option<i64> {
+    // the task brain's concept decides first (the same match gives the duration and the wording)
+    if let Some(name) = crate::taskbrain::category_for(text) {
+        if let Some(c) = cats.iter().find(|c| c.name.trim().eq_ignore_ascii_case(name)) {
+            return Some(c.id);
+        }
+    }
     let hay = words(text);
     let mut best: Option<(usize, i64)> = None;
     for (name, kws) in KEYWORDS {
@@ -182,6 +188,21 @@ pub struct TaskIn {
     pub(crate) recurrence: Option<Recurrence>,
     #[serde(default)]
     pub(crate) checklist: Vec<ChecklistIn>,
+    /// how long it takes in minutes, when the person says so (absent or null: Miranda guesses)
+    #[serde(default)]
+    pub(crate) minutes: Option<u32>,
+}
+
+/// The person's own figure wins; otherwise what they taught Miranda for a task of the same name.
+fn minutes_for(st: &mut State, title: &str, given: Option<u32>) -> Option<u32> {
+    let key = title.trim().to_lowercase();
+    match given.filter(|m| (1..=1440).contains(m)) {
+        Some(m) => {
+            st.learned_minutes.insert(key, m);
+            Some(m)
+        }
+        None => st.learned_minutes.get(&key).copied(),
+    }
 }
 
 struct Clean {
@@ -290,8 +311,10 @@ pub fn create_task(env: &mut Env, b: TaskIn) -> Res<Task> {
         CatSpec::Auto => (Some(auto_category(env.st, &c.title, &c.notes)), true),
     };
     let id = env.st.new_id();
+    let minutes = minutes_for(env.st, &c.title, b.minutes);
     env.st.tasks.push(Task {
         id,
+        minutes,
         title: c.title,
         date: c.date,
         time: c.time,
@@ -306,6 +329,19 @@ pub fn create_task(env: &mut Env, b: TaskIn) -> Res<Task> {
     sync_checklist(env.st, idx, &b.checklist);
     env.changed = true;
     Ok(env.st.tasks[idx].clone())
+}
+
+/// `GET /api/tasks/guess?title=`: how Miranda reads a title, so the person can see it and correct it:
+/// how she would say it, where she would file it, and how long she thinks it takes.
+pub fn guess(env: &Env, title: &str) -> Value {
+    let t = title.trim();
+    if t.is_empty() {
+        return json!({"says": null, "category": null, "takes": null, "learned": null});
+    }
+    let cat = keyword_category(t, &env.st.categories).and_then(|id| env.st.categories.iter().find(|c| c.id == id)).map(|c| c.name.clone());
+    let learned = env.st.learned_minutes.get(&t.to_lowercase()).copied();
+    let takes = crate::taskbrain::typical_for(t).map(|ty| format!("{}{}", crate::taskbrain::length_text(&ty), if ty.outing { ", plus getting there" } else { "" }));
+    json!({"says": crate::taskvoice::task_phrase(t).text(), "category": cat, "takes": takes, "learned": learned})
 }
 
 /// `PUT /api/tasks/{id}/part` {"part_of_day"}: just the part of the day (the morning check-in).
@@ -332,7 +368,16 @@ pub fn update_task(env: &mut Env, id: i64, b: TaskIn) -> Res<Task> {
     let old_rec = env.st.tasks[idx].recurrence.is_some();
     let old_date = env.st.tasks[idx].date.clone();
     {
+        // an explicit figure is learned; clearing it (null) also forgets what was learned for that name
+        let minutes = match b.minutes {
+            Some(_) => minutes_for(env.st, &c.title, b.minutes),
+            None => {
+                env.st.learned_minutes.remove(&c.title.trim().to_lowercase());
+                None
+            }
+        };
         let t = &mut env.st.tasks[idx];
+        t.minutes = minutes;
         t.title = c.title;
         t.time = c.time;
         t.part_of_day = c.part;
@@ -417,6 +462,8 @@ pub struct Occurrence {
     pub part_of_day: String,
     pub category: Option<Category>,
     pub notes: String,
+    /// how long the person says it takes (minutes); None: Miranda guesses
+    pub minutes: Option<u32>,
     pub recurring: bool,
     pub rolled_over_from: Option<String>,
     pub done: bool,
@@ -613,6 +660,7 @@ pub fn resolve_items(st: &State, start: NaiveDate, n: i64) -> Vec<(NaiveDate, Ve
                 },
                 category: t.category_id.and_then(|c| st.categories.iter().find(|x| x.id == c).cloned()),
                 notes: t.notes.clone(),
+                minutes: t.minutes,
                 recurring: t.recurrence.is_some(),
                 rolled_over_from: if t.recurrence.is_none() { st.rolled_over.get(&tid.to_string()).cloned() } else { None },
                 done: st.completions.contains_key(&format!("{tid}|{key}")),

@@ -701,7 +701,7 @@ fn morning_template_word_count_on_sample_data() {
             }
             let text = morning(&mut a, &day);
             let n = words_in(&text);
-            assert!((360..=820).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
+            assert!((60..=330).contains(&n), "{day} weather={with_weather}: {n} words\n{text}");
             assert!(!has_stats(&text), "{day}: {text}");
         }
     }
@@ -748,7 +748,7 @@ fn morning_template_parts_are_separate_and_specific() {
     let mut a = App::with_sample(TODAY);
     assert!(a.get("/api/briefing?kind=evening")["template_parts"].is_null());
     let sp = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"))["system_prompt"].as_str().unwrap().to_string();
-    assert!(sp.contains("affirmation") && sp.contains("WITHOUT any weather"));
+    assert!(sp.contains("WITHOUT any weather"));
 }
 
 #[test]
@@ -756,20 +756,16 @@ fn morning_template_prefers_meaningful_fixed_points() {
     let mut a = App::with_sample(TODAY);
     let text = morning(&mut a, TODAY);
     assert!(text.contains("team stand-up at 10:15 AM"), "{text}");
-    // the 7:30 routine is not presented as a fixed point or the one to watch
+    // the 7:30 routine is not presented as a fixed point, and planning habits count as routines, not work
     for s in text.split(". ") {
-        if s.contains("fixed points") || s.contains("one to watch") || s.contains("only get one thing") || s.starts_with("Start with") {
-            assert!(!s.contains("Morning routine at 7:30"), "{s}");
+        if s.contains("fixed point") {
+            assert!(!s.contains("morning routine"), "{s}");
+        }
+        if s.starts_with("At work") {
+            assert!(!s.contains("planning tomorrow"), "{s}");
         }
     }
-    // planning habit is not filed under work, but under looking after yourself
-    assert!(!text.contains("work front you've got Plan tomorrow") && !text.contains("For work, there's Plan tomorrow"), "{text}");
-    for s in text.split(". ") {
-        if s.contains("Plan tomorrow") && (s.contains("work") || s.contains("Work")) {
-            assert!(s.contains("Reply to Sam") || !s.contains("front"), "{s}");
-        }
-    }
-    assert!(text.contains("looking after yourself") || text.contains("routine side"), "{text}");
+    assert!(text.contains("The usual routines are there too: your morning routine at 7:30 AM and planning tomorrow."), "{text}");
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
     assert_eq!(b["max_words"], 760);
     assert!(b["cache_key"].as_str().unwrap().starts_with("briefing:morning:2026-11-02:"));
@@ -1213,26 +1209,6 @@ fn all_template_parts_are_complete_spoken_sentences() {
 }
 
 #[test]
-fn morning_template_suggests_a_midday_slot_softly_without_the_times() {
-    let mut a = App::with_sample(TODAY);
-    let mut seen = 0;
-    for off in 0..14 {
-        let day = fmt_date(d(TODAY) + chrono::Duration::days(off));
-        a.today = day.clone();
-        let b = a.get(&format!("/api/briefing?kind=morning&date={day}"));
-        let body = b["template_parts"]["briefing"].as_str().unwrap().to_string();
-        if body.contains("working from") {
-            seen += 1;
-            assert!(body.contains("middle of the day"), "{day}: {body}");
-            assert!(!body.contains("between 12") && !body.contains("lunch break, sometime") && !body.contains("12 and 2"), "{day}: {body}");
-        }
-        let up = b["user_prompt"].as_str().unwrap();
-        assert!(up.contains("usually sometime between 12 and 2") && up.contains("never state or recite"), "{up}");
-    }
-    assert!(seen > 3);
-}
-
-#[test]
 fn lunch_window_defaults_validates_and_saves() {
     let mut a = App::new(TODAY);
     let w = a.get("/api/memory")["work"].clone();
@@ -1589,9 +1565,12 @@ fn news_morning_is_balanced_and_deduplicated() {
         assert!(items.iter().filter(|i| i["source"] == src).count() <= 2, "{src}");
     }
     assert!(n["sources"].as_array().unwrap().len() >= 2);
-    assert!(b["system_prompt"].as_str().unwrap().contains("NEWS:"));
-    assert!(b["system_prompt"].as_str().unwrap().contains("EXACTLY as given"));
-    let up = b["user_prompt"].as_str().unwrap();
+    // the news is its own small request; the day's writer never sees it
+    assert!(n["system_prompt"].as_str().unwrap().contains("NEWS:"));
+    assert!(n["system_prompt"].as_str().unwrap().contains("EXACTLY as given"));
+    assert!(!b["system_prompt"].as_str().unwrap().contains("NEWS:"));
+    assert!(!b["user_prompt"].as_str().unwrap().contains("Lead: "));
+    let up = n["user_prompt"].as_str().unwrap();
     assert!(up.contains("Lead: "), "{up}");
     assert!(up.contains(items[0]["title"].as_str().unwrap()));
     // no news in the ctx -> no news and no news instructions
@@ -1628,7 +1607,7 @@ fn news_template_contains_each_selected_headline_verbatim_and_only_given_titles(
         assert!(full.contains(i["title"].as_str().unwrap()));
     }
     let n = words_in(full);
-    assert!((480..=900).contains(&n), "{n} words");
+    assert!((150..=520).contains(&n), "{n} words");
     assert!(!has_stats(&b["news"]["template_text"].to_string()));
 }
 
@@ -1682,7 +1661,7 @@ fn news_evening_only_has_stories_after_the_morning_cutoff_and_never_repeats_the_
         assert!(!ev.contains(&id));
     }
     assert!(e["news"]["position"] == 2);
-    assert!(e["system_prompt"].as_str().unwrap().contains("since this morning"));
+    assert!(e["news"]["system_prompt"].as_str().unwrap().contains("since this morning"));
     // the evening template carries the news before the goodnight
     let t = e["template_text"].as_str().unwrap();
     let first = e["news"]["items"][0]["title"].as_str().unwrap();
@@ -1808,7 +1787,7 @@ fn five_task_app() -> (App, Vec<&'static str>) {
 }
 
 #[test]
-fn templates_walk_through_every_task_with_we_phrasing() {
+fn short_templates_name_every_task() {
     let (mut a, titles) = five_task_app();
     a.weather = json!({ TODAY: {"summary": "Thunderstorm", "temp_max": 22, "temp_min": 16, "precip_prob": 90, "uv_max": 2.0} });
     for kind in ["evening", "morning"] {
@@ -1820,25 +1799,22 @@ fn templates_walk_through_every_task_with_we_phrasing() {
             assert!(lt.contains(&title.to_lowercase()) || lt.contains(&ph.to_lowercase()), "{kind}: missing {title}\n{t}");
         }
         assert!(!t.contains("plus a few more") && !t.contains("a few more,"), "{t}");
-        assert!(t.contains("we've got") || t.contains("you've got") || t.contains("we have") || t.contains("for us") || t.contains("your day"), "{t}");
-        assert!(t.contains("says reminder letter is in the drawer"), "notes missing\n{t}");
-        assert!(t.contains("the first step is gathering last quarter's numbers"), "checklist step missing\n{t}");
-        assert!(t.contains("usually takes") || (t.contains("half hour") && t.contains("ten minutes")), "size hints missing\n{t}");
+        assert!(t.contains("you've got"), "{t}");
         assert!(!has_stats(&t));
         assert_spoken(kind, &t);
         if kind == "evening" {
             assert!(t.contains("Alex"), "{t}");
             assert!(t.contains("tomorrow"), "{t}");
-            assert!(t.contains("Nothing else") || t.contains("nothing else") || t.contains("Nothing more"), "{t}");
+            assert!(t.contains("Nothing else") || t.contains("nothing else") || t.contains("Nothing more") || t.contains("everything for now"), "{t}");
             assert!(t.contains("thunderstorm rolled through") && !t.contains("was thunderstorm"), "{t}");
             let n = words_in(&t);
-            assert!((300..=900).contains(&n), "{n} words");
+            assert!((60..=260).contains(&n), "{n} words");
         }
     }
 }
 
 #[test]
-fn many_tasks_name_the_extras_in_one_sentence() {
+fn many_tasks_are_all_named() {
     let mut a = App::new(TODAY);
     let titles: Vec<String> = (1..=9).map(|i| format!("Errand number {i}")).collect();
     for t in &titles {
@@ -1848,7 +1824,6 @@ fn many_tasks_name_the_extras_in_one_sentence() {
     for title in &titles {
         assert!(t.to_lowercase().contains(&title.to_lowercase()), "missing {title}\n{t}");
     }
-    assert!(t.contains("The smaller bits are"), "{t}");
     assert!(!t.contains("plus a few more"), "{t}");
 }
 
@@ -1906,10 +1881,6 @@ fn gym_line_says_what_the_workout_trains() {
             };
             let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
             assert!(t.contains(expect), "{kind} {name}: {t}");
-            if w["kind"] != "cardio" {
-                let first = w["exercises"][0]["name"].as_str().unwrap();
-                assert!(t.contains(first), "{kind} {name}: key lift {first} missing\n{t}");
-            }
             seen.push(name);
         }
     }
@@ -1988,7 +1959,9 @@ fn imperative_titles_read_naturally_in_sentences() {
         assert_eq!(task_phrase(title), Phrase::Gerund(want.into()), "{title}");
     }
     // nouns and book-club style titles stay as they are
-    assert_eq!(task_phrase("Dentist check-up"), Phrase::Noun("dentist check-up".into()));
+    assert_eq!(task_phrase("Dentist check-up"), Phrase::Noun("a dentist check-up".into()));
+    assert_eq!(task_phrase("Coffee with Alex"), Phrase::Noun("coffee with Alex".into()));
+    assert_eq!(task_phrase("Interview at the ABC"), Phrase::Noun("an interview at the ABC".into()));
     assert_eq!(task_phrase("Book club"), Phrase::Noun("book club".into()));
     assert_eq!(task_phrase("Powerhouse Museum"), Phrase::Noun("Powerhouse Museum".into()));
     assert_eq!(task_phrase("Sam's birthday"), Phrase::Noun("Sam's birthday".into()));
@@ -2062,31 +2035,6 @@ fn keyword_categories_for_study_admin_and_reading() {
     assert_eq!(name("Email the landlord about the lease"), Some("Admin & Money"));
     assert_ne!(name("Read"), Some("Self-care"));
     assert_eq!(name("Read a novel before bed"), Some("Self-care"));
-}
-
-fn filler_count(p: &str) -> usize {
-    let l = p.to_lowercase();
-    ["…", " um,", ", um", "hmm", "oh, and", "you know", " uh,", " ah,"].iter().map(|k| l.matches(k).count()).sum()
-}
-
-#[test]
-fn templates_have_light_natural_pauses_but_not_too_many() {
-    let days = days_from(14);
-    let mut a = task_app_for_days(&days, &["Pay the water bill", "Sort the garden shed", "Call the plumber"]);
-    for kind in ["morning", "evening"] {
-        let mut with = 0;
-        for day in &days {
-            let t = a.get(&format!("/api/briefing?kind={kind}&date={day}"))["template_text"].as_str().unwrap().to_string();
-            if filler_count(&t) > 0 {
-                with += 1;
-            }
-            for p in t.split("\n\n") {
-                assert!(filler_count(p) <= 3, "{kind} {day}: too many in a paragraph ({}) {p}", filler_count(p));
-            }
-            assert!(!has_stats(&t));
-        }
-        assert!(with * 10 >= days.len() * 8, "{kind}: only {with} days had a pause");
-    }
 }
 
 #[test]
@@ -2175,22 +2123,30 @@ fn news_template_tells_more_of_the_story_without_cutting_sentences() {
 }
 
 #[test]
-fn briefings_carry_the_editor_brief_the_persona_and_full_story_news() {
+fn briefings_are_split_into_small_requests() {
     let mut a = news_app(TODAY);
     for kind in ["morning", "evening", "weekly"] {
         let b = a.get(&format!("/api/briefing?kind={kind}&date={TODAY}"));
-        let r = b["review_prompt"].as_str().unwrap();
-        assert!(r.contains("same keys") && r.contains("recent summaries") && r.contains("word for word"), "{kind}");
         assert!(b["system_prompt"].as_str().unwrap().contains("KNOWING THEM AND YOURSELF"), "{kind}");
+        assert!(b["review_prompt"].is_null());
+        assert_eq!(b["opening"].is_null(), kind != "morning", "{kind}");
     }
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
-    assert!(b["system_prompt"].as_str().unwrap().contains("Cover BOTH stories"));
-    assert!(b["user_prompt"].as_str().unwrap().contains("Article: "));
+    // the day: plain text, no hello, no weather, no news
+    let day = b["system_prompt"].as_str().unwrap();
+    assert!(day.contains("WITHOUT any greeting") && day.contains("do not mention the news") && !day.contains("PART greeting"), "{day}");
+    // the opening: three short parts as JSON
+    let op = b["opening"]["system_prompt"].as_str().unwrap();
+    assert!(op.contains("PART greeting") && op.contains("PART weather_comment") && op.contains("PART affirmation") && !op.contains("TASK TALK"), "{op}");
+    assert!(op.len() < day.len() / 2, "the opening request stays small");
+    // the news: two full stories, with their links
+    assert!(b["news"]["system_prompt"].as_str().unwrap().contains("Cover BOTH stories"));
+    assert!(b["news"]["user_prompt"].as_str().unwrap().contains("Article: "));
 }
 
 #[test]
 fn common_sense_durations() {
-    use crate::durations::{range_text, typical_for};
+    use crate::taskbrain::{range_text, typical_for};
     let hc = typical_for("Haircut").unwrap();
     assert!(hc.min >= 30 && hc.outing, "{hc:?}");
     assert_eq!(range_text(&hc), "about 30 to 45 minutes");
@@ -2254,7 +2210,8 @@ fn work_tasks_are_filed_as_work_and_spoken_as_part_of_the_workday() {
     assert_eq!(crate::taskvoice::task_phrase("Use Google Pinpoint for Burnside council docs").text(), "using Google Pinpoint for Burnside council docs");
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
     let text = b["template_text"].as_str().unwrap();
-    assert!(text.contains("at work") || text.contains("workday") || text.contains("at your desk"), "{text}");
+    assert!(text.contains("At work, between 10 AM and 5 PM, there's "), "{text}");
+    assert!(text.contains("adding the compliance notes to Excel"), "{text}");
     assert!(!text.contains("before work is good for adding") && !text.contains("middle of the day, adding"), "{text}");
     assert!(b["system_prompt"].as_str().unwrap().contains("WORK TASKS"));
 }
@@ -2269,7 +2226,7 @@ fn typed_commands_become_natural_speech() {
     assert_eq!(task_phrase("Go to the bank"), Phrase::Noun("a trip to the bank".into()));
     // anything more specific stays a gerund, never a bare command
     assert_eq!(task_phrase("Go to the doctor about my knee").text(), "going to the doctor about my knee");
-    assert_eq!(task_phrase("Dentist"), Phrase::Noun("dentist".into()));
+    assert_eq!(task_phrase("Dentist"), Phrase::Noun("the dentist".into()));
     let days = days_from(1);
     let mut a = task_app_for_days(&days, &["go to the doctor"]);
     let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
@@ -2277,4 +2234,55 @@ fn typed_commands_become_natural_speech() {
     assert!(t.contains("a doctor's appointment"), "{t}");
     assert!(!t.contains("go to the doctor"), "{t}");
     assert!(b["system_prompt"].as_str().unwrap().contains("TASK NAMES"));
+}
+
+#[test]
+fn one_brain_decides_category_duration_and_wording_together() {
+    use crate::taskbrain::{category_for, concept_for, outing_noun, typical_for};
+    // one match, three answers that agree
+    let c = concept_for("Haircut").unwrap();
+    assert_eq!((c.cat, c.min, c.outing, c.say), (Some("Appointments"), 30, true, Some("a haircut")));
+    assert_eq!(category_for("go to the doctor"), Some("Appointments"));
+    assert_eq!(outing_noun("go to the doctor").as_deref(), Some("a doctor's appointment"));
+    assert!(typical_for("go to the doctor").unwrap().outing);
+    // a title ABOUT a thing is not the thing: booking, cancelling or researching it is quick or unknown
+    assert!(typical_for("Book haircut").unwrap().max <= 10);
+    assert!(concept_for("Cancel the dentist").is_none());
+    assert!(concept_for("Research gyms near work").is_none());
+    assert_eq!(category_for("Make book club inquiries"), Some("Admin & Money"));
+    assert!(typical_for("Make book club inquiries").unwrap().max <= 20);
+    // and the app files tasks by it
+    let mut a = App::new(TODAY);
+    let cats = a.get("/api/categories");
+    let id_of = |n: &str| cats.as_array().unwrap().iter().find(|c| c["name"] == n).unwrap()["id"].clone();
+    for (title, cat) in [("go to the doctor", "Appointments"), ("Haircut", "Appointments"), ("Grocery shopping", "Errands"), ("Laundry", "Chores"), ("Pay rent", "Admin & Money"), ("Gym", "Exercise")] {
+        let t = a.post("/api/tasks", json!({"title": title, "date": TODAY, "category_id": "auto"}));
+        assert_eq!(t["category_id"], id_of(cat), "{title}");
+    }
+}
+
+#[test]
+fn the_person_can_teach_miranda_how_long_a_task_takes() {
+    let mut a = App::new(TODAY);
+    // Miranda's guess for an unknown task is "quick"; the person says it takes an hour and a half
+    let t = a.post("/api/tasks", json!({"title": "Sort the photo boxes", "date": TODAY, "minutes": 90}));
+    assert_eq!(t["minutes"], 90);
+    let b = a.get(&format!("/api/briefing?kind=morning&date={TODAY}"));
+    assert!(b["user_prompt"].as_str().unwrap().contains("takes about an hour and a half (the person said so)"), "{}", b["user_prompt"]);
+    let text = b["template_text"].as_str().unwrap();
+    assert!(text.contains("Sorting the photo boxes is the long one, about an hour and a half"), "{text}");
+    // a later task with the same name remembers it
+    let again = a.post("/api/tasks", json!({"title": "sort the photo boxes", "date": "2026-11-05"}));
+    assert_eq!(again["minutes"], 90);
+    // the person's figure beats the table (a quick trim at the barber)
+    let h = a.post("/api/tasks", json!({"title": "Haircut", "date": TODAY, "minutes": 15}));
+    let day = a.get(&format!("/api/days?start={TODAY}&days=1"));
+    let occ = day[0]["items"].as_array().unwrap().iter().find(|o| o["task_id"] == h["id"]).unwrap().clone();
+    assert_eq!(occ["minutes"], 15);
+    // clearing it goes back to guessing, and forgets the lesson
+    let id = t["id"].as_i64().unwrap();
+    let cleared = a.req("PUT", &format!("/api/tasks/{id}"), json!({"title": "Sort the photo boxes", "date": TODAY}));
+    assert_eq!(cleared.0, 200);
+    assert!(cleared.1["minutes"].is_null());
+    assert!(a.post("/api/tasks", json!({"title": "Sort the photo boxes", "date": "2026-11-06"}))["minutes"].is_null());
 }

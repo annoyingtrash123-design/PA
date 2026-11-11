@@ -150,6 +150,7 @@ fn handle(env: &mut Env, method: &str, path: &str, q: &HashMap<String, String>, 
         // tasks
         ("GET", ["tasks"]) => Ok(tasks::list_tasks(env)),
         ("POST", ["tasks"]) => ok(tasks::create_task(env, parse(body)?)?),
+        ("GET", ["tasks", "guess"]) => Ok(tasks::guess(env, q.get("title").map(String::as_str).unwrap_or(""))),
         ("GET", ["tasks", id]) => ok(tasks::get_task(env, id_of(id)?)?),
         ("PUT", ["tasks", id]) => ok(tasks::update_task(env, id_of(id)?, parse(body)?)?),
         ("DELETE", ["tasks", id]) => tasks::delete_task(env, id_of(id)?),

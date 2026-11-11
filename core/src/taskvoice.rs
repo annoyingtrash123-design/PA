@@ -1,11 +1,8 @@
 //! How the morning and evening summaries talk about tasks: the no-AI template wording (a sentence or two per
 //! task, from the signals a task carries) and the matching rules for the Gemini prompts.
-use crate::briefing::is_big;
-use crate::goals;
-use crate::model::Goal;
 use crate::tasks::Occurrence;
 use crate::util::*;
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 
 /// Prompt rules for the per-task treatment, gym, weather, leisure and sign-off (morning and evening only).
 pub const PROMPT_RULES: &str = "TASK NAMES: the person types tasks as quick notes or commands ('go to the doctor', 'call mum', 'add compliance notes to Excel'). Never read a title out as typed or drop it into a sentence as a bare command (never 'you\'ve got go to the doctor'). Say each one the way a person would: 'you\'ve got a doctor\'s appointment later today', 'you\'ll be calling your mum', 'there\'s a haircut on the cards', 'you\'ve got the compliance notes to add to that Excel sheet'. Keep names, places and specifics exactly, but fix capitals and grammar. \
@@ -21,33 +18,6 @@ LEISURE: when you suggest something for free time you may point to the person's 
 
 /// Evening-only rule: the cosy sign-off.
 pub const EVENING_SIGNOFF_RULE: &str = "SIGN-OFF: end with a cosy, specific sign-off that says nothing else needs attention tonight and invites the person to get comfy, for example 'Nothing else needs your attention tonight, so get comfy and enjoy a quiet one.' ";
-
-/// Who and what the template is talking about.
-pub struct Look<'a> {
-    pub d: NaiveDate,
-    pub goals: &'a [Goal],
-    /// the day in question is a work day (there is a work block to fit around)
-    pub work: bool,
-}
-
-fn cat_name(o: &Occurrence) -> String {
-    o.category.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| "Other".into())
-}
-
-fn cat_opener(cat: &str) -> Option<&'static str> {
-    Some(match cat {
-        "Appointments" => "On the appointments side",
-        "Work" => "On the work side",
-        "Admin & Money" => "On the admin side",
-        "Chores" => "Around the house",
-        "Errands" => "Out and about",
-        "Study" => "On the study side",
-        "Exercise" => "For movement",
-        "Social" => "On the social side",
-        "Self-care" => "For looking after yourself",
-        _ => return None,
-    })
-}
 
 // ------------------------------------------------------------------ naturally phrased titles
 
@@ -103,7 +73,7 @@ pub fn task_phrase(title: &str) -> Phrase {
     let noun = || Phrase::Noun(mid_title(t));
     let rest: Vec<&str> = it.collect();
     let key = first.to_lowercase();
-    if let Some(n) = outing_noun(t) {
+    if let Some(n) = crate::taskbrain::outing_noun(t) {
         return Phrase::Noun(n);
     }
     let Some((_, ger)) = VERBS.iter().find(|(v, _)| *v == key) else { return noun() };
@@ -134,51 +104,44 @@ pub fn task_phrase(title: &str) -> Phrase {
     Phrase::Gerund(out)
 }
 
-/// "Go to the doctor", "see dentist", "get a haircut", "go gym" read as what they are: "a doctor's appointment",
-/// "a dentist appointment", "a haircut", "a gym session", "a trip to the bank".
-pub fn outing_noun(title: &str) -> Option<String> {
-    let w: Vec<String> = title.to_lowercase().split(|c: char| !(c.is_alphanumeric() || c == '\'')).filter(|x| !x.is_empty()).map(String::from).collect();
-    let verb = w.first()?.as_str();
-    if !["go", "see", "visit", "get", "attend", "have", "head", "pop"].contains(&verb) {
-        return None;
-    }
-    let mut i = 1;
-    while i < w.len() && ["to", "the", "a", "an", "my", "into", "down", "over", "off", "in", "at"].contains(&w[i].as_str()) {
-        i += 1;
-    }
-    let dest = w.get(i)?.as_str();
-    let rest_after = w.len() > i + 1 && !(w.len() == i + 2 && ["appointment", "appt", "visit", "office", "session", "trip"].contains(&w[i + 1].as_str()));
-    let place = |p: &str| if rest_after { None } else { Some(p.to_string()) };
-    match dest {
-        "doctor" | "doctors" | "doctor's" | "gp" | "gp's" => place("a doctor's appointment"),
-        "dentist" | "dentists" | "dentist's" | "dental" => place("a dentist appointment"),
-        "physio" | "physiotherapist" => place("a physio appointment"),
-        "specialist" => place("a specialist appointment"),
-        "optometrist" | "optician" | "optometrists" => place("an eye appointment"),
-        "vet" | "vets" => place("a vet visit"),
-        "haircut" | "hairdresser" | "hairdressers" | "barber" | "barbers" | "hair" => place("a haircut"),
-        "gym" => place("a gym session"),
-        "bank" | "library" | "pharmacy" | "chemist" | "supermarket" | "shops" | "council" => place(&format!("a trip to the {dest}")),
-        "post" if w.get(i + 1).map(String::as_str) == Some("office") && w.len() == i + 2 => Some("a trip to the post office".into()),
-        _ => None,
-    }
-}
-
 /// A plain title as it reads mid-sentence: sentence-case titles ("Coffee with Alex", "Team stand-up") lose their
 /// leading capital; names, possessives, acronyms, single words and Title Case ("Powerhouse Museum") keep it.
 pub fn mid_title(t: &str) -> String {
     let words: Vec<&str> = t.split_whitespace().collect();
     let first = words.first().copied().unwrap_or("");
     // a single common word ("Dentist", "Laundry") is a thing, not a name
-    let common_single = words.len() == 1 && crate::durations::typical_for(first).is_some();
+    let common_single = words.len() == 1 && crate::taskbrain::typical_for(first).is_some();
     let sentence_case = common_single || (words.len() >= 2 && words[1..].iter().any(|w| w.chars().next().is_some_and(|c| c.is_lowercase())));
     let lowerable = first.chars().skip(1).all(|c| c.is_lowercase() || c == '-') && !first.contains('\'') && first != "I";
     if sentence_case && lowerable {
         let mut c = t.chars();
-        c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        let low = c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        with_article(&low)
     } else {
         t.to_string()
     }
+}
+
+/// People one goes to see ("dentist" reads as "the dentist") and countable events ("dentist check-up" as "a dentist
+/// check-up"), when the title has no "a", "the" or "my" of its own.
+fn with_article(low: &str) -> String {
+    const PEOPLE: &[&str] = &["dentist", "doctor", "gp", "physio", "vet", "hairdresser", "barber", "optometrist", "optician"];
+    const EVENTS: &[&str] = &["check-up", "checkup", "appointment", "haircut", "visit", "session", "interview", "meeting", "stand-up", "standup", "check-in", "lesson", "class", "catch-up", "massage", "review", "call", "walk", "swim", "run", "hike"];
+    let words: Vec<&str> = low.split_whitespace().collect();
+    let Some(first) = words.first() else { return low.to_string() };
+    if DETERMINERS.contains(first) || first.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return low.to_string();
+    }
+    if words.len() == 1 && PEOPLE.contains(first) {
+        return format!("the {low}");
+    }
+    // the head noun: the last word before any "with / at / for / about …" tail
+    let head = words.iter().take_while(|w| !["with", "at", "for", "about", "on", "in", "to", "and"].contains(w)).last().copied().unwrap_or("");
+    if EVENTS.contains(&head) {
+        let an = first.starts_with(['a', 'e', 'i', 'o', 'u']);
+        return format!("{} {low}", if an { "an" } else { "a" });
+    }
+    low.to_string()
 }
 
 /// The task as it reads mid-sentence, with its time ("calling mum at 3 PM").
@@ -187,198 +150,6 @@ pub fn inline_phrase(o: &Occurrence) -> String {
     match &o.time {
         Some(t) => format!("{p} at {}", say_time(t)),
         None => p,
-    }
-}
-
-/// What a sentence can say about a task: gerunds stand alone, plain titles get "the ... one".
-fn subject(o: &Occurrence, i: usize) -> (String, bool) {
-    match task_phrase(&o.title) {
-        Phrase::Gerund(_) => (inline_phrase(o), true),
-        Phrase::Noun(t) => {
-            let l = t.to_lowercase();
-            let bare = o.time.is_some() || ["the ", "a ", "an ", "my ", "your ", "our ", "this ", "that "].iter().any(|p| l.starts_with(p)) || t.chars().next().is_some_and(|c| c.is_ascii_digit());
-            if bare {
-                (inline_phrase(o), false)
-            } else {
-                (if i % 2 == 0 { format!("the {t} one") } else { format!("the {t} task") }, false)
-            }
-        }
-    }
-}
-
-// ------------------------------------------------------------------ pools without repeats
-
-/// What this summary has already said, so no stock line is used twice.
-#[derive(Default)]
-pub struct Used {
-    lines: Vec<&'static str>,
-    openers: Vec<String>,
-}
-
-/// The first template in `pool`, starting at `start`, that has not been used yet.
-fn fresh(pool: &[&'static str], start: usize, used: &mut Used) -> Option<&'static str> {
-    (0..pool.len()).map(|k| pool[(start + k) % pool.len()]).find(|c| !used.lines.contains(c)).inspect(|c| used.lines.push(c))
-}
-
-fn why_pool(cat: &str) -> Vec<&'static str> {
-    let mut v: Vec<&'static str> = match cat {
-        "Work" => vec!["it clears the decks for the rest of the week", "it keeps work from piling up behind you", "it's one less thing waiting for you at your desk"],
-        "Admin & Money" => vec!["it's the sort of thing that's nicer off your mind", "future you will be glad it's sorted", "it's boring, but it stops being a worry once it's done"],
-        "Chores" => vec!["it keeps the place easy to live in", "the house will feel better for it", "it keeps the little jobs from piling up"],
-        "Errands" => vec!["doing it now saves a scramble later", "it's easier to fit in when nothing is pressing", "it means one less trip to think about"],
-        "Study" => vec!["little and often is how study sticks", "a bit of focus here goes a long way", "it's the kind of thing that adds up quietly"],
-        "Social" => vec!["time with people is worth protecting", "a little connection does everyone good", "it's the sort of thing you won't regret"],
-        "Exercise" => vec!["it keeps your energy up", "your body will thank you for it", "movement tends to clear the head too"],
-        "Self-care" => vec!["it keeps your rhythm going", "it's good for you in a quiet way", "small kindnesses to yourself add up"],
-        "Appointments" => vec!["it's one of the fixed points", "it's worth getting there without a rush", "it's the one the day pivots around"],
-        _ => vec![],
-    };
-    v.extend(["it's one less thing hanging over you", "it'll feel good to have it ticked off", "getting it out of the way means one fewer thing nagging at you", "it's a nice one to have behind you"]);
-    v
-}
-
-fn timing_pool(o: &Occurrence, big: bool, lk: &Look) -> Vec<&'static str> {
-    if o.time.is_some() {
-        return vec![
-            "it's pinned to the clock, so we'll plan the rest of the day around it",
-            "it's a fixed point, so give yourself a little buffer beforehand",
-            "the time is set, so build a bit of breathing room around it",
-        ];
-    }
-    match (o.part_of_day.as_str(), big) {
-        ("morning", true) => vec!["it's a bigger one, so set aside a proper half hour in the morning while you're fresh", "it needs a proper half hour, and the morning is when you're sharpest", "it's meatier than the rest, so give it half an hour first thing"],
-        ("morning", false) => vec!["it's a quick one, so ten minutes in the morning will do it", "ten minutes in the morning should cover it", "it won't take long, so squeeze it in early"],
-        ("afternoon", true) => vec!["it's a bigger one, so set aside a proper half hour in the afternoon", "it needs a decent half hour, so the afternoon suits it well", "it's a proper chunk of effort, so give it the afternoon's best half hour"],
-        ("afternoon", false) => vec!["it's a quick one, so ten minutes in the afternoon will do it", "ten minutes after lunch should cover it", "it won't take long, so slot it into the afternoon"],
-        ("evening", true) => vec!["it's a bigger one, so set aside a proper half hour in the evening, once everything else is done", "it needs half an hour, so keep it for the evening when things are calmer", "it's a substantial one, so save it for the evening and take your time"],
-        ("evening", false) => vec!["it's a quick one, so ten minutes in the evening is plenty", "ten minutes this evening will do it", "it won't take long, so tuck it in after dinner"],
-        (_, true) if lk.work => vec!["it's a bigger one, so set aside a proper half hour before work if you can, otherwise save it for the evening", "it's a bigger one, so set aside a proper half hour, before work if you can, or save it for an evening when you're winding down", "it needs a proper half hour, so aim for before work or after you've finished"],
-        (_, true) => vec!["it's a bigger one, so set aside a proper half hour somewhere comfortable in the day", "it's a bigger one, so give it a proper half hour while you're fresh", "it needs half an hour of real attention, so pick a calm patch"],
-        (_, false) if lk.work => vec!["it's a quick one, maybe ten minutes, so the middle of the day works if you have a moment", "it only needs ten minutes or so, so squeeze it in before work or in a spare moment", "it's a small one, so a gap before or after work will do"],
-        (_, false) => vec!["it's a quick one, maybe ten minutes, so do it whenever suits", "it only needs ten minutes or so, so slot it in wherever there's a gap", "it won't take long, so do it when the mood strikes"],
-    }
-}
-
-const CATCH: [&str; 3] = ["The catch is that it can drag, so I wouldn't start it when you're tired.", "It could swallow more time than you expect, so don't begin it when you're running low.", "Watch out, because these have a way of growing, so keep an eye on the clock."];
-const UPSIDE: [&str; 3] = ["The upside is that once it's done it's properly out of the way.", "The nice part is how much lighter the day feels afterwards.", "Once it's finished, everything else will feel easier by comparison."];
-
-/// The notes text, cut to a short spoken fragment without its closing punctuation.
-fn note_fragment(o: &Occurrence) -> Option<String> {
-    let first = o.notes.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let words: Vec<&str> = first.split_whitespace().take(28).collect();
-    let t = words.join(" ");
-    let t = t.trim_end_matches(['.', '!', '?', ',', ';', ':']).to_string();
-    (!t.is_empty()).then_some(t)
-}
-
-const GOAL_TIES: [&str; 3] = ["it ties in nicely with", "it quietly helps with", "it's a nudge toward"];
-
-/// One or two sentences (three for a bigger untimed one) about a single task. `goal` is the one goal mention allowed
-/// in the whole summary; only the task it belongs to gets it.
-pub fn blurb(o: &Occurrence, i: usize, lk: &Look, used: &mut Used, goal: Option<&Goal>) -> String {
-    let cat = cat_name(o);
-    let big = is_big(o);
-    let (subj, gerund) = subject(o, i);
-    let salt = i + lk.d.num_days_from_ce() as usize;
-    // an opener ("On the study side") is used once per category; later tasks get plain connectors
-    let opener = cat_opener(&cat).filter(|op| !used.openers.iter().any(|u| u == op));
-    let lead: String = match (opener, gerund) {
-        (Some(op), true) => {
-            used.openers.push(op.to_string());
-            match fresh(&["{op}, there's {s}", "{op}, you'll be {s}", "{op}, we've got {s} lined up"], salt, used).unwrap_or("{op}, there's {s}") {
-                t => t.replace("{op}", op).replace("{s}", &subj),
-            }
-        }
-        (Some(op), false) => {
-            used.openers.push(op.to_string());
-            fresh(&["{op}, there's {s}", "{op}, you've got {s}", "{op}, we've got {s}"], salt, used).unwrap_or("{op}, there's {s}").replace("{op}", op).replace("{s}", &subj)
-        }
-        (None, true) if used.lines.is_empty() => fresh(&["First up, there's {s}", "To start, you'll be {s}", "First up is {s}"], salt, used).unwrap_or("First up is {s}").replace("{s}", &subj),
-        (None, true) => fresh(&["Then there's {s}", "Next, you'll be {s}", "Also on the list is {s}", "Then comes {s}", "There's also {s}"], salt, used).unwrap_or("Also on the list is {s}").replace("{s}", &subj),
-        (None, false) if used.lines.is_empty() => fresh(&["First up, there's {s}", "To start, we've got {s}"], salt, used).unwrap_or("First up, there's {s}").replace("{s}", &subj),
-        (None, false) => fresh(&["Then there's {s}", "There's also {s}", "Next, you've got {s}", "After that we've got {s}"], salt, used).unwrap_or("Then there's {s}").replace("{s}", &subj),
-    };
-    let mut s1 = lead;
-    if let Some(n) = note_fragment(o) {
-        let n = if n.starts_with("I ") || n.starts_with("I'") { n.to_string() } else { crate::util::lower_first_word(&n) };
-        s1.push_str(&format!(", and your note on it says {n}"));
-    } else if let Some(step) = o.checklist.iter().find(|c| !c.done) {
-        s1.push_str(&format!(", and the first step is {}", step_phrase(&step.text)));
-    }
-    s1.push('.');
-    let reason: Option<String> = match goal {
-        Some(g) => Some(format!("{} {}", GOAL_TIES[i % 3], goals::goal_ref(g))),
-        None => fresh(&why_pool(&cat), salt, used).map(String::from),
-    };
-    let at_work = cat == "Work" && lk.work && o.time.is_none();
-    let when = if at_work {
-        fresh(&["it's one for the workday, so tuck it in once you're at your desk", "that's a work-hours job, so fit it in between everything else at work", "it belongs to the workday, so do it at work rather than in your own time"], salt, used).map(String::from)
-    } else { match crate::durations::typical(o) {
-        Some(t) => Some(crate::durations::timing_line(o, &t, lk.work)),
-        None => fresh(&timing_pool(o, big, lk), salt, used).map(String::from),
-    } };
-    let mut s2 = match (reason, when) {
-        (Some(r), Some(w)) => match salt % 3 {
-            0 => format!("{}, and {w}.", cap(&r)),
-            1 => format!("{}, and {r}.", cap(&w)),
-            _ => format!("{}. {}.", cap(&w), cap(&r)),
-        },
-        (Some(x), None) | (None, Some(x)) => format!("{}.", cap(&x)),
-        (None, None) => String::new(),
-    };
-    if big && o.time.is_none() {
-        let pool: &[&'static str] = if salt % 2 == 0 { &CATCH } else { &UPSIDE };
-        if let Some(c) = fresh(pool, salt, used) {
-            if !s2.is_empty() {
-                s2.push(' ');
-            }
-            s2.push_str(c);
-        }
-    }
-    if s2.is_empty() { s1 } else { format!("{s1} {s2}") }
-}
-
-/// Order for the walk-through: fixed times first, then bigger things, then the quick ones.
-fn ordered<'a>(items: &[&'a Occurrence]) -> Vec<&'a Occurrence> {
-    let mut v: Vec<&Occurrence> = items.to_vec();
-    v.sort_by(|a, b| match (&a.time, &b.time) {
-        (Some(x), Some(y)) => x.cmp(y),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        _ => is_big(b).cmp(&is_big(a)),
-    });
-    v
-}
-
-/// Every task, by name: the first few with a full blurb each, any extra (from eight tasks on) named in one sentence.
-/// At most one task is tied to a goal (when `allow_goal`); the bool says whether a goal was mentioned.
-pub fn walk_through(items: &[&Occurrence], lk: &Look, allow_goal: bool) -> (String, bool) {
-    let v = ordered(items);
-    let full = if v.len() >= 8 { 5 } else { v.len() };
-    let texts: Vec<(String, String)> = v.iter().take(full).map(|o| (o.title.clone(), o.title.clone())).collect();
-    let link = if allow_goal { goals::find_link(lk.goals, &texts) } else { None };
-    let link_idx = link.as_ref().and_then(|(_, label)| v.iter().take(full).position(|o| &o.title == label));
-    let mut used = Used::default();
-    let mut parts: Vec<String> = v
-        .iter()
-        .take(full)
-        .enumerate()
-        .map(|(i, o)| blurb(o, i, lk, &mut used, if link_idx == Some(i) { link.as_ref().map(|(g, _)| *g) } else { None }))
-        .collect();
-    if v.len() > full {
-        let rest: Vec<String> = v[full..].iter().map(|o| inline_phrase(o)).collect();
-        parts.push(format!("The smaller bits are {}, which can go wherever there's a gap.", join(&rest)));
-    }
-    (parts.join(" "), link_idx.is_some())
-}
-
-/// "a few things" style opener quantity.
-pub fn how_many(n: usize) -> &'static str {
-    match n {
-        0 => "nothing",
-        1 => "one thing to do",
-        2 => "a couple of things to do",
-        _ => "a few things to do",
     }
 }
 

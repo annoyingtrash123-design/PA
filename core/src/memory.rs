@@ -430,6 +430,7 @@ fn apply_inner(env: &mut Env, b: ProfileIn, updated: String) -> Res<Value> {
             notes: t.notes.unwrap_or_default(),
             recurrence: t.recurrence,
             checklist: t.checklist.into_iter().map(|text| crate::tasks::ChecklistIn { id: None, text }).collect(),
+            minutes: None,
         };
         crate::tasks::create_task(env, tin)?;
         tasks_added += 1;

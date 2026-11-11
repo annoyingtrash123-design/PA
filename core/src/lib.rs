@@ -21,7 +21,7 @@ pub const STYLE_GUIDE: &str = style_guide!();
 pub mod briefing;
 pub mod daynote;
 pub mod digest;
-pub mod durations;
+pub mod taskbrain;
 pub mod env;
 pub mod error;
 pub mod goals;

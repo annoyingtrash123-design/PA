@@ -6,10 +6,10 @@ import { ctxCache, hasKey } from "./cache";
 import { autoTries, getPausedUntil, limitToday, MAX_AUTO_TRIES, noteAutoTry, isPaused, LOW_BUDGET, remaining, restingNotice, usedToday, VOICE_BUDGET, voiceUsedToday } from "./ai-budget";
 import { shouldAutoGenerate, showUpdateButton, showWriteButton, storeKey, type StoredText } from "./ai-policy";
 import { mondayOf } from "../util/dates";
-import { generate, GeminiError, parseNewsJson, setDateProvider } from "./gemini";
+import { generate, GeminiError, parseNewsJson, parseOpeningJson, setDateProvider } from "./gemini";
 import { judgeReply } from "./ai-reply";
-import { previousSlots, recentBlock, reviewDraft } from "./ai-review";
-import { recallNewsWhy, recallWhy, rememberNewsWhy, rememberWhy, whyBudget, whyCheckin, whyFromError, whyHeadlines, whyNoKey, whyPaused, whyParse, type Why } from "./ai-reason";
+import { previousSlots, recentBlock } from "./ai-review";
+import { recallNewsWhy, recallWhy, rememberNewsWhy, rememberWhy, whyBudget, whyFromError, whyHeadlines, whyNoKey, whyPaused, whyParse, type Why } from "./ai-reason";
 import { hasNewerNews, loadNews, newsIsFaithful, newsSettled, updatedLabel } from "./news";
 import { weatherSettled } from "./weather";
 import { composeWithNews, eveningSections, mergeParts, morningScriptWithNews, morningSections, normalisePos, readEntry, splitForNews, type AiParts } from "./morning-script";
@@ -20,9 +20,8 @@ setDateProvider(() => today());
 const RETRY_NOTE =
   "\n\nReminder: do not mention counts, fractions or percentages (like '3 of 5' or '60 percent'). " +
   "Talk about the specific things done or coming up instead. Plain spoken prose only.";
-/** Room for the five-part JSON reply of a ~750 word morning (thinking stays low in gemini.ts). */
-export const BRIEFING_MAX_TOKENS = 8192;
-const RETRY_FORMAT_NOTE = "\n\nReminder: reply with ONLY the JSON object, complete and valid, with every field finished and nothing after it.";
+/** Room for the day's text (about 600 words) with thinking kept low. */
+export const DAY_MAX_TOKENS = 4096;
 const failedAt = new Map<string, number>();
 const FAIL_BACKOFF_MS = 5 * 60 * 1000;
 const inflight = new Map<string, Promise<unknown>>();
@@ -58,8 +57,6 @@ export interface Briefing {
   why?: Why | null;
   /** AI text but the news part is the built-in one: the short reason */
   newsWhy?: string | null;
-  /** the AI editor pass checked this text */
-  reviewed?: boolean;
 }
 
 /** The news segment as the Home card shows it. */
@@ -86,24 +83,12 @@ const newsKey = (skey: string) => `${skey}:news`;
 
 type Kind = "morning" | "evening" | "weekly";
 
-const MORNING_JSON_NOTE =
-  "\n\nOUTPUT FORMAT OVERRIDE: reply with ONLY a JSON object " +
-  "{\"greeting\": string, \"weather_comment\": string or null, \"affirmation\": string, \"briefing\": string}. " +
-  "No markdown, no code fences. Follow the part descriptions above exactly: \"briefing\" has no greeting and no weather, " +
-  "\"weather_comment\" is null if no weather is given, and no part may contain a rain percentage or any count.";
-const NEWS_FIELD_NOTE = " Also include the fifth field \"news\": string (the news segment described under NEWS), written in the same request.";
-const EVENING_JSON_NOTE =
-  "\n\nOUTPUT FORMAT OVERRIDE: reply with ONLY a JSON object {\"briefing\": string, \"news\": string}, no markdown, no code fences. " +
-  "\"briefing\" is the wind-down in three paragraphs separated by a blank line, and \"news\" is the news segment described under NEWS. No rain percentage or count in \"briefing\".";
-
 interface StoredEntry {
   briefing: string;
   greeting?: string | null;
   weather_comment: string | null;
   affirmation?: string | null;
   fingerprint?: string;
-  /** the AI editor pass checked it */
-  reviewed?: boolean;
 }
 
 // ---------------------------------------------------------------- recent summaries (kept so new ones don't overlap)
@@ -134,7 +119,6 @@ const templateParts = (prep: BriefingPrep): MorningParts | undefined => (prep.te
 /** Build the result for a kind: morning merges the four parts (template for whatever the AI did not give). */
 function result(kind: Kind, prep: BriefingPrep, source: "gemini" | "template", ai: AiParts | null, extra: Partial<BriefingResult> & { storedNews?: StoredNews | null } = {}): BriefingResult {
   const r = build(kind, prep, source, ai, extra);
-  if (source === "gemini" && ai?.reviewed) r.reviewed = true;
   if (r.parts) r.sections = morningSections(r.parts, r.news?.text, r.news?.position ?? 2);
   else if (kind === "evening" && !(prep.news && !prep.template_body && !ai?.briefing)) r.sections = eveningSections(r.text, r.news?.text);
   return r;
@@ -241,7 +225,7 @@ function recordNews(kind: Kind, date: string, news: NewsPrep | null | undefined)
  * The text for a kind/date. Reads the stored AI text first (never regenerates it on its own). A request is made only
  * when there is no text yet and shouldAutoGenerate() allows it, or when `force` is set (the person tapped a button).
  */
-export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; hold?: boolean } = {}): Promise<BriefingResult> {
+export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } = {}): Promise<BriefingResult> {
   const early = api<BriefingPrep>("GET", `/api/briefing?kind=${kind}&date=${date}`);
   const week = mondayOf(date);
   const currentWeek = week === mondayOf(today());
@@ -257,13 +241,12 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; h
   }
   return once(GEN_KEY(`${skey}:${opts.force ? "f" : "a"}`), async () => {
     let stored = await readStored(skey, early.cache_key);
-    const storedNews = await readNews(skey);
-    if (stored && !opts.force) return result(kind, early, "gemini", stored.ai, { ...flags(stored, early), storedNews });
+    let storedNews = await readNews(skey);
+    // (the note that the news part is the built-in one is remembered, so it shows again on every re-open)
+    if (stored && !opts.force) return result(kind, early, "gemini", stored.ai, { ...flags(stored, early), storedNews, newsWhy: early.news && !storedNews ? recallNewsWhy(skey) ?? "not written by the AI" : null });
     if (!stored && !opts.force && !shouldAutoGenerate(kind, null, { currentWeek })) {
       return result(kind, early, "template", null, { ...flags(null, early), why: recallWhy(skey) });
     }
-    // the morning check-in is open: wait for the answers so the day is written once, with them in it
-    if (!stored && !opts.force && opts.hold) return result(kind, early, "template", null, { ...flags(null, early), why: whyCheckin() });
     // Let the first forecast and news arrive so the first request is made once, with them in it. Later refreshes never trigger anything.
     if (!stored && kind !== "weekly") await Promise.all([weatherSettled(), newsSettled()]);
     const prep = api<BriefingPrep>("GET", `/api/briefing?kind=${kind}&date=${date}`);
@@ -274,7 +257,7 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; h
       if (why) rememberWhy(skey, why);
       const w = why ?? recallWhy(skey);
       const newsWhy = recallNewsWhy(skey);
-      return stored ? result(kind, prep, "gemini", stored.ai, { ...flags(stored, prep), notice, storedNews, newsWhy: prep.news && !storedNews ? newsWhy ?? "not written by the AI" : null }) : result(kind, prep, "template", null, { ...flags(null, prep), notice, why: w });
+      return stored ? result(kind, prep, "gemini", stored.ai, { ...flags(stored, prep), notice, storedNews, newsWhy: prep.news && !storedNews ? newsWhy ?? "not written by the AI" : null }) : result(kind, prep, "template", null, { ...flags(null, prep), notice, why: w, storedNews });
     };
     if (!opts.force && recentlyFailed(skey)) return fallback();
     // a summary that already failed today is retried automatically only once more; then it waits for "Try again"
@@ -283,60 +266,65 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean; h
     const d = today();
     if (isPaused(Date.now())) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyPaused(getPausedUntil(), tz));
     if (remaining(d) <= 0) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyBudget());
+    // Three small requests instead of one big one: the opening (morning), the day, and the news. Each is quick and
+    // can fail on its own: a missing opening or news part falls back to the built-in one, the rest stays AI-written.
+    const morning = kind === "morning";
+    const recent = await recentTexts(kind, date);
     let why: Why | null = null;
-    try {
-      const morning = kind === "morning";
-      const hasNews = !!prep.news;
-      const jsonMode = morning || (kind === "evening" && hasNews);
-      const note = morning ? MORNING_JSON_NOTE + (hasNews ? NEWS_FIELD_NOTE : "") : kind === "evening" && hasNews ? EVENING_JSON_NOTE : "";
-      const system = prep.system_prompt + note;
-      const recent = await recentTexts(kind, date);
-      const ask = async (extra: string) => {
-        // a briefing is five parts of JSON (about 750 words): ask for plenty of room, with thinking kept low.
-        // With news, the model may read the linked articles so each story is told in full.
-        const raw = await generate({ system, user: prep.user_prompt + recentBlock(recent) + extra, json: jsonMode, maxTokens: BRIEFING_MAX_TOKENS, stream: true });
-        return judgeReply(raw, jsonMode, hasStats);
-      };
+    const dayJob = (async () => {
+      const ask = async (extra: string) => judgeReply(await generate({ system: prep.system_prompt, user: prep.user_prompt + recentBlock(recent, 1500) + extra, maxTokens: DAY_MAX_TOKENS, stream: true }), false, hasStats);
       let j = await ask("");
-      // one retry (parse failure or stats guard), only while the budget is comfortable
-      if (!j.r && remaining(d) > LOW_BUDGET) j = await ask(j.why?.code === "stats" ? RETRY_NOTE : RETRY_FORMAT_NOTE);
-      why = j.why;
-      let r = j.r;
-      // the editor pass (one more request), while the allowance is comfortable; any problem keeps the draft
-      if (r && r.briefing && remaining(d) > LOW_BUDGET - 1) {
-        try {
-          const reviewed = await reviewDraft({ prep, draft: r, recent, jsonMode, generateFn: generate, hasStats });
-          if (reviewed) r = reviewed;
-        } catch {
-          // keep the draft
-        }
-      }
-      if (r && r.briefing) {
-        // non-morning texts have no parts: only morning entries carry the new keys (their absence marks an old entry)
-        const entry: StoredEntry = morning
-          ? { briefing: r.briefing, greeting: r.greeting ?? null, weather_comment: r.weather_comment ?? null, affirmation: r.affirmation ?? null, fingerprint: prep.plan_fingerprint, reviewed: !!r.reviewed }
-          : { briefing: r.briefing, weather_comment: null, fingerprint: prep.plan_fingerprint, reviewed: !!r.reviewed };
-        await kvSet(DB, skey, entry);
-        rememberWhy(skey, null);
-        // the news is kept apart from the plan text; it counts only if it quotes the headlines (normalised) as given
-        let own: StoredNews | null = null;
-        let newsWhy: string | null = null;
-        if (prep.news) {
-          if (r.news && newsIsFaithful(r.news, prep.news.items.map((i) => i.title))) {
-            own = { text: r.news, at: prep.news.generated_at, sources: prep.news.sources, position: prep.news.position };
-            await kvSet(DB, newsKey(skey), own);
-          } else newsWhy = r.news ? whyHeadlines().text : j.salvaged ? "the reply was cut off before the news" : "the AI didn't include the news";
-        }
-        rememberNewsWhy(skey, newsWhy);
-        recordNews(kind, date, prep.news);
-        return result(kind, prep, "gemini", r, { storedNews: own ?? storedNews, newsWhy: own || storedNews ? null : newsWhy });
-      }
-    } catch (e) {
+      // one retry (it read out counts), only while the allowance is comfortable
+      if (!j.r && remaining(d) > LOW_BUDGET) j = await ask(RETRY_NOTE);
+      return j;
+    })().catch((e) => {
       why = whyFromError(e, tz);
-      if (e instanceof GeminiError && e.blocked) return fallback(aiNotice() ?? "AI writing isn't available right now.", why);
+      return null;
+    });
+    const openingJob: Promise<AiParts | null> =
+      morning && prep.opening
+        ? generate({ system: prep.opening.system_prompt, user: prep.opening.user_prompt + recentBlock(recent, 600), json: true, maxTokens: 1024 })
+            .then((raw) => {
+              const o = parseOpeningJson(raw);
+              return o && !hasStats([o.greeting, o.weather_comment, o.affirmation].filter(Boolean).join("\n")) ? o : null;
+            })
+            .catch(() => null)
+        : Promise.resolve(null);
+    let newsWhy: string | null = null;
+    const newsJob: Promise<StoredNews | null> = prep.news
+      ? generate({ system: prep.news.system_prompt, user: prep.news.user_prompt, json: true, maxTokens: 2048, stream: true })
+          .then((raw) => {
+            const text = parseNewsJson(raw);
+            // it counts only if it quotes the headlines (normalised) as given
+            if (text && newsIsFaithful(text, prep.news!.items.map((i) => i.title))) return { text, at: prep.news!.generated_at, sources: prep.news!.sources, position: prep.news!.position } satisfies StoredNews;
+            newsWhy = text ? whyHeadlines().text : "the AI's news reply couldn't be read";
+            return null;
+          })
+          .catch((e) => {
+            newsWhy = whyFromError(e, tz).text;
+            return null;
+          })
+      : Promise.resolve(null);
+    const [j, opening, own] = await Promise.all([dayJob, openingJob, newsJob]);
+    // the news is kept apart from the plan text, so it is saved even when the day's text didn't work out
+    if (own) await kvSet(DB, newsKey(skey), own);
+    if (prep.news) rememberNewsWhy(skey, own ? null : newsWhy);
+    const r = j?.r;
+    if (j && !r) why = j.why;
+    if (r && r.briefing) {
+      const entry: StoredEntry = morning
+        ? { briefing: r.briefing, greeting: opening?.greeting ?? null, weather_comment: opening?.weather_comment ?? null, affirmation: opening?.affirmation ?? null, fingerprint: prep.plan_fingerprint }
+        : { briefing: r.briefing, weather_comment: null, fingerprint: prep.plan_fingerprint };
+      await kvSet(DB, skey, entry);
+      rememberWhy(skey, null);
+      recordNews(kind, date, prep.news);
+      const ai: AiParts = { ...opening, briefing: r.briefing };
+      return result(kind, prep, "gemini", ai, { storedNews: own ?? storedNews, newsWhy: own || storedNews ? null : newsWhy });
     }
+    if (own) storedNews = own;
     failedAt.set(skey, Date.now());
-    return fallback("Couldn't write that just now. Try again later.", why ?? whyParse());
+    const blockedNow = isPaused(Date.now()) || remaining(d) <= 0;
+    return fallback(blockedNow ? aiNotice() ?? "AI writing isn't available right now." : "Couldn't write that just now. Try again later.", why ?? whyParse());
   });
 }
 

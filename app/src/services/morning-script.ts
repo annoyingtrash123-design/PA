@@ -13,8 +13,6 @@ export interface AiParts {
   news?: string | null;
   /** an old entry: `briefing` is the whole text, with its own hello and weather inside */
   legacy?: boolean;
-  /** the AI editor pass checked this text */
-  reviewed?: boolean;
 }
 
 const clean = (s: unknown): string => (typeof s === "string" ? s.trim() : "");
@@ -46,7 +44,6 @@ export function readEntry(v: unknown): (AiParts & { fingerprint?: string }) | nu
     weather_comment: clean(o.weather_comment) || null,
     affirmation: clean(o.affirmation) || null,
     legacy: !isNew,
-    reviewed: o.reviewed === true,
     fingerprint: typeof o.fingerprint === "string" ? o.fingerprint : undefined,
   };
 }

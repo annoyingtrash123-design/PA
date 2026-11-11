@@ -1,5 +1,5 @@
 // Add / edit task dialog.
-import { api, ApiError, getState } from "../core";
+import { api, ApiError, assistantName, getState } from "../core";
 import { icon } from "../icons";
 import { button, confirmDialog, field, h, openModal, select, textInput, toast, toggle } from "../ui";
 import { derivePart, TIME_RE, WEEKDAY_SHORT } from "../util/dates";
@@ -26,6 +26,23 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
   const part = select(Object.entries(PART_LABELS) as [string, string][], t.part_of_day || "anytime");
   const partField = field("Part of day", part);
   partField.hidden = !!t.time;
+  // how long it takes: Miranda guesses unless the person says (and she remembers it for tasks of the same name)
+  const LENGTHS: [string, string][] = [["auto", "Auto (let the assistant guess)"], ["5", "5 minutes"], ["10", "10 minutes"], ["15", "15 minutes"], ["20", "20 minutes"], ["30", "Half an hour"], ["45", "45 minutes"], ["60", "1 hour"], ["90", "1½ hours"], ["120", "2 hours"], ["180", "3 hours"], ["240", "4 hours"]];
+  const known = t.minutes ? String(t.minutes) : "auto";
+  if (t.minutes && !LENGTHS.some(([v]) => v === known)) LENGTHS.push([known, `${t.minutes} minutes`]);
+  const length = select(LENGTHS, known);
+  const reading = h("p", { class: "muted small", "data-testid": "task-reading" });
+  const showReading = () => {
+    try {
+      const g = api<{ says: string | null; category: string | null; takes: string | null; learned: number | null }>("GET", `/api/tasks/guess?title=${encodeURIComponent(title.value)}`);
+      const bits = [g.says ? `“${g.says}”` : "", g.category ?? "", g.learned ? `${g.learned} minutes (you told me)` : g.takes ?? ""].filter(Boolean);
+      reading.textContent = bits.length ? `${assistantName()} reads this as: ${bits.join(" · ")}` : "";
+    } catch {
+      reading.textContent = "";
+    }
+  };
+  title.addEventListener("input", showReading);
+  showReading();
   const catValue = !occ || t.category_auto ? "auto" : t.category_id ? String(t.category_id) : "none";
   const category = select([["auto", "Auto (let the assistant pick)"], ["none", "No category"], ...state.categories.map((c): [string, string] => [String(c.id), c.name])], catValue);
   const notes = h("textarea", { class: "input", rows: 2, placeholder: "Anything to remember" }, t.notes ?? "") as HTMLTextAreaElement;
@@ -89,6 +106,7 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
       part_of_day: tm ? derivePart(tm) : part.value || "anytime",
       category_id: category.value === "none" ? null : category.value === "auto" ? "auto" : Number(category.value),
       notes: notes.value, recurrence,
+      minutes: length.value === "auto" ? null : Number(length.value),
       checklist: items.filter((i) => i.input.value.trim()).map((i) => (i.id ? { id: i.id, text: i.input.value.trim() } : { text: i.input.value.trim() })),
     };
     let saved: Task;
@@ -124,8 +142,10 @@ export function openTaskDialog(opts: { date: string; occ?: Occurrence; onSaved: 
   const body = [
     occ?.recurring ? h("div", { class: "note-box" }, "This is a repeating task: changes apply to the whole series.") : null,
     field("What needs doing?", title),
+    reading,
     dateField, useTime.el, timeField, partField,
     field("Category", category),
+    field("How long does it take?", length),
     field("Notes", notes),
     field("Repeat", repeat), dayRow,
     h("div", { class: "stack", style: { gap: "8px" } }, h("span", { class: "field-label" }, "Checklist (optional)"), itemsCol, button("Add checklist item", () => addItem(), { kind: "text", icon: "add"})),
