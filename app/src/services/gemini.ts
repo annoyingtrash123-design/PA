@@ -1,6 +1,6 @@
 // Google Gemini (generateContent) client and reply cleaning. No key -> callers use template texts.
 import { DAILY_BUDGET, getMainPausedUntil, getPausedUntil, isMainPaused, isPaused, pauseUntilFor, quotaMessage, recordUse, remaining, setMainPausedUntil, setPausedUntil, unrecordUse } from "./ai-budget";
-import { getKey, getModel } from "./cache";
+import { getKey, getModel, setModel } from "./cache";
 
 /** The cheaper model tried once when the main one is out of quota. */
 export const LITE_MODEL = "gemini-3.8-flash-lite";
@@ -178,6 +178,8 @@ export interface GenerateOptions {
   readLinks?: boolean;
   /** stream the reply: no fixed time limit while words keep arriving (for long texts like the briefings) */
   stream?: boolean;
+  /** what this request is for ("day", "opening", "news"…), shown in the Settings log */
+  tag?: string;
 }
 
 const NO_URL_TOOL = "pa-no-url-context";
@@ -207,7 +209,40 @@ export class GeminiError extends Error {
   blocked = false;
   /** epoch ms when the quota should be back */
   pausedUntil?: number;
+  /** the request never got an answer (no connection, or the connection dropped) */
+  network = false;
 }
+
+// ---- a small log of recent attempts, so a failure can be looked at afterwards (Settings shows it)
+export interface AiLogEntry {
+  /** epoch ms */
+  t: number;
+  tag: string;
+  model: string;
+  ms: number;
+  /** "ok" or what went wrong, in plain words */
+  outcome: string;
+  chars?: number;
+}
+const LOG_KEY = "pa-ai-log";
+export function aiLog(): AiLogEntry[] {
+  try {
+    const j = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+    return Array.isArray(j) ? j : [];
+  } catch {
+    return [];
+  }
+}
+function logAttempt(e: AiLogEntry) {
+  try {
+    localStorage.setItem(LOG_KEY, JSON.stringify([e, ...aiLog()].slice(0, 20)));
+  } catch {
+    // no log: fine
+  }
+}
+/** How long to wait before trying again after a request that got no answer at all. */
+export let NETWORK_RETRY_MS = 3000;
+export const _setNetworkRetryMs = (ms: number) => void (NETWORK_RETRY_MS = ms);
 
 /** Google is busy (overloaded or briefly down): worth one more try after a short wait. */
 export const isBusy = (status?: number) => status === 500 || status === 502 || status === 503 || status === 504;
@@ -293,8 +328,34 @@ function blocked(msg: string, pausedUntil?: number): GeminiError {
   return e;
 }
 
-/** One counted HTTP round trip to a model (with the thinking-setting retry). Throws GeminiError. */
+/** One attempt at a model, logged; a request that got no answer at all is tried once more after a short wait
+ *  (a phone that has just woken up often has no connection for a second or two). */
 async function callModel(o: GenerateOptions, model: string, key: string): Promise<string> {
+  const once = async (): Promise<string> => {
+    const t0 = Date.now();
+    const base = { t: t0, tag: o.tag ?? "request", model };
+    try {
+      const text = await callModelOnce(o, model, key);
+      logAttempt({ ...base, ms: Date.now() - t0, outcome: "ok", chars: text.length });
+      return text;
+    } catch (e) {
+      const x = e as GeminiError;
+      const online = typeof navigator !== "undefined" && navigator.onLine === false ? " (phone was offline)" : "";
+      logAttempt({ ...base, ms: Date.now() - t0, outcome: `${x.status ? `Google said ${x.status}: ` : ""}${String(x.message).slice(0, 160)}${online}` });
+      throw e;
+    }
+  };
+  try {
+    return await once();
+  } catch (e) {
+    if (!(e instanceof GeminiError) || !e.network) throw e;
+    await new Promise((r) => setTimeout(r, NETWORK_RETRY_MS));
+    return once();
+  }
+}
+
+/** One counted HTTP round trip to a model (with the thinking-setting retry). Throws GeminiError. */
+async function callModelOnce(o: GenerateOptions, model: string, key: string): Promise<string> {
   const generationConfig: Record<string, unknown> = { temperature: 0.8, maxOutputTokens: o.maxTokens ?? 4096 };
   const useTool = !!o.readLinks && !urlToolRefused(model);
   // JSON mode and tools don't always mix: with the tool on, the reply is parsed leniently instead
@@ -349,7 +410,9 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
     clearTimeout(cap);
     // the request never reached Google (no connection): it didn't count
     if (!ctl.signal.aborted) unrecordUse(budgetDate());
-    throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
+    const err = new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
+    err.network = !ctl.signal.aborted;
+    throw err;
   }
   if (!stream || !res.ok) {
     clearTimeout(timer);
@@ -389,6 +452,27 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
   return o.json ? text : cleanReply(text);
 }
 
+const modelGone = (e: GeminiError) => e.status === 404 || (e.status === 400 && /not found|not supported|no longer available|deprecated/i.test(e.message));
+
+/** Pick the newest general "flash" text model from a ListModels reply (no lite, voice, image or preview-only ones first). */
+export function pickFlash(models: { name?: string; supportedGenerationMethods?: string[] }[], not: string): string | null {
+  const ok = models
+    .filter((m) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
+    .map((m) => String(m.name ?? "").replace(/^models\//, ""))
+    .filter((n) => /^gemini-\d+(\.\d+)?-flash/.test(n) && !/lite|tts|image|audio|live|embedding|thinking/.test(n) && n !== not);
+  const ver = (n: string) => parseFloat(n.replace(/^gemini-/, "")) || 0;
+  // newest version first; a plain name before "-preview" / dated variants of the same version
+  ok.sort((a, b) => ver(b) - ver(a) || a.length - b.length);
+  return ok[0] ?? null;
+}
+
+async function newestFlash(key: string, not: string): Promise<string | null> {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": key } });
+  if (!res.ok) return null;
+  const j = await res.json();
+  return pickFlash(Array.isArray(j?.models) ? j.models : [], not);
+}
+
 /**
  * One generateContent call; resolves to the reply text. Never calls Gemini while quota-paused or (unless
  * bypassBudget) when the daily budget is used up; those throw a `blocked` error and are not counted.
@@ -408,6 +492,15 @@ export async function generate(o: GenerateOptions): Promise<string> {
   try {
     return await callModel(o, model, key);
   } catch (e) {
+    // Google no longer offers this model (retired or renamed): ask Google which models this key can use, switch to
+    // the newest "flash" one, remember it, and try once more
+    if (!explicit && e instanceof GeminiError && modelGone(e)) {
+      const next = await newestFlash(key, model).catch(() => null);
+      if (next) {
+        setModel(next);
+        return callModel(o, next, key);
+      }
+    }
     // still busy after the retry, or far too slow: the lighter, faster model is often free when the main one is overloaded
     const slow = e instanceof GeminiError && /took too long/i.test(e.message);
     if (e instanceof GeminiError && (isBusy(e.status) || slow) && canLite && (o.bypassBudget || remaining(budgetDate()) > 0)) {

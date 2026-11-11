@@ -218,8 +218,15 @@ export function renderHome(root: HTMLElement): () => void {
     weekCard(),
   );
   void load();
-  return onContextUpdate(() => {
+  // back online (the phone woke up without a connection): have another go
+  const online = () => void load();
+  window.addEventListener("online", online);
+  const off = onContextUpdate(() => {
     // weather arrived after first paint: refresh the weather card; the stored AI text is reused, never rewritten
     void load();
   });
+  return () => {
+    window.removeEventListener("online", online);
+    off();
+  };
 }

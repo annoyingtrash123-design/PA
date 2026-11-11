@@ -73,3 +73,13 @@ describe("streamed replies", () => {
     expect(urls[0]).toContain(":streamGenerateContent?alt=sse");
   });
 });
+
+describe("a retired model", () => {
+  it("picks the newest plain flash model from Google's list", async () => {
+    const { pickFlash } = await import("./gemini");
+    const m = (name: string, methods = ["generateContent"]) => ({ name: `models/${name}`, supportedGenerationMethods: methods });
+    const list = [m("gemini-3.8-flash"), m("gemini-4.0-flash-lite"), m("gemini-4.0-flash-preview-0901"), m("gemini-4.0-flash"), m("gemini-4.0-flash-tts"), m("gemini-4.5-pro"), m("gemini-5.0-flash", ["embedContent"])];
+    expect(pickFlash(list, "gemini-3.8-flash")).toBe("gemini-4.0-flash");
+    expect(pickFlash([m("gemini-3.8-flash")], "gemini-3.8-flash")).toBeNull();
+  });
+});

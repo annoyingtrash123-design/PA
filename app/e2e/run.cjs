@@ -30,6 +30,11 @@ function gemini(calls, fail = {}) {
     const system = body.systemInstruction?.parts?.[0]?.text || "";
     const kind = system.includes("three short opening parts") ? "opening" : system.includes("NEWS:") ? "news" : "day";
     calls.push(kind);
+    // a dropped connection for the first N requests (the phone has just woken up)
+    if (fail.drop > 0) {
+      fail.drop--;
+      return route.abort("internetdisconnected");
+    }
     if (fail[kind]) return route.fulfill({ status: fail[kind], contentType: "application/json", body: JSON.stringify({ error: { message: "nope" } }) });
     const stream = req.url().includes("streamGenerateContent");
     let text;
@@ -169,6 +174,21 @@ const tests = {
     await ctx.close();
   },
 
+  "a dropped connection is tried again and doesn't use up the allowance": async (browser) => {
+    const calls = [];
+    const { ctx, page } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls, { drop: 3 }) });
+    await page.waitForFunction(() => document.querySelector('[data-testid="source-label"]')?.textContent?.startsWith("Written by"), null, { timeout: 20000 });
+    assert((await text(page)).includes("It is a calm and steady one today"), "the AI text arrives after the retry");
+    await go(page, "#/settings");
+    if (!/AI writing today/.test(await text(page))) await page.click('button.collapse-head:has-text("AI (Gemini)")');
+    const usage = (await text(page)).match(/AI writing today: \d+ of \d+/)?.[0];
+    assert(usage === "AI writing today: 3 of 12", `dropped requests aren't counted, Settings says: ${usage}`);
+    await page.click('summary:has-text("Recent AI requests")');
+    const log = await text(page);
+    assert(/Couldn't reach Gemini/.test(log) && /morning day · [\w.-]+ · [\d.]+s · ok/.test(log), `the log shows the drop and the success:\n${log.slice(-700)}`);
+    await ctx.close();
+  },
+
   "when Google fails, the built-in summary shows with the reason and a Try again button, and doesn't keep retrying": async (browser) => {
     const calls = [];
     const { ctx, page } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls, { day: 400, news: 400, opening: 400 }) });
@@ -202,15 +222,23 @@ const tests = {
 };
 
 (async () => {
-  const preview = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], { cwd: path.join(__dirname, ".."), stdio: "pipe", env: process.env });
+  const preview = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], { cwd: path.join(__dirname, ".."), stdio: "pipe", env: process.env, detached: true });
+  // stop the server and its children when done (a leftover one would answer the next run with an old build)
+  const stopPreview = () => {
+    try {
+      process.kill(-preview.pid);
+    } catch {
+      preview.kill();
+    }
+  };
   let up = false;
   for (let i = 0; i < 60 && !up; i++) {
     await new Promise((r) => setTimeout(r, 250));
     up = await fetch(URL0).then((r) => r.ok).catch(() => false);
   }
   if (!up) {
-    console.error("preview server did not start (run `npm run build:web` first)");
-    preview.kill();
+    console.error("preview server did not start (run `npm run build:web` first, and check nothing else is using the port)");
+    stopPreview();
     process.exit(1);
   }
   const browser = await chromium.launch();
@@ -227,7 +255,7 @@ const tests = {
     for (const c of browser.contexts()) await c.close().catch(() => {});
   }
   await browser.close();
-  preview.kill();
+  stopPreview();
   console.log(failed ? `\n${failed} of ${Object.keys(tests).length} failed` : `\nall ${Object.keys(tests).length} passed`);
   process.exit(failed ? 1 : 0);
 })();

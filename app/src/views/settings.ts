@@ -11,7 +11,7 @@ import { STYLES, VOICES } from "../services/gemini-tts";
 import { icon } from "../icons";
 import { DEFAULT_SPEED, getGeminiVoice, getFavourites, getSpeed, getStyle, getVoiceType, orderVoices, toggleFavourite, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { addExtra, quotaMessage } from "../services/ai-budget";
-import { GeminiError } from "../services/gemini";
+import { aiLog, GeminiError } from "../services/gemini";
 import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
 import { isValidTimezone } from "../util/dates";
 import type { Category, Memory } from "../types";
@@ -120,6 +120,15 @@ function build(redraw: () => void): HTMLElement[] {
     return `AI writing today: ${u.used} of ${u.limit} · Voice clips today: ${u.voiceUsed} of ${u.voiceLimit} (a summary is read in about 3 clips)`;
   };
   const usageLine = h("p", { class: "muted small" }, usageText());
+  // what actually happened on the last few AI requests, in plain words (for when something goes wrong)
+  const logBox = h("details", { class: "small muted" }, h("summary", null, "Recent AI requests"));
+  const drawLog = () => {
+    const tz = getState().settings.timezone || undefined;
+    const rows = aiLog().map((e) => h("p", { style: { margin: "6px 0" } }, `${new Date(e.t).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit", timeZone: tz })} · ${e.tag} · ${e.model} · ${(e.ms / 1000).toFixed(1)}s · ${e.outcome}`));
+    clear(logBox, h("summary", null, "Recent AI requests"), ...(rows.length ? rows : [h("p", null, "Nothing yet.")]));
+  };
+  logBox.addEventListener("toggle", drawLog);
+  drawLog();
   // the app's own daily limit is a safety net below Google's; this lets a few more through today when it's run out
   const extraBtn = button("Allow 3 more today", () => {
     addExtra(today(), 3);
@@ -233,7 +242,7 @@ function build(redraw: () => void): HTMLElement[] {
       muted(`Optional. With a key, ${name} writes chattier briefings. Without one you still get friendly template texts. The key stays on this device and is never included in backups.`),
       field("Gemini API key", fKey, hasKey() ? `A key is saved, ending in …${getKey().slice(-4)}. Match it on aistudio.google.com/apikey to see which Google account it belongs to.` : undefined),
       h("a", { class: "link small", href: "https://aistudio.google.com/apikey", target: "_blank", rel: "noopener noreferrer" }, "Get a free key at Google AI Studio"),
-      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, extraBtn, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
+      field("Model", fModel, `Default ${DEFAULT_MODEL}`), h("div", { class: "row wrap" }, outlineBtn("Test key", () => void runTest(), "check"), hasKey() ? button("Remove key", () => { setKey(""); toast("Key removed"); redraw(); }, { kind: "text", cls: "danger" }) : null), keyStatus, usageLine, extraBtn, logBox, h("p", { class: "muted small" }, "Miranda writes each summary once a day; tap 'update summary' if your plans change.")),
     button("Save settings", () => void save(), { big: true, icon: "check", cls: "btn-wide" }),
     memoryCard(name),
     profileCard(redraw),

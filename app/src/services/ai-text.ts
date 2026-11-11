@@ -262,7 +262,6 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
     if (!opts.force && recentlyFailed(skey)) return fallback();
     // a summary that already failed today is retried automatically only once more; then it waits for "Try again"
     if (!opts.force && !stored && autoTries(today(), skey) >= MAX_AUTO_TRIES) return fallback();
-    if (!opts.force && !stored) noteAutoTry(today(), skey);
     const d = today();
     if (isPaused(Date.now())) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyPaused(getPausedUntil(), tz));
     if (remaining(d) <= 0) return fallback(aiNotice() ?? "AI writing isn't available right now.", whyBudget());
@@ -272,7 +271,7 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
     const recent = await recentTexts(kind, date);
     let why: Why | null = null;
     const dayJob = (async () => {
-      const ask = async (extra: string) => judgeReply(await generate({ system: prep.system_prompt, user: prep.user_prompt + recentBlock(recent, 1500) + extra, maxTokens: DAY_MAX_TOKENS, stream: true }), false, hasStats);
+      const ask = async (extra: string) => judgeReply(await generate({ system: prep.system_prompt, user: prep.user_prompt + recentBlock(recent, 1500) + extra, maxTokens: DAY_MAX_TOKENS, stream: true, tag: `${kind} day` }), false, hasStats);
       let j = await ask("");
       // one retry (it read out counts), only while the allowance is comfortable
       if (!j.r && remaining(d) > LOW_BUDGET) j = await ask(RETRY_NOTE);
@@ -283,7 +282,7 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
     });
     const openingJob: Promise<AiParts | null> =
       morning && prep.opening
-        ? generate({ system: prep.opening.system_prompt, user: prep.opening.user_prompt + recentBlock(recent, 600), json: true, maxTokens: 1024 })
+        ? generate({ system: prep.opening.system_prompt, user: prep.opening.user_prompt + recentBlock(recent, 600), json: true, maxTokens: 1024, tag: "morning opening" })
             .then((raw) => {
               const o = parseOpeningJson(raw);
               return o && !hasStats([o.greeting, o.weather_comment, o.affirmation].filter(Boolean).join("\n")) ? o : null;
@@ -292,7 +291,7 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
         : Promise.resolve(null);
     let newsWhy: string | null = null;
     const newsJob: Promise<StoredNews | null> = prep.news
-      ? generate({ system: prep.news.system_prompt, user: prep.news.user_prompt, json: true, maxTokens: 2048, stream: true })
+      ? generate({ system: prep.news.system_prompt, user: prep.news.user_prompt, json: true, maxTokens: 2048, stream: true, tag: `${kind} news` })
           .then((raw) => {
             const text = parseNewsJson(raw);
             // it counts only if it quotes the headlines (normalised) as given
@@ -322,7 +321,11 @@ export function getBriefing(kind: Kind, date: string, opts: { force?: boolean } 
       return result(kind, prep, "gemini", ai, { storedNews: own ?? storedNews, newsWhy: own || storedNews ? null : newsWhy });
     }
     if (own) storedNews = own;
-    failedAt.set(skey, Date.now());
+    // No connection isn't Google failing: it doesn't use up the automatic tries, and it's tried again soon
+    // (and straight away when the phone comes back online). Anything else waits five minutes.
+    const offline = (why as Why | null)?.code === "network";
+    failedAt.set(skey, offline ? Date.now() - FAIL_BACKOFF_MS + 20_000 : Date.now());
+    if (!opts.force && !stored && !offline) noteAutoTry(today(), skey);
     const blockedNow = isPaused(Date.now()) || remaining(d) <= 0;
     return fallback(blockedNow ? aiNotice() ?? "AI writing isn't available right now." : "Couldn't write that just now. Try again later.", why ?? whyParse());
   });
