@@ -83,3 +83,25 @@ describe("a retired model", () => {
     expect(pickFlash([m("gemini-3.8-flash")], "gemini-3.8-flash")).toBeNull();
   });
 });
+
+describe("thinking settings", () => {
+  it("starts with the lightest setting and steps down when the model refuses it, remembering the answer", async () => {
+    const { thinkingLadder } = await import("./gemini");
+    expect(thinkingLadder("gemini-3.8-flash")[0]).toEqual({ thinkingLevel: "minimal" });
+    expect(thinkingLadder("gemini-3.8-pro")[0]).toEqual({ thinkingLevel: "low" });
+    expect(thinkingLadder("gemini-2.5-flash")[0]).toEqual({ thinkingBudget: 0 });
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) });
+    const sent: unknown[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init: RequestInit) => {
+      const cfg = JSON.parse(String(init.body)).generationConfig.thinkingConfig;
+      sent.push(cfg ?? null);
+      return cfg?.thinkingLevel === "minimal" ? bad("Invalid value for thinking_level: minimal") : ok("fine");
+    });
+    expect(await generate({ system: "s", user: "u", key: "k", model: "gemini-9.9-flash", bypassBudget: true })).toBe("fine");
+    expect(sent).toEqual([{ thinkingLevel: "minimal" }, { thinkingLevel: "low" }]);
+    // next time it goes straight to the one that worked
+    await generate({ system: "s", user: "u", key: "k", model: "gemini-9.9-flash", bypassBudget: true });
+    expect(sent[2]).toEqual({ thinkingLevel: "low" });
+  });
+});

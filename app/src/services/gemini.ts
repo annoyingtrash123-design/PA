@@ -240,6 +240,8 @@ function logAttempt(e: AiLogEntry) {
     // no log: fine
   }
 }
+/** the thinking setting of the attempt in flight (for the log) */
+let lastThinking = "";
 /** How long to wait before trying again after a request that got no answer at all. */
 export let NETWORK_RETRY_MS = 3000;
 export const _setNetworkRetryMs = (ms: number) => void (NETWORK_RETRY_MS = ms);
@@ -253,15 +255,41 @@ export const _setBusyRetryMs = (ms: number) => void (BUSY_RETRY_MS = ms);
 /** How long one request may take before we give up and use the template text instead. */
 export const GEMINI_TIMEOUT_MS = 45_000;
 
-/** Thinking settings per model family: keep thinking minimal so replies come back quickly. */
-export function thinkingFor(model: string): Record<string, unknown> | null {
-  if (/2\.5/.test(model)) return { thinkingBudget: 0 };
-  if (/^gemini-[3-9]/.test(model)) return { thinkingLevel: "low" };
-  return null;
+/**
+ * Thinking settings to try for a model, quickest first. The model "thinks" silently before it writes, and that is
+ * what makes a reply slow, so the lightest setting the model accepts is used: Gemini 2.5 takes a budget of 0; the
+ * Gemini 3+ flash models take "minimal", older ones only "low". The last step (null) sends no setting at all.
+ */
+export function thinkingLadder(model: string): (Record<string, unknown> | null)[] {
+  if (/2\.5/.test(model)) return [{ thinkingBudget: 0 }, null];
+  if (/^gemini-[3-9]/.test(model)) return /flash/.test(model) ? [{ thinkingLevel: "minimal" }, { thinkingLevel: "low" }, null] : [{ thinkingLevel: "low" }, null];
+  return [null];
 }
+/** The quickest setting for a model (first step of its ladder). */
+export const thinkingFor = (model: string): Record<string, unknown> | null => thinkingLadder(model)[0];
+
+// which step of the ladder each model accepted (remembered, so a refused setting is only ever tried once)
+const THINK_KEY = "pa-thinking-step";
+function thinkStep(model: string): number {
+  try {
+    const j = JSON.parse(localStorage.getItem(THINK_KEY) || "{}");
+    return Number.isInteger(j?.[model]) ? j[model] : 0;
+  } catch {
+    return 0;
+  }
+}
+function setThinkStep(model: string, step: number) {
+  try {
+    const j = JSON.parse(localStorage.getItem(THINK_KEY) || "{}");
+    localStorage.setItem(THINK_KEY, JSON.stringify({ ...j, [model]: step }));
+  } catch {
+    // fine: it will be worked out again next time
+  }
+}
+const thinkLabel = (t: Record<string, unknown> | null) => (t ? String(t.thinkingLevel ?? `budget ${t.thinkingBudget}`) : "default");
 
 /** Streaming: how long to wait for the first words, the longest quiet gap after that, and an overall cap. */
-export const FIRST_CHUNK_MS = 60_000;
+export const FIRST_CHUNK_MS = 90_000;
 export const IDLE_MS = 30_000;
 export const STREAM_CAP_MS = 240_000;
 
@@ -336,12 +364,12 @@ async function callModel(o: GenerateOptions, model: string, key: string): Promis
     const base = { t: t0, tag: o.tag ?? "request", model };
     try {
       const text = await callModelOnce(o, model, key);
-      logAttempt({ ...base, ms: Date.now() - t0, outcome: "ok", chars: text.length });
+      logAttempt({ ...base, ms: Date.now() - t0, outcome: `ok (${text.length} characters, thinking ${lastThinking})`, chars: text.length });
       return text;
     } catch (e) {
       const x = e as GeminiError;
       const online = typeof navigator !== "undefined" && navigator.onLine === false ? " (phone was offline)" : "";
-      logAttempt({ ...base, ms: Date.now() - t0, outcome: `${x.status ? `Google said ${x.status}: ` : ""}${String(x.message).slice(0, 160)}${online}` });
+      logAttempt({ ...base, ms: Date.now() - t0, outcome: `${x.status ? `Google said ${x.status}: ` : ""}${String(x.message).slice(0, 160)}${online} (thinking ${lastThinking})` });
       throw e;
     }
   };
@@ -360,8 +388,14 @@ async function callModelOnce(o: GenerateOptions, model: string, key: string): Pr
   const useTool = !!o.readLinks && !urlToolRefused(model);
   // JSON mode and tools don't always mix: with the tool on, the reply is parsed leniently instead
   if (o.json && !useTool) generationConfig.responseMimeType = "application/json";
-  const thinking = thinkingFor(model);
-  if (thinking) generationConfig.thinkingConfig = thinking;
+  const ladder = thinkingLadder(model);
+  let step = Math.min(thinkStep(model), ladder.length - 1);
+  const applyThinking = () => {
+    if (ladder[step]) generationConfig.thinkingConfig = ladder[step];
+    else delete generationConfig.thinkingConfig;
+    lastThinking = thinkLabel(ladder[step]);
+  };
+  applyThinking();
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: o.system }] },
     contents: [{ role: "user", parts: [{ text: o.user }] }],
@@ -377,14 +411,15 @@ async function callModelOnce(o: GenerateOptions, model: string, key: string): Pr
   try {
     recordUse(budgetDate());
     res = await post(model, key, body, ctl.signal, stream);
-    // a model that doesn't accept our thinking setting: try once more without it
-    if (!res.ok && res.status === 400 && thinking) {
+    // a model that doesn't accept this thinking setting: step down to the next lightest one it does accept
+    while (!res.ok && res.status === 400 && step < ladder.length - 1) {
       const msg = await errorMessage(res.clone());
-      if (/thinking/i.test(msg)) {
-        delete generationConfig.thinkingConfig;
-        recordUse(budgetDate());
-        res = await post(model, key, body, ctl.signal, stream);
-      }
+      if (!/thinking/i.test(msg)) break;
+      step++;
+      setThinkStep(model, step);
+      applyThinking();
+      recordUse(budgetDate());
+      res = await post(model, key, body, ctl.signal, stream);
     }
     // a model that doesn't offer the URL tool: remember it and ask once more without it
     if (!res.ok && res.status === 400 && useTool) {
@@ -410,7 +445,7 @@ async function callModelOnce(o: GenerateOptions, model: string, key: string): Pr
     clearTimeout(cap);
     // the request never reached Google (no connection): it didn't count
     if (!ctl.signal.aborted) unrecordUse(budgetDate());
-    const err = new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't reach Gemini (${(e as Error).message})`);
+    const err = new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer (nothing came back at all)" : `Couldn't reach Gemini (${(e as Error).message})`);
     err.network = !ctl.signal.aborted;
     throw err;
   }
@@ -429,16 +464,18 @@ async function callModelOnce(o: GenerateOptions, model: string, key: string): Pr
     throw err;
   }
   let text: string;
+  let gotWords = false;
   if (stream) {
     // words keep arriving: keep waiting; a long silence (or the overall cap) gives up
     try {
       text = await readSse(res, () => {
+        gotWords = true;
         clearTimeout(timer);
         timer = setTimeout(() => ctl.abort(), IDLE_MS);
       });
     } catch (e) {
       if (e instanceof GeminiError) throw e;
-      throw new GeminiError(ctl.signal.aborted ? "Gemini took too long to answer" : `Couldn't read Gemini's reply (${(e as Error).message})`);
+      throw new GeminiError(ctl.signal.aborted ? `Gemini took too long to answer (${gotWords ? "it stalled part-way through" : "it connected but sent no words"})` : `Couldn't read Gemini's reply (${(e as Error).message})`);
     } finally {
       clearTimeout(timer);
       clearTimeout(cap);
