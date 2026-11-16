@@ -29,6 +29,31 @@ export async function kvGet<T>(name: string, key: string): Promise<T | undefined
   }
 }
 
+/** Like kvGet, but a storage error throws instead of looking like "nothing saved" (so data is never overwritten
+ *  just because it couldn't be read for a moment). */
+export async function kvGetStrict<T>(name: string, key: string): Promise<T | undefined> {
+  const d = await db(name);
+  return new Promise<T | undefined>((resolve, reject) => {
+    const r = d.transaction("kv", "readonly").objectStore("kv").get(key);
+    r.onsuccess = () => resolve(r.result as T | undefined);
+    r.onerror = () => reject(r.error);
+  });
+}
+
+/** Every key in a database. */
+export async function kvKeys(name: string): Promise<string[]> {
+  try {
+    const d = await db(name);
+    return await new Promise<string[]>((resolve, reject) => {
+      const r = d.transaction("kv", "readonly").objectStore("kv").getAllKeys();
+      r.onsuccess = () => resolve((r.result as IDBValidKey[]).map(String));
+      r.onerror = () => reject(r.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function kvSet(name: string, key: string, value: unknown): Promise<void> {
   try {
     const d = await db(name);

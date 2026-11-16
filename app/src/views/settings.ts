@@ -1,4 +1,4 @@
-import { api, ApiError, assistantName, getState, resetEverything, today } from "../core";
+import { api, ApiError, assistantName, getState, listSnapshots, resetEverything, restoreSnapshot, today } from "../core";
 import { aiUsage, testKey } from "../services/ai-text";
 import { cleanKey, DEFAULT_MODEL, getKey, getModel, hasKey, setKey, setModel } from "../services/cache";
 import { refreshHolidays } from "../services/holidays";
@@ -181,6 +181,24 @@ function build(redraw: () => void): HTMLElement[] {
     redraw();
   };
 
+  // ---- automatic daily snapshots
+  const snapBox = h("details", { class: "small" }, h("summary", null, "Restore from a daily copy"));
+  snapBox.addEventListener("toggle", async () => {
+    if (!snapBox.open) return;
+    const list = await listSnapshots();
+    const rows = list.filter((x) => x.date !== "before-restore").map((x) =>
+      h("div", { class: "row", style: { gap: "8px", margin: "6px 0" } },
+        h("span", { class: "grow" }, `${x.date}: ${x.tasks} tasks, ${x.goals} goals, ${x.leisure} to watch/read/try, ${x.sessions} workouts`),
+        button("Restore", async () => {
+          if (!(await confirmDialog(`Go back to ${x.date}?`, "Everything goes back to how it was on that day. Today's version is kept as a copy too, so this can be undone.", "Restore", false))) return;
+          try { await restoreSnapshot(x.key); } catch (e) { return toast((e as Error).message); }
+          window.dispatchEvent(new Event("pa-settings"));
+          toast(`Back to ${x.date}`);
+          redraw();
+        }, { kind: "outline", cls: "small" })));
+    clear(snapBox, h("summary", null, "Restore from a daily copy"), ...(rows.length ? rows : [muted("No daily copies yet. The first one is made today.")]));
+  });
+
   // ---- backup / data
   const download = () => {
     const data = api("GET", "/api/export");
@@ -247,7 +265,8 @@ function build(redraw: () => void): HTMLElement[] {
     memoryCard(name),
     profileCard(redraw),
     categoriesCard(),
-    card("stack", h("h3", { class: "title-sm" }, "Backup"), muted("Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick),
+    card("stack", h("h3", { class: "title-sm" }, "Backup"), muted("Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick,
+      muted("Miranda also keeps a copy of everything once a day on this phone, for the last two weeks."), snapBox),
     card("stack", h("h3", { class: "title-sm" }, "Data"), h("div", { class: "row wrap" }, button("Load sample data", () => void loadSample(), { kind: "outline", icon: "add" }), button("Reset everything", () => void reset(), { kind: "text", icon: "delete", cls: "danger" }))),
     h("p", { class: "muted small", style: { textAlign: "center" } }, "Miranda runs entirely on your device."),
   ].filter(Boolean) as HTMLElement[];

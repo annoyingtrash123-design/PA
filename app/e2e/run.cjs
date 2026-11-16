@@ -244,6 +244,31 @@ const tests = {
     await ctx.close();
   },
 
+  "a daily copy is kept, and an emptier copy never replaces it": async (browser) => {
+    const { ctx, page, problems } = await newPage(browser, { when: MORNING });
+    await go(page, "#/tasks");
+    await addTask(page, "Sort the photo boxes");
+    await addTask(page, "Call the bank");
+    // delete one: the day's copy keeps the fuller version
+    await page.click('.occ-main:has-text("Call the bank")');
+    await page.click('.sheet-overlay button:has-text("Delete")');
+    await page.click('.sheet-overlay button:has-text("Delete") >> nth=-1');
+    await page.waitForTimeout(300);
+    await go(page, "#/settings");
+    await page.click('button.collapse-head:has-text("Backup")');
+    await page.click('summary:has-text("Restore from a daily copy")');
+    await page.waitForTimeout(400);
+    const row = await page.locator("details").filter({ hasText: "Restore from a daily copy" }).innerText();
+    assert(/2026-11-10: 2 tasks/.test(row), `today's copy holds both tasks:\n${row}`);
+    await page.click('details button:has-text("Restore")');
+    await page.click('.sheet-overlay button:has-text("Restore")');
+    await page.waitForTimeout(300);
+    await go(page, "#/tasks");
+    assert((await text(page)).includes("Call the bank"), "restoring brings the deleted task back");
+    assert(!problems.length, `console problems: ${problems.join(" | ")}`);
+    await ctx.close();
+  },
+
   "with a key, the summary is written by three small requests": async (browser) => {
     const calls = [];
     const { ctx, page, problems } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls) });
