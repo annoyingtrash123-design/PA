@@ -4,6 +4,7 @@ import { icon } from "../icons";
 import { button, card, chip, clear, h, holdButton, iconBtn, toast } from "../ui";
 import { addDays, dayMonth, longDay, mondayOf, WEEKDAY_SHORT, weekdayIndex } from "../util/dates";
 import { occurrenceTile } from "./occurrence";
+import { setTabAway, setTabReset } from "../util/back";
 import { openTaskDialog } from "./task-dialog";
 import type { Day, Occurrence } from "../types";
 
@@ -35,6 +36,14 @@ export function renderTasks(root: HTMLElement): () => void {
     window.scrollTo(0, y);
   };
 
+  // the back button first returns to this week
+  setTabAway(() => week !== thisWeek());
+  setTabReset(() => {
+    if (week === thisWeek()) return false;
+    week = thisWeek();
+    draw();
+    return true;
+  });
   draw();
   return onContextUpdate(draw);
 }

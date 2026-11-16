@@ -4,6 +4,7 @@ import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, s
 import { axisTicks } from "../util/chart";
 import { fmtRepRange, fmtSetsReps, fmtWeight, parseNum } from "../util/text";
 import { onSwipe } from "../util/swipe";
+import { setTabAway, setTabReset } from "../util/back";
 import type { Exercise, HistoryPoint, OverviewGroup, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutExercise, WorkoutPlan } from "../types";
 
 type Sub = "today" | "rotation" | "templates" | "progress";
@@ -27,6 +28,15 @@ export function renderGym(root: HTMLElement): void {
     clear(root, seg, ...body);
     window.scrollTo(0, y);
   };
+  // the back button first returns to Today (and the exercise list from an exercise's progress)
+  setTabAway(() => sub !== "today" || !!progressEx);
+  setTabReset(() => {
+    if (sub === "today" && !progressEx) return false;
+    sub = "today";
+    progressEx = "";
+    draw();
+    return true;
+  });
   // swipe left / right to flip between Today, Rotation, Templates and Exercises
   onSwipe(root, (dir) => {
     const i = SUBS.findIndex(([v]) => v === sub);

@@ -202,7 +202,7 @@ const tests = {
     await ctx.close();
   },
 
-  "back: first press goes to the top, second goes Home; gym sub-tabs swipe": async (browser) => {
+  "back: resets the tab first, then Home, then out; gym sub-tabs swipe": async (browser) => {
     const { ctx, page, problems } = await newPage(browser, { when: MORNING });
     await go(page, "#/tasks");
     await go(page, "#/settings");
@@ -216,6 +216,15 @@ const tests = {
     await page.waitForTimeout(300);
     assert(page.url().endsWith("#/"), `second back goes Home (not to Tasks): ${page.url()}`);
     assert((await text(page)).includes("Read it to me"), "Home is showing");
+    // Gym > Templates: back -> Gym Today, back -> Home
+    await go(page, "#/gym");
+    await page.click('[role="tab"]:has-text("Templates")');
+    await page.goBack();
+    await page.waitForTimeout(500);
+    assert(page.url().endsWith("#/gym") && (await page.locator('[role="tab"][aria-selected="true"]').innerText()) === "Today", "back from Templates goes to Gym Today");
+    await page.goBack();
+    await page.waitForTimeout(300);
+    assert(page.url().endsWith("#/"), `then Home: ${page.url()}`);
     // a sheet closes first
     await go(page, "#/tasks");
     await page.click('button:has-text("New task")');

@@ -78,6 +78,7 @@ function route() {
   }
   cleanup?.();
   cleanup = undefined;
+  back.clearTab();
   stopSpeech();
   document.querySelectorAll(".sheet-overlay").forEach((el) => el.remove());
   document.body.classList.remove("modal-open");
