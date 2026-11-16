@@ -285,3 +285,9 @@ a.link { color: var(--lav); }
 
 /* untimed work tasks, shown inside the work hours */
 .occ.in-work { margin-left: 14px; padding-left: 10px; border-left: 2px solid var(--line); }
+
+/* workout: each exercise folds away once it's done */
+.ex-headrow { display: flex; align-items: center; gap: 10px; }
+.ex-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: none; border: 0; color: inherit; padding: 4px 0; font: inherit; cursor: pointer; text-align: left; }
+.ex-card.ex-done .title-sm { color: var(--muted); }
+.ex-chev { color: var(--muted); display: grid; place-items: center; }

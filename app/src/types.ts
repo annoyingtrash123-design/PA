@@ -68,6 +68,8 @@ export interface WorkoutExercise {
   assisted?: boolean;
   start_weight?: number | null;
   note?: string;
+  /** personal best: heaviest weight (lightest counterweight) with the most reps at it */
+  pb?: { weight: number; reps: number; date: string } | null;
 }
 
 export interface WorkoutPlan {

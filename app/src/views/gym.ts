@@ -3,7 +3,7 @@ import { icon } from "../icons";
 import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, segmented, select, textInput, toast, toggle } from "../ui";
 import { axisTicks } from "../util/chart";
 import { fmtRepRange, fmtSetsReps, fmtWeight, parseNum } from "../util/text";
-import type { Exercise, HistoryPoint, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutPlan } from "../types";
+import type { Exercise, HistoryPoint, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutExercise, WorkoutPlan } from "../types";
 
 type Sub = "today" | "rotation" | "templates" | "progress";
 const SUBS: [Sub, string][] = [["today", "Today"], ["rotation", "Rotation"], ["templates", "Templates"], ["progress", "Progress"]];
@@ -31,6 +31,32 @@ export function renderGym(root: HTMLElement): void {
 
 const bigBtn = (label: string, ic: string, fn: () => void) => button(label, fn, { big: true, icon: ic, cls: "btn-wide" });
 
+/** "PB 20 kg × 8" (a counterweight machine: the lightest counterweight); null before anything is logged. */
+const pbText = (pb: WorkoutExercise["pb"], assisted?: boolean) =>
+  pb ? `PB ${fmtWeight(pb.weight)} kg${assisted ? " counterweight" : ""} × ${pb.reps}` : null;
+const pbChip = (pb: WorkoutExercise["pb"], assisted?: boolean) => {
+  const t = pbText(pb, assisted);
+  return t ? chip(t, { icon: "trend", tone: "sage" }) : null;
+};
+
+// exercises ticked off and folded away in a workout (per session, kept across reloads)
+const FOLD_KEY = "pa-gym-folded";
+function folded(sessionId: number): Set<number> {
+  try {
+    const j = JSON.parse(localStorage.getItem(FOLD_KEY) || "{}");
+    return new Set(j && j.id === sessionId && Array.isArray(j.ex) ? j.ex : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFolded(sessionId: number, ex: Set<number>) {
+  try {
+    localStorage.setItem(FOLD_KEY, JSON.stringify({ id: sessionId, ex: [...ex] }));
+  } catch {
+    // fine: they just open again after a reload
+  }
+}
+
 // ---------- today ----------
 function rToday(draw: () => void): HTMLElement[] {
   if (session && !session.completed) return rWorkout(draw);
@@ -57,11 +83,12 @@ function rToday(draw: () => void): HTMLElement[] {
   }
   for (const ex of p.exercises ?? []) {
     const lines: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, ex.name), chip(fmtSetsReps(ex.sets, ex.rep_min, ex.rep_max)))];
+    // the personal best replaces the old "starting weight" line; a starting weight only shows before any history
+    lines.push(h("div", { class: "chip-row" }, pbChip(ex.pb, ex.assisted) ?? chip(ex.start_weight != null ? `No PB yet · start around ${fmtWeight(ex.start_weight)} kg` : "No PB yet", { tone: "raised" })));
     if (ex.note) lines.push(h("p", { class: "muted small ex-note" }, ex.note));
     if (ex.assisted) lines.push(h("p", { class: "muted small" }, "Counterweight machine: lower is stronger"));
     if (ex.last) lines.push(h("p", { class: "muted" }, `Last time (${ex.last.date}): ${ex.last.sets.map((s) => `${fmtWeight(s.weight)}kg x ${s.reps}`).join(", ")}`));
-    else if (!ex.hint) lines.push(h("p", { class: "muted" }, "No history yet. Pick a weight that feels right."));
-    if (ex.hint) lines.push(h("div", { class: "hint" }, icon("trend", 16), h("span", null, ex.hint)));
+    if (ex.hint && ex.last) lines.push(h("div", { class: "hint" }, icon("trend", 16), h("span", null, ex.hint)));
     out.push(card("compact stack", ...lines));
   }
   const resuming = getState().gym.sessions.some((s) => !s.completed && s.date === today());
@@ -137,22 +164,63 @@ function rWorkout(draw: () => void): HTMLElement[] {
 
   const out: HTMLElement[] = [h("div", { class: "row between" }, h("h2", { class: "title-md" }, s.name), chip("In progress", { icon: "timer" }))];
   if (tplNow?.note) out.push(h("p", { class: "muted tpl-note" }, tplNow.note));
+  const fold = folded(s.id);
   for (const exid of order) {
     const pe = planEx.get(exid);
-    const col: (HTMLElement | null)[] = [h("div", { class: "ex-head" }, h("h3", { class: "title-sm" }, names.get(exid) ?? pe?.name ?? `Exercise ${exid}`), pe ?? tplEx.get(exid) ? h("span", { class: "muted small" }, `${fmtRepRange((pe ?? tplEx.get(exid))!.rep_min, (pe ?? tplEx.get(exid))!.rep_max)} reps`) : null)];
+    const sets = byEx.get(exid)!;
+    const allDone = sets.every((x) => x.done);
+    const isAssisted = assisted.has(exid);
+    const range = pe ?? tplEx.get(exid);
+    const name = names.get(exid) ?? pe?.name ?? `Exercise ${exid}`;
+    // the head: tap to open or close; the round tick marks every set done and folds it away
+    const body = h("div", { class: "stack ex-body", style: { gap: "8px" } });
+    const wrap = card(`compact stack ex-card ${allDone ? "ex-done" : ""}`);
+    const setOpen = (open: boolean) => {
+      body.hidden = !open;
+      headBtn.setAttribute("aria-expanded", String(open));
+      chev.replaceChildren(icon(open ? "expand-less" : "expand-more", 22));
+    };
+    const chev = h("span", { class: "ex-chev" });
+    const headBtn = h(
+      "button",
+      { type: "button", class: "ex-toggle", "aria-expanded": "true", onclick: () => {
+        const open = body.hidden;
+        open ? fold.delete(exid) : fold.add(exid);
+        saveFolded(s.id, fold);
+        setOpen(open);
+      } },
+      h("span", { class: "grow stack", style: { gap: "2px", textAlign: "left" } },
+        h("span", { class: "title-sm" }, name),
+        h("span", { class: "muted small" }, [range ? `${fmtRepRange(range.rep_min, range.rep_max)} reps` : "", pbText(pe?.pb, isAssisted) ?? ""].filter(Boolean).join(" · "))),
+      chev,
+    );
+    const tick = h("button", { type: "button", class: `check ${allDone ? "done" : ""}`, role: "checkbox", "aria-checked": String(allDone), "aria-label": `${allDone ? "Not done" : "Done"}: ${name}`, onclick: () => {
+      collect();
+      const now = !sets.every((x) => x.done);
+      sets.forEach((x) => { x.done = now; const f = fields.get(keyOf(exid, x.set_no)); if (f) f.d.checked = now; });
+      if (now) fold.add(exid); else fold.delete(exid);
+      saveFolded(s.id, fold);
+      if (save()) draw();
+    } }, allDone ? icon("check", 16) : null);
+    wrap.appendChild(h("div", { class: "ex-headrow" }, tick, headBtn));
     const exNote = pe?.note ?? tplEx.get(exid)?.note;
-    if (exNote) col.push(h("p", { class: "muted small ex-note" }, exNote));
-    if (assisted.has(exid)) col.push(h("p", { class: "muted small" }, "Counterweight: lower is stronger"));
-    if (pe?.last) col.push(h("p", { class: "muted small" }, "Last: " + pe.last.sets.map((x) => `${fmtWeight(x.weight)}x${x.reps}`).join(", ")));
-    if (pe?.hint) col.push(h("p", { class: "small", style: { color: "var(--sage)" } }, pe.hint));
-    for (const st of byEx.get(exid)!) {
+    if (exNote) body.appendChild(h("p", { class: "muted small ex-note" }, exNote));
+    if (isAssisted) body.appendChild(h("p", { class: "muted small" }, "Counterweight: lower is stronger"));
+    if (pe?.last) body.appendChild(h("p", { class: "muted small" }, "Last: " + pe.last.sets.map((x) => `${fmtWeight(x.weight)}x${x.reps}`).join(", ")));
+    if (pe?.hint && pe.last) body.appendChild(h("p", { class: "small", style: { color: "var(--sage)" } }, pe.hint));
+    for (const st of sets) {
       const w = h("input", { class: "input", type: "text", inputmode: "decimal", value: fmtWeight(st.weight), "aria-label": `Set ${st.set_no} weight in kg`, onchange: save });
       const r = h("input", { class: "input", type: "text", inputmode: "numeric", value: String(st.reps ?? ""), "aria-label": `Set ${st.set_no} reps`, onchange: save });
-      const d = h("input", { type: "checkbox", checked: st.done, "aria-label": `Set ${st.set_no} done`, style: { width: "26px", height: "26px", accentColor: "var(--sage)", justifySelf: "center" }, onchange: save });
+      const d = h("input", { type: "checkbox", checked: st.done, "aria-label": `Set ${st.set_no} done`, style: { width: "26px", height: "26px", accentColor: "var(--sage)", justifySelf: "center" }, onchange: () => {
+        // the last set ticked folds the exercise away
+        if (save() && sets.every((x) => x.done)) { fold.add(exid); saveFolded(s.id, fold); draw(); }
+      } });
       fields.set(keyOf(exid, st.set_no), { w, r, d });
-      col.push(h("div", { class: "setrow" }, h("span", { class: "muted" }, `Set ${st.set_no}`), h("div", { class: "input-suffix" }, w, h("span", null, "kg")), h("div", { class: "input-suffix" }, r, h("span", null, "reps")), d));
+      body.appendChild(h("div", { class: "setrow" }, h("span", { class: "muted" }, `Set ${st.set_no}`), h("div", { class: "input-suffix" }, w, h("span", null, "kg")), h("div", { class: "input-suffix" }, r, h("span", null, "reps")), d));
     }
-    out.push(card("compact stack", ...col));
+    wrap.appendChild(body);
+    setOpen(!fold.has(exid));
+    out.push(wrap);
   }
   out.push(bigBtn("Finish workout", "flag", () => {
     if (!save()) return;

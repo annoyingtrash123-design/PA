@@ -364,6 +364,39 @@ pub struct Last {
     pub sets: Vec<LastSet>,
 }
 
+/// A personal best: the heaviest weight ever done for the exercise (for a counterweight machine, the lightest
+/// counterweight), with the most reps done at that weight.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Pb {
+    pub weight: f64,
+    pub reps: i64,
+    pub date: String,
+}
+
+/// The personal best from every completed session (done sets with at least one rep).
+pub fn pb_for(st: &State, exercise_id: i64, assisted: bool) -> Option<Pb> {
+    let mut best: Option<Pb> = None;
+    for s in st.gym.sessions.iter().filter(|s| s.completed) {
+        for x in s.sets.iter().filter(|x| x.exercise_id == exercise_id && x.done && x.reps > 0) {
+            let better = match &best {
+                None => true,
+                Some(b) if (x.weight - b.weight).abs() < 1e-9 => x.reps > b.reps,
+                Some(b) => {
+                    if assisted {
+                        x.weight < b.weight
+                    } else {
+                        x.weight > b.weight
+                    }
+                }
+            };
+            if better {
+                best = Some(Pb { weight: x.weight, reps: x.reps, date: s.date.clone() });
+            }
+        }
+    }
+    best
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct PlanExercise {
     pub exercise_id: i64,
@@ -377,6 +410,8 @@ pub struct PlanExercise {
     pub assisted: bool,
     pub start_weight: Option<f64>,
     pub note: String,
+    /// personal best (None until the exercise has been logged)
+    pub pb: Option<Pb>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -498,7 +533,7 @@ pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<W
                 let (w, h) = suggest(l, e.rep_max, assisted);
                 (Some(w), Some(h))
             }
-            (None, Some(w)) => (Some(w), Some(format!("Starting weight: {} kg", fmt_w(w)))),
+            (None, Some(w)) => (Some(w), Some(format!("Start around {} kg", fmt_w(w)))),
             (None, None) => (None, None),
         };
         exercises.push(PlanExercise {
@@ -513,6 +548,7 @@ pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<W
             assisted,
             start_weight: e.start_weight,
             note: e.note.clone(),
+            pb: pb_for(st, e.exercise_id, assisted),
         });
     }
     Some(WorkoutPlan {
@@ -634,15 +670,14 @@ pub fn session_create(env: &mut Env, b: SessionIn) -> Res<Session> {
         env.changed = true;
         return Ok(s);
     }
+    // Each set starts from what was done in the same set last time (weight and reps); a set beyond last time's
+    // count copies the last one. With no history yet, the template's starting weight and the bottom of the rep range.
     let mut sets = vec![];
     for e in &plan.exercises {
         for n in 1..=e.sets {
-            let (w, reps) = match (&e.last, e.suggested_weight) {
-                (Some(l), Some(sw)) => {
-                    let last_w = l.sets.iter().map(|s| s.weight).fold(0.0, f64::max);
-                    let reps = if (sw - last_w).abs() > 1e-9 { e.rep_min } else { l.sets.get((n - 1) as usize).or(l.sets.last()).map(|s| s.reps).unwrap_or(e.rep_min) };
-                    (sw, reps)
-                }
+            let prev = e.last.as_ref().and_then(|l| l.sets.get((n - 1) as usize).or(l.sets.last()));
+            let (w, reps) = match (prev, e.start_weight) {
+                (Some(p), _) => (p.weight, if p.reps > 0 { p.reps } else { e.rep_min }),
                 (None, Some(sw)) => (sw, e.rep_min),
                 _ => (0.0, e.rep_min),
             };

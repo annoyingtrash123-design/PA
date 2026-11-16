@@ -140,6 +140,35 @@ const tests = {
     await ctx.close();
   },
 
+  "gym: PB line in the preview, and a ticked-off exercise folds away": async (browser) => {
+    const { ctx, page, problems } = await newPage(browser, { when: MORNING });
+    await go(page, "#/gym");
+    const preview = await text(page);
+    assert(/No PB yet · start around [\d.]+ kg/.test(preview) && !/Starting weight/.test(preview), `the preview shows PBs, not "Starting weight":\n${preview.slice(0, 600)}`);
+    await page.click('button:has-text("Start workout")');
+    await page.waitForSelector(".ex-card");
+    const cards = page.locator(".ex-card");
+    const first = cards.first();
+    assert(await first.locator(".setrow").first().isVisible(), "an exercise starts open");
+    await first.locator("button.check").click();
+    await page.waitForTimeout(200);
+    const first2 = page.locator(".ex-card").first();
+    assert(!(await first2.locator(".setrow").first().isVisible()), "ticked off, it folds away");
+    assert((await first2.getAttribute("class")).includes("ex-done"), "and is marked done");
+    await first2.locator("button.ex-toggle").click();
+    assert(await page.locator(".ex-card").first().locator(".setrow").first().isVisible(), "tapping the name opens it again");
+    // stays folded/open as left after leaving and coming back
+    await page.locator(".ex-card").first().locator("button.ex-toggle").click();
+    await page.click('button:has-text("Back (keeps the workout)")');
+    await page.click('button:has-text("Continue workout")');
+    await page.waitForSelector(".ex-card");
+    assert(!(await page.locator(".ex-card").first().locator(".setrow").first().isVisible()), "folded state is kept");
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(over <= 1, `workout fits the screen (${over}px over)`);
+    assert(!problems.length, `console problems: ${problems.join(" | ")}`);
+    await ctx.close();
+  },
+
   "with a key, the summary is written by three small requests": async (browser) => {
     const calls = [];
     const { ctx, page, problems } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls) });

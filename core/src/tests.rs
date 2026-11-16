@@ -253,7 +253,8 @@ fn progression_up_for_normal_and_down_for_assisted() {
     // assisted pull-up wide grip: hit every rep at 68 -> 65.5 and the hint says less counterweight
     let wide = a.post("/api/sessions", json!({"template_id": tpl(&a, "Pull 1").id}));
     let w = wide["sets"].as_array().unwrap().iter().find(|x| x["exercise_id"] == ex_id(&a, "Counterweighted pull-up, wide grip")).unwrap().clone();
-    assert_eq!(w["weight"], 65.5);
+    // the set starts from what was done last time (the suggestion is shown as a hint, not forced)
+    assert_eq!(w["weight"], 68.0);
     assert_eq!(w["reps"], 10);
     let plan = a.get("/api/gym/next");
     assert_eq!(plan["name"], "Push 2");
@@ -292,7 +293,8 @@ fn start_weight_is_the_suggestion_without_history() {
     assert_eq!(plan["note"], "Chest + Triceps + Front Deltoid");
     let inc = plan_ex(&plan, "Incline dumbbell chest press");
     assert_eq!(inc["suggested_weight"], 15.0);
-    assert_eq!(inc["hint"], "Starting weight: 15 kg");
+    assert_eq!(inc["hint"], "Start around 15 kg");
+    assert!(inc["pb"].is_null());
     assert!(inc["last"].is_null());
     assert_eq!(plan_ex(&plan, "Tricep cable pushdown (two-handed)")["note"], "Bar or rope");
     let dip = plan_ex(&plan, "Counterweighted dip");
@@ -402,9 +404,10 @@ fn gym_session_flow_advances_rotation() {
     assert_eq!(s["date"], TODAY);
     let sets = s["sets"].as_array().unwrap().clone();
     assert_eq!(sets.len(), 32); // 8 exercises x 4 sets
-    // pre-filled: incline press progressed to 17.5 kg, back to rep_min (10)
-    let inc = sets.iter().find(|x| x["weight"] == 17.5).unwrap();
-    assert_eq!(inc["reps"], 10);
+    // pre-filled from last time: incline press 15 kg x 10 on each set
+    let inc_id = ex_id(&a, "Incline dumbbell chest press");
+    let inc: Vec<&Value> = sets.iter().filter(|x| x["exercise_id"] == inc_id).collect();
+    assert!(inc.iter().all(|x| x["weight"] == 15.0 && x["reps"] == 10), "{inc:?}");
     assert_eq!(a.post("/api/sessions", json!({"template_id": push2}))["id"], s["id"]);
     let mut upd = sets.clone();
     upd[0]["done"] = json!(true);
@@ -2285,4 +2288,36 @@ fn the_person_can_teach_miranda_how_long_a_task_takes() {
     assert_eq!(cleared.0, 200);
     assert!(cleared.1["minutes"].is_null());
     assert!(a.post("/api/tasks", json!({"title": "Sort the photo boxes", "date": "2026-11-06"}))["minutes"].is_null());
+}
+
+#[test]
+fn each_set_starts_from_the_same_set_last_time_and_personal_bests_are_listed() {
+    let mut a = App::with_sample(TODAY);
+    let t = tpl(&a, "Push 2").id;
+    let inc = ex_id(&a, "Incline dumbbell chest press");
+    // log a session with different numbers on each set
+    let s = a.post("/api/sessions", json!({"template_id": t}));
+    let mut sets = s["sets"].as_array().unwrap().clone();
+    for x in sets.iter_mut().filter(|x| x["exercise_id"] == inc) {
+        let n = x["set_no"].as_i64().unwrap();
+        x["weight"] = json!([0.0, 20.0, 20.0, 17.5, 17.5][n as usize]);
+        x["reps"] = json!([0, 8, 7, 10, 9][n as usize]);
+        x["done"] = json!(true);
+    }
+    a.req("PUT", &format!("/api/sessions/{}/sets", s["id"]), json!({"sets": sets}));
+    a.post(&format!("/api/sessions/{}/complete", s["id"]), json!({}));
+    // next time: each set starts where that set was
+    a.today = "2026-11-09".into();
+    let s2 = a.post("/api/sessions", json!({"template_id": t}));
+    let got: Vec<(f64, i64)> = s2["sets"].as_array().unwrap().iter().filter(|x| x["exercise_id"] == inc).map(|x| (x["weight"].as_f64().unwrap(), x["reps"].as_i64().unwrap())).collect();
+    assert_eq!(got, vec![(20.0, 8), (20.0, 7), (17.5, 10), (17.5, 9)]);
+    // the plan lists the personal best: the heaviest weight with the most reps done at it
+    let plan = crate::gym::plan_for_template(&a.st(), t, Some("2026-11-09")).unwrap();
+    let pe = plan.exercises.iter().find(|e| e.exercise_id == inc).unwrap();
+    assert_eq!(pe.pb.as_ref().map(|p| (p.weight, p.reps)), Some((20.0, 8)));
+    // a counterweight machine: the lightest counterweight is the best
+    let st = a.st();
+    let wide = st.gym.exercises.iter().find(|e| e.name == "Counterweighted pull-up, wide grip").unwrap();
+    let pb = crate::gym::pb_for(&st, wide.id, true).unwrap();
+    assert_eq!(pb.weight, 68.0);
 }
