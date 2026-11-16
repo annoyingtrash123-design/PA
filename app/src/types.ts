@@ -70,6 +70,7 @@ export interface WorkoutExercise {
   note?: string;
   /** personal best: heaviest weight (lightest counterweight) with the most reps at it */
   pb?: { weight: number; reps: number; date: string } | null;
+  alternatives?: PlanAlt[];
 }
 
 export interface WorkoutPlan {
@@ -149,6 +150,26 @@ export interface TemplateExercise {
   note?: string;
   /** Write-only convenience for the template body: sets the shared exercise flag. */
   assisted?: boolean;
+  /** what can be done instead (the workout's Swap button) */
+  alternatives?: { exercise_id?: number; name: string; start_weight?: number | null }[];
+}
+
+export interface Pb {
+  weight: number;
+  reps: number;
+  date: string;
+}
+export interface PlanAlt {
+  exercise_id: number;
+  name: string;
+  assisted: boolean;
+  start_weight?: number | null;
+  last?: { date: string; sets: { weight: number; reps: number }[] } | null;
+  pb?: Pb | null;
+}
+export interface OverviewGroup {
+  group: string;
+  exercises: { exercise_id: number; name: string; assisted: boolean; pb: Pb | null; last_date: string | null; workouts: string[]; alt_for: string | null }[];
 }
 export interface Template {
   id: number;

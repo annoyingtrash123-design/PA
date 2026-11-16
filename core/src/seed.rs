@@ -151,7 +151,7 @@ pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
                     id
                 }
             };
-            exercises.push(TemplateExercise { exercise_id: id, name: d.name.to_string(), sets: SETS, rep_min: REPS, rep_max: REPS, start_weight: d.start, note: d.note.to_string() });
+            exercises.push(TemplateExercise { exercise_id: id, name: d.name.to_string(), sets: SETS, rep_min: REPS, rep_max: REPS, start_weight: d.start, note: d.note.to_string(), alternatives: vec![] });
         }
         gym.templates.push(Template { id: next(), name: name.to_string(), kind: "strength".into(), note: note.to_string(), exercises, options: vec![], minutes_min: None, minutes_max: None });
     }
@@ -167,6 +167,7 @@ pub fn default_gym(mut next: impl FnMut() -> i64) -> Gym {
     });
     gym.rotation.items = rotation_items(&gym);
     gym.rotation.next_index = 0;
+    crate::gym::notes_to_alternatives(&mut gym, &mut next);
     gym
 }
 
@@ -219,6 +220,16 @@ pub fn migrate(st: &mut State, today: &str) -> bool {
     // v7 -> v8: `leisure` is new (empty); memory gains `interests`, filled with the default when empty
     if st.version < 8 && st.memory.interests.trim().is_empty() {
         st.memory.interests = DEFAULT_INTERESTS.into();
+    }
+    // v8 -> v9: "Or cable fly / cable crossover" style notes become real alternatives (the Swap button)
+    if st.version < 9 {
+        st.next_id = st.next_id.max(st.max_id() + 1);
+        let mut next = st.next_id;
+        crate::gym::notes_to_alternatives(&mut st.gym, &mut || {
+            next += 1;
+            next - 1
+        });
+        st.next_id = next;
     }
     st.version = STATE_VERSION;
     true

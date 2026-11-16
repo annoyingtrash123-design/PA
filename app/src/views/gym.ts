@@ -3,10 +3,10 @@ import { icon } from "../icons";
 import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, segmented, select, textInput, toast, toggle } from "../ui";
 import { axisTicks } from "../util/chart";
 import { fmtRepRange, fmtSetsReps, fmtWeight, parseNum } from "../util/text";
-import type { Exercise, HistoryPoint, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutExercise, WorkoutPlan } from "../types";
+import type { Exercise, HistoryPoint, OverviewGroup, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutExercise, WorkoutPlan } from "../types";
 
 type Sub = "today" | "rotation" | "templates" | "progress";
-const SUBS: [Sub, string][] = [["today", "Today"], ["rotation", "Rotation"], ["templates", "Templates"], ["progress", "Progress"]];
+const SUBS: [Sub, string][] = [["today", "Today"], ["rotation", "Rotation"], ["templates", "Templates"], ["progress", "Exercises"]];
 
 let sub: Sub = "today";
 let session: Session | null = null;
@@ -86,6 +86,7 @@ function rToday(draw: () => void): HTMLElement[] {
     // the personal best replaces the old "starting weight" line; a starting weight only shows before any history
     lines.push(h("div", { class: "chip-row" }, pbChip(ex.pb, ex.assisted) ?? chip(ex.start_weight != null ? `No PB yet · start around ${fmtWeight(ex.start_weight)} kg` : "No PB yet", { tone: "raised" })));
     if (ex.note) lines.push(h("p", { class: "muted small ex-note" }, ex.note));
+    if (ex.alternatives?.length) lines.push(h("p", { class: "muted small" }, `Or swap for: ${ex.alternatives.map((a) => a.name).join(", ")}`));
     if (ex.assisted) lines.push(h("p", { class: "muted small" }, "Counterweight machine: lower is stronger"));
     if (ex.last) lines.push(h("p", { class: "muted" }, `Last time (${ex.last.date}): ${ex.last.sets.map((s) => `${fmtWeight(s.weight)}kg x ${s.reps}`).join(", ")}`));
     if (ex.hint && ex.last) lines.push(h("div", { class: "hint" }, icon("trend", 16), h("span", null, ex.hint)));
@@ -165,12 +166,20 @@ function rWorkout(draw: () => void): HTMLElement[] {
   const out: HTMLElement[] = [h("div", { class: "row between" }, h("h2", { class: "title-md" }, s.name), chip("In progress", { icon: "timer" }))];
   if (tplNow?.note) out.push(h("p", { class: "muted tpl-note" }, tplNow.note));
   const fold = folded(s.id);
+  // an alternative swapped in belongs to the slot of its main exercise
+  const slotOf = new Map<number, WorkoutExercise>();
+  for (const pe of plan?.exercises ?? []) {
+    slotOf.set(pe.exercise_id, pe);
+    for (const a of pe.alternatives ?? []) slotOf.set(a.exercise_id, pe);
+  }
   for (const exid of order) {
-    const pe = planEx.get(exid);
+    const slot = slotOf.get(exid);
+    const alt = slot && slot.exercise_id !== exid ? slot.alternatives?.find((a) => a.exercise_id === exid) : undefined;
+    const pe: WorkoutExercise | undefined = alt && slot ? { ...slot, exercise_id: alt.exercise_id, name: alt.name, assisted: alt.assisted, last: alt.last, pb: alt.pb, hint: null, note: "" } : planEx.get(exid);
     const sets = byEx.get(exid)!;
     const allDone = sets.every((x) => x.done);
     const isAssisted = assisted.has(exid);
-    const range = pe ?? tplEx.get(exid);
+    const range = pe ?? slot ?? tplEx.get(exid);
     const name = names.get(exid) ?? pe?.name ?? `Exercise ${exid}`;
     // the head: tap to open or close; the round tick marks every set done and folds it away
     const body = h("div", { class: "stack ex-body", style: { gap: "8px" } });
@@ -205,6 +214,23 @@ function rWorkout(draw: () => void): HTMLElement[] {
     wrap.appendChild(h("div", { class: "ex-headrow" }, tick, headBtn));
     const exNote = pe?.note ?? tplEx.get(exid)?.note;
     if (exNote) body.appendChild(h("p", { class: "muted small ex-note" }, exNote));
+    // Swap: do an alternative instead (logged under its own name, with its own weights and PB)
+    const choices = slot ? [{ exercise_id: slot.exercise_id, name: slot.name, pb: slot.pb, assisted: !!slot.assisted }, ...(slot.alternatives ?? [])].filter((c) => c.exercise_id !== exid) : [];
+    if (choices.length) {
+      body.appendChild(h("div", { class: "row", style: { gap: "8px" } },
+        alt ? h("span", { class: "muted small grow" }, `Instead of ${slot!.name}`) : h("span", { class: "grow" }),
+        button("Swap", () => {
+          const m = openModal(`Swap ${name}`, [muted("Do this instead. It's logged under its own name, with its own weights and PB."), ...choices.map((c) =>
+            button(`${c.name}${pbText(c.pb, c.assisted) ? ` · ${pbText(c.pb, c.assisted)}` : ""}`, () => {
+              collect();
+              try { session = api<Session>("PUT", `/api/sessions/${s.id}/sets`, { sets: s.sets }); session = api<Session>("POST", `/api/sessions/${s.id}/swap`, { from: exid, to: c.exercise_id }); } catch (e) { toast((e as Error).message); return; }
+              fold.delete(exid);
+              saveFolded(s.id, fold);
+              m.close();
+              draw();
+            }, { kind: "outline", cls: "btn-wide" }))], [button("Cancel", () => m.close(), { kind: "text" })]);
+        }, { kind: "text", icon: "repeat", cls: "small" })));
+    }
     if (isAssisted) body.appendChild(h("p", { class: "muted small" }, "Counterweight: lower is stronger"));
     if (pe?.last) body.appendChild(h("p", { class: "muted small" }, "Last: " + pe.last.sets.map((x) => `${fmtWeight(x.weight)}x${x.reps}`).join(", ")));
     if (pe?.hint && pe.last) body.appendChild(h("p", { class: "small", style: { color: "var(--sage)" } }, pe.hint));
@@ -289,6 +315,10 @@ function editTemplate(t: Template | null, onDone: () => void) {
       const sw = h("input", { class: "input", type: "text", inputmode: "decimal", value: fmtWeight(r.start_weight), placeholder: "none", "aria-label": "Starting weight in kg", onchange: () => { const v = sw.value.trim(); r.start_weight = v === "" ? null : Math.max(0, parseNum(v, 0)); sw.value = fmtWeight(r.start_weight); } });
       const exNote = h("input", { class: "input", type: "text", value: r.note ?? "", placeholder: "e.g. Or cable fly", "aria-label": "Exercise note", onchange: () => { r.note = exNote.value.trim(); } });
       const asst = toggle("Assisted (counterweight)", !!r.assisted, (v) => { r.assisted = v; });
+      const alts = h("input", { class: "input", type: "text", value: (r.alternatives ?? []).map((a) => a.name).join(", "), placeholder: "e.g. Cable fly, Cable crossover", "aria-label": "Alternatives", onchange: () => {
+        const old = r.alternatives ?? [];
+        r.alternatives = alts.value.split(",").map((x) => x.trim()).filter(Boolean).map((n) => old.find((o) => o.name.toLowerCase() === n.toLowerCase()) ?? { name: n });
+      } });
       return h("div", { class: "tpl-row" },
         h("div", { class: "row", style: { gap: "0" } }, h("span", { class: "grow", style: { fontWeight: "500" } }, r.name ?? exercises.find((x) => x.id === r.exercise_id)?.name ?? "Exercise"),
           h("button", { type: "button", class: "icon-btn sm", "aria-label": "Move up", disabled: i === 0, onclick: () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; rebuild(); } }, icon("up", 18)),
@@ -296,6 +326,7 @@ function editTemplate(t: Template | null, onDone: () => void) {
           h("button", { type: "button", class: "icon-btn sm", "aria-label": "Remove exercise", onclick: () => { rows.splice(i, 1); rebuild(); } }, icon("close", 18))),
         h("div", { class: "triple" }, num(r, "sets", "Sets"), num(r, "rep_min", "Min reps"), num(r, "rep_max", "Max reps")),
         h("div", { class: "pair" }, field("Start weight (kg)", sw), field("Note", exNote)),
+        field("Alternatives (for the Swap button)", alts, "Separate with commas"),
         asst.el);
     }));
   };
@@ -338,7 +369,7 @@ function editTemplate(t: Template | null, onDone: () => void) {
     if (!nm) { err.textContent = "Give the template a name."; err.hidden = false; return; }
     const body = kind === "cardio"
       ? { name: nm, kind, note: note.value.trim(), options: optionsIn.value.split(",").map((x) => x.trim()).filter(Boolean), minutes_min: Math.round(parseNum(minLo.value, 20)), minutes_max: Math.round(parseNum(minHi.value, 40)) }
-      : { name: nm, kind, note: note.value.trim(), exercises: rows.map((r) => ({ exercise_id: r.exercise_id, sets: r.sets, rep_min: r.rep_min, rep_max: r.rep_max, start_weight: r.start_weight ?? null, note: r.note ?? "", assisted: !!r.assisted })) };
+      : { name: nm, kind, note: note.value.trim(), exercises: rows.map((r) => ({ exercise_id: r.exercise_id, sets: r.sets, rep_min: r.rep_min, rep_max: r.rep_max, start_weight: r.start_weight ?? null, note: r.note ?? "", assisted: !!r.assisted, alternatives: (r.alternatives ?? []).map((a) => (a.exercise_id ? { exercise_id: a.exercise_id, start_weight: a.start_weight ?? null } : { name: a.name, start_weight: a.start_weight ?? null })) })) };
     try { t ? api("PUT", `/api/templates/${t.id}`, body) : api("POST", "/api/templates", body); } catch (e) { err.textContent = e instanceof ApiError ? e.message : String(e); err.hidden = false; return; }
     m.close(); onDone();
   };
@@ -351,17 +382,33 @@ function editTemplate(t: Template | null, onDone: () => void) {
     button("Cancel", () => m.close(), { kind: "text" }), button("Save", save)]);
 }
 
-// ---------- progress ----------
+// ---------- exercises: every exercise by Push / Pull / Legs with its PB; tap one for its progress ----------
 function rProgress(draw: () => void): HTMLElement[] {
+  if (progressEx) return rExerciseDetail(draw);
+  const groups = api<OverviewGroup[]>("GET", "/api/exercises/overview");
+  const out: HTMLElement[] = [h("h2", { class: "title-md" }, "Exercises"), muted("Everything in your workouts, with personal bests. Tap one to see its progress.")];
+  if (!groups.length) return [...out, muted("Add some exercises to a template first.")];
+  for (const g of groups) {
+    out.push(card("compact stack", h("h3", { class: "title-sm" }, g.group), ...g.exercises.map((x) =>
+      h("button", { type: "button", class: `ex-list-row ${x.alt_for ? "alt" : ""}`, onclick: () => { progressEx = String(x.exercise_id); draw(); window.scrollTo(0, 0); } },
+        h("span", { class: "grow stack", style: { gap: "2px", textAlign: "left" } },
+          h("span", null, x.name),
+          h("span", { class: "muted small" }, [x.alt_for ? `Swap for ${x.alt_for}` : x.workouts.join(", "), x.last_date ? `last ${x.last_date}` : "not done yet"].filter(Boolean).join(" · "))),
+        pbText(x.pb, x.assisted) ? h("span", { class: "small", style: { color: "var(--sage)", textAlign: "right" } }, pbText(x.pb, x.assisted)!.replace(" counterweight", "")) : null,
+        icon("right", 18)))));
+  }
+  return out;
+}
+
+function rExerciseDetail(draw: () => void): HTMLElement[] {
   const exercises = api<Exercise[]>("GET", "/api/exercises");
-  if (!progressEx && exercises.length) progressEx = String(exercises[0].id);
-  const dd = select(exercises.map((x): [string, string] => [String(x.id), x.name]), progressEx || null);
-  dd.onchange = () => { progressEx = dd.value; draw(); };
-  const out: HTMLElement[] = [h("h2", { class: "title-md" }, "Progress"), field("Exercise", dd)];
-  if (!progressEx) return [...out, muted("Add some exercises first.")];
+  const ex = exercises.find((x) => String(x.id) === progressEx);
+  const back = button("All exercises", () => { progressEx = ""; draw(); window.scrollTo(0, 0); }, { kind: "text", icon: "left" });
+  if (!ex) { progressEx = ""; return rProgress(draw); }
+  const out: HTMLElement[] = [back, h("h2", { class: "title-md" }, ex.name)];
   const hist = api<HistoryPoint[]>("GET", `/api/exercises/${progressEx}/history`);
   if (!hist.length) return [...out, card("", muted("No sessions logged for this one yet. Go lift something!"))];
-  const assisted = !!exercises.find((x) => String(x.id) === progressEx)?.assisted;
+  const assisted = !!ex.assisted;
   out.push(card("compact stack", muted(assisted ? "Counterweight (lower is stronger)" : "Top weight (kg)"), weightChart(hist, assisted)));
   out.push(card("compact stack", h("h3", { class: "title-sm" }, "Entries"), ...[...hist].reverse().map((p) => h("div", { class: "entry" }, h("span", { class: "grow" }, p.date), h("strong", { style: { fontWeight: "500" } }, `${fmtWeight(p.top_weight)} kg x ${p.best_reps ?? "-"}`), assisted || p.est_1rm == null ? null : h("span", { class: "muted small" }, `1RM ~${fmtWeight(p.est_1rm)}`)))));
   return out;

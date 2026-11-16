@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-pub const STATE_VERSION: u32 = 8;
+pub const STATE_VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
@@ -252,6 +252,18 @@ pub struct TemplateExercise {
     pub start_weight: Option<f64>,
     #[serde(default)]
     pub note: String,
+    /// Exercises that can be done instead (the workout's Swap button); each is logged under its own name.
+    #[serde(default)]
+    pub alternatives: Vec<Alternative>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Alternative {
+    pub exercise_id: i64,
+    pub name: String,
+    /// Suggested weight (kg) for the alternative while it has no history.
+    #[serde(default)]
+    pub start_weight: Option<f64>,
 }
 
 fn strength() -> String {

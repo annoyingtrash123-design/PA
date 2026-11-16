@@ -59,7 +59,7 @@ fn d(s: &str) -> NaiveDate {
 #[test]
 fn init_state_defaults() {
     let st: State = serde_json::from_str(&init_state(TODAY)).unwrap();
-    assert_eq!(st.version, 8);
+    assert_eq!(st.version, crate::model::STATE_VERSION);
     assert_eq!(st.next_id, 100);
     assert_eq!(st.categories.len(), 10);
     assert_eq!(st.categories[0].name, "Chores");
@@ -477,7 +477,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         let r: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(r["status"], 200);
         assert!(!r["state"].is_null(), "migrated state must be returned so the UI persists it");
-        assert_eq!(r["state"]["version"], 8);
+        assert_eq!(r["state"]["version"], crate::model::STATE_VERSION);
         a.state = r["state"].to_string();
         let st = a.st();
         let names: Vec<&str> = st.gym.templates.iter().map(|t| t.name.as_str()).collect();
@@ -493,7 +493,7 @@ fn migration_replaces_untouched_v1_defaults_and_returns_state() {
         assert!(again["state"].is_null());
         // the explicit endpoint works as well
         let m = a.get("/api/state/migrate");
-        assert_eq!(m["version"], 8);
+        assert_eq!(m["version"], crate::model::STATE_VERSION);
     }
 }
 
@@ -503,14 +503,14 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     let mut a = App::new(TODAY);
     a.state = v1_state_with_old_defaults(false);
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["body"]["version"], 8);
+    assert_eq!(r["body"]["version"], crate::model::STATE_VERSION);
     assert_eq!(r["state"]["gym"]["templates"].as_array().unwrap().len(), 7);
     // customised: a renamed template -> keep everything, only bump the version
     let mut v: Value = serde_json::from_str(&v1_state_with_old_defaults(true)).unwrap();
     v["gym"]["templates"][0]["name"] = json!("My Push");
     a.state = v.to_string();
     let r: Value = serde_json::from_str(&call(&a.state, "GET", "/api/state/migrate", "{}", &a.ctx())).unwrap();
-    assert_eq!(r["state"]["version"], 8);
+    assert_eq!(r["state"]["version"], crate::model::STATE_VERSION);
     let g = &r["state"]["gym"];
     assert_eq!(g["templates"].as_array().unwrap().len(), 6);
     assert_eq!(g["templates"][0]["name"], "My Push");
@@ -523,7 +523,7 @@ fn migration_endpoint_on_v1_state_and_customised_state() {
     // importing a v1 backup migrates it too
     let mut b = App::new(TODAY);
     let imp = b.post("/api/import", serde_json::from_str(&v1_state_with_old_defaults(false)).unwrap());
-    assert_eq!(imp["version"], 8);
+    assert_eq!(imp["version"], crate::model::STATE_VERSION);
     assert_eq!(imp["gym"]["templates"][6]["name"], "Cardio");
 }
 
@@ -850,7 +850,7 @@ fn old_default_rotations_become_push_pull_cardio_rest_legs_keeping_next_workout(
     v2.gym.rotation.items = old8.clone();
     v2.gym.rotation.next_index = 2;
     assert!(crate::seed::migrate(&mut v2, TODAY));
-    assert_eq!(v2.version, 8);
+    assert_eq!(v2.version, crate::model::STATE_VERSION);
     assert_eq!(names(&v2), ["Push 1", "Pull 1", "Cardio", "Rest", "Legs + Abs 1", "Push 2", "Pull 2", "Cardio", "Rest", "Legs + Abs 2"]);
     assert_eq!(v2.gym.rotation.next_index, 4, "still Legs + Abs 1 next");
     // v3 (8 + rest), next = the rest day
@@ -1047,7 +1047,7 @@ fn missed_untimed_rolls_and_only_clock_times_are_missed() {
     let day = a.get("/api/days?start=2026-11-02&days=1");
     let titles: Vec<&str> = day[0]["items"].as_array().unwrap().iter().map(|o| o["title"].as_str().unwrap()).collect();
     assert_eq!(titles, vec!["Stretch", "Pay rent", "Dentist"]);
-    assert_eq!(a.st().version, 8);
+    assert_eq!(a.st().version, crate::model::STATE_VERSION);
     assert_eq!(a.st().missed.len(), 1);
 }
 
@@ -1272,7 +1272,7 @@ fn leisure_state_v8_interests_and_sample_data() {
     st.version = 7;
     st.memory.interests = String::new();
     assert!(crate::seed::migrate(&mut st, TODAY));
-    assert_eq!((st.version, st.memory.interests.starts_with("History and politics")), (8, true));
+    assert_eq!((st.version, st.memory.interests.starts_with("History and politics")), (crate::model::STATE_VERSION, true));
     let mut b = App::new(TODAY);
     let (s, m) = b.req("PUT", "/api/memory/interests", json!({"text": " Birds and maps "}));
     assert_eq!((s, m["interests"].as_str()), (200, Some("Birds and maps")));
@@ -2320,4 +2320,71 @@ fn each_set_starts_from_the_same_set_last_time_and_personal_bests_are_listed() {
     let wide = st.gym.exercises.iter().find(|e| e.name == "Counterweighted pull-up, wide grip").unwrap();
     let pb = crate::gym::pb_for(&st, wide.id, true).unwrap();
     assert_eq!(pb.weight, 68.0);
+}
+
+#[test]
+fn alternatives_swap_in_a_workout_and_keep_their_own_history() {
+    let mut a = App::with_sample(TODAY);
+    // the old "Or ..." notes became real alternatives (with the starting weight from the note)
+    let pull2 = tpl(&a, "Pull 2");
+    let curl = pull2.exercises.iter().find(|e| e.name == "Dumbbell bicep curl").unwrap();
+    assert_eq!(curl.alternatives.iter().map(|x| (x.name.as_str(), x.start_weight)).collect::<Vec<_>>(), vec![("Barbell bicep curl", Some(17.5))]);
+    assert!(curl.note.is_empty());
+    let push2 = tpl(&a, "Push 2");
+    let fly = push2.exercises.iter().find(|e| e.name == "Incline seated dumbbell pectoral fly").unwrap();
+    assert_eq!(fly.alternatives.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), vec!["Cable fly", "Cable crossover"]);
+    // swap in a workout: the sets keep their place and start from the alternative's starting weight
+    let s = a.post("/api/sessions", json!({"template_id": pull2.id}));
+    let pos = s["sets"].as_array().unwrap().iter().position(|x| x["exercise_id"] == curl.exercise_id).unwrap();
+    let alt = curl.alternatives[0].exercise_id;
+    let sw = a.post(&format!("/api/sessions/{}/swap", s["id"]), json!({"from": curl.exercise_id, "to": alt}));
+    let sets = sw["sets"].as_array().unwrap();
+    assert_eq!(sets[pos]["exercise_id"], alt);
+    assert_eq!(sets[pos]["weight"], 17.5);
+    assert!(!sets.iter().any(|x| x["exercise_id"] == curl.exercise_id));
+    // only real alternatives, and back again works
+    assert_eq!(a.req("POST", &format!("/api/sessions/{}/swap", s["id"]), json!({"from": alt, "to": ex_id(&a, "Leg curl")})).0, 400);
+    let back = a.post(&format!("/api/sessions/{}/swap", s["id"]), json!({"from": alt, "to": curl.exercise_id}));
+    assert_eq!(back["sets"][pos]["exercise_id"], curl.exercise_id);
+    // log the alternative: it gets its own PB, the main exercise's is untouched
+    let sw = a.post(&format!("/api/sessions/{}/swap", s["id"]), json!({"from": curl.exercise_id, "to": alt}));
+    let mut sets = sw["sets"].as_array().unwrap().clone();
+    for x in sets.iter_mut().filter(|x| x["exercise_id"] == alt) {
+        x["done"] = json!(true);
+    }
+    a.req("PUT", &format!("/api/sessions/{}/sets", s["id"]), json!({"sets": sets}));
+    a.post(&format!("/api/sessions/{}/complete", s["id"]), json!({}));
+    let plan = crate::gym::plan_for_template(&a.st(), pull2.id, None).unwrap();
+    let pe = plan.exercises.iter().find(|e| e.exercise_id == curl.exercise_id).unwrap();
+    assert!(pe.pb.is_none());
+    assert_eq!(pe.alternatives[0].pb.as_ref().map(|p| p.weight), Some(17.5));
+    // the overview lists exercises by Push / Pull / Legs, alternatives next to their main exercise
+    let ov = a.get("/api/exercises/overview");
+    let groups: Vec<&str> = ov.as_array().unwrap().iter().map(|g| g["group"].as_str().unwrap()).collect();
+    assert_eq!(groups, vec!["Push", "Pull", "Legs"]);
+    let pull = ov.as_array().unwrap().iter().find(|g| g["group"] == "Pull").unwrap()["exercises"].as_array().unwrap().clone();
+    let i_main = pull.iter().position(|r| r["name"] == "Dumbbell bicep curl").unwrap();
+    assert_eq!(pull[i_main + 1]["name"], "Barbell bicep curl");
+    assert_eq!(pull[i_main + 1]["alt_for"], "Dumbbell bicep curl");
+    assert_eq!(pull[i_main + 1]["pb"]["weight"], 17.5);
+    let row = pull.iter().find(|r| r["name"] == "Seated cable machine row").unwrap();
+    assert_eq!(row["workouts"], json!(["Pull 1", "Pull 2"]));
+}
+
+#[test]
+fn old_states_get_their_notes_turned_into_alternatives() {
+    let mut st: crate::model::State = serde_json::from_str(&crate::init_state(TODAY)).unwrap();
+    for t in st.gym.templates.iter_mut() {
+        for e in t.exercises.iter_mut() {
+            if !e.alternatives.is_empty() {
+                e.note = format!("Or {}", e.alternatives.iter().map(|x| x.name.to_lowercase()).collect::<Vec<_>>().join(" / "));
+                e.alternatives.clear();
+            }
+        }
+    }
+    st.version = 8;
+    assert!(crate::seed::migrate(&mut st, TODAY));
+    let n: usize = st.gym.templates.iter().flat_map(|t| &t.exercises).map(|e| e.alternatives.len()).sum();
+    assert_eq!(n, 4);
+    assert_eq!(st.version, crate::model::STATE_VERSION);
 }

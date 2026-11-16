@@ -291,3 +291,8 @@ a.link { color: var(--lav); }
 .ex-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: none; border: 0; color: inherit; padding: 4px 0; font: inherit; cursor: pointer; text-align: left; }
 .ex-card.ex-done .title-sm { color: var(--muted); }
 .ex-chev { color: var(--muted); display: grid; place-items: center; }
+
+/* gym: the exercise list */
+.ex-list-row { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; border-top: 1px solid var(--line); color: inherit; font: inherit; padding: 10px 0; cursor: pointer; text-align: left; }
+.ex-list-row:first-of-type { border-top: 0; }
+.ex-list-row.alt { padding-left: 14px; }

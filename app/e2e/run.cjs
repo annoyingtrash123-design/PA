@@ -169,6 +169,39 @@ const tests = {
     await ctx.close();
   },
 
+  "gym: swap an exercise for its alternative, and the exercise list by Push / Pull / Legs": async (browser) => {
+    const { ctx, page, problems } = await newPage(browser, { when: MORNING });
+    await go(page, "#/gym");
+    // skip round the rotation to Push 2 (it has an alternative for the incline fly)
+    for (let i = 0; i < 8 && !(await text(page)).includes("Next workout: Push 2"); i++) {
+      await page.click('button:has-text("Skip this one")');
+      await page.click('.sheet-overlay button:has-text("Skip")');
+      await page.waitForTimeout(150);
+    }
+    assert((await text(page)).includes("Or swap for: Cable fly, Cable crossover"), "the preview names the alternatives");
+    await page.click('button:has-text("Start workout")');
+    const card = page.locator(".ex-card", { hasText: "Incline seated dumbbell pectoral fly" });
+    await card.locator('button:has-text("Swap")').click();
+    await page.click('.sheet-overlay button:has-text("Cable fly")');
+    await page.waitForTimeout(200);
+    const swapped = page.locator(".ex-card", { hasText: "Cable fly" }).first();
+    assert((await swapped.innerText()).includes("Instead of Incline seated dumbbell pectoral fly"), "the swapped card says what it replaces");
+    const titles = await page.locator(".ex-card .ex-toggle .title-sm").allInnerTexts();
+    assert(!titles.includes("Incline seated dumbbell pectoral fly") && titles.includes("Cable fly"), `the original is swapped out: ${titles.join(" | ")}`);
+    // the exercise list
+    await page.click('button:has-text("Back (keeps the workout)")');
+    await page.click('[role="tab"]:has-text("Exercises")');
+    const list = await text(page);
+    for (const g of ["Push", "Pull", "Legs"]) assert(new RegExp(`\\n${g}\\n`).test(list), `group ${g} listed:\n${list.slice(0, 400)}`);
+    assert(list.includes("Cable fly") && list.includes("Swap for Incline seated dumbbell pectoral fly"), "alternatives sit with their main exercise");
+    await page.click('.ex-list-row:has-text("Seated cable machine row")');
+    assert((await text(page)).includes("All exercises"), "tapping a row opens its progress");
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert(over <= 1, `fits the screen (${over}px over)`);
+    assert(!problems.length, `console problems: ${problems.join(" | ")}`);
+    await ctx.close();
+  },
+
   "with a key, the summary is written by three small requests": async (browser) => {
     const calls = [];
     const { ctx, page, problems } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls) });

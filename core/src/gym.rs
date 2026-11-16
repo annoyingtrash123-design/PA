@@ -99,6 +99,66 @@ pub struct TemplateExerciseIn {
     /// Also sets the (shared) exercise's assisted flag when given.
     #[serde(default)]
     assisted: Option<bool>,
+    /// Alternatives by id or name (absent: keep none)
+    #[serde(default)]
+    alternatives: Vec<AltIn>,
+}
+
+#[derive(Deserialize)]
+pub struct AltIn {
+    #[serde(default)]
+    exercise_id: Option<i64>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    start_weight: Option<f64>,
+}
+
+/// Turn notes like "Or cable fly / cable crossover" or "Or barbell bicep curl, 17.5 kg" into real alternatives
+/// (new exercises are created by name). The note is cleared when it was only the alternatives.
+pub fn notes_to_alternatives(gym: &mut Gym, next: &mut dyn FnMut() -> i64) {
+    for ti in 0..gym.templates.len() {
+        for ei in 0..gym.templates[ti].exercises.len() {
+            let note = gym.templates[ti].exercises[ei].note.trim().to_string();
+            let Some(rest) = note.strip_prefix("Or ").or_else(|| note.strip_prefix("or ")) else { continue };
+            let mut alts: Vec<(String, Option<f64>)> = vec![];
+            for part in rest.split(['/', ',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
+                let low = part.to_lowercase();
+                if let Some(w) = low.strip_suffix("kg").map(str::trim).and_then(|n| n.parse::<f64>().ok()) {
+                    if let Some(last) = alts.last_mut() {
+                        last.1 = Some(w);
+                    }
+                    continue;
+                }
+                let name = part.strip_prefix("or ").unwrap_or(part);
+                let mut c = name.chars();
+                let name = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+                alts.push((name, None));
+            }
+            if alts.is_empty() {
+                continue;
+            }
+            let main = gym.templates[ti].exercises[ei].exercise_id;
+            let mut list = vec![];
+            for (name, w) in alts {
+                let id = match gym.exercises.iter().find(|e| e.name.eq_ignore_ascii_case(&name)) {
+                    Some(e) => e.id,
+                    None => {
+                        let id = next();
+                        gym.exercises.push(Exercise { id, name: name.clone(), assisted: false });
+                        id
+                    }
+                };
+                if id != main && !list.iter().any(|a: &Alternative| a.exercise_id == id) {
+                    let name = gym.exercises.iter().find(|e| e.id == id).map(|e| e.name.clone()).unwrap_or(name);
+                    list.push(Alternative { exercise_id: id, name, start_weight: w });
+                }
+            }
+            let te = &mut gym.templates[ti].exercises[ei];
+            te.alternatives = list;
+            te.note.clear();
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -159,7 +219,23 @@ fn build_template_exercises(st: &mut State, list: &[TemplateExerciseIn]) -> Res<
             }
         }
         let name = st.gym.exercises.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
+        let mut alternatives: Vec<Alternative> = vec![];
+        for a in &e.alternatives {
+            if a.start_weight.is_some_and(|w| !w.is_finite() || w < 0.0) {
+                continue;
+            }
+            let aid = match (a.exercise_id.filter(|i| st.gym.exercises.iter().any(|x| x.id == *i)), a.name.as_deref().map(str::trim).filter(|n| !n.is_empty())) {
+                (Some(i), _) => i,
+                (None, Some(n)) => find_or_create_exercise(st, n),
+                _ => continue,
+            };
+            if aid != id && !alternatives.iter().any(|x| x.exercise_id == aid) {
+                let an = st.gym.exercises.iter().find(|x| x.id == aid).map(|x| x.name.clone()).unwrap_or_default();
+                alternatives.push(Alternative { exercise_id: aid, name: an, start_weight: a.start_weight });
+            }
+        }
         out.push(TemplateExercise {
+            alternatives,
             exercise_id: id,
             name,
             sets: e.sets,
@@ -412,6 +488,18 @@ pub struct PlanExercise {
     pub note: String,
     /// personal best (None until the exercise has been logged)
     pub pb: Option<Pb>,
+    /// what can be done instead (the Swap button), each with its own history
+    pub alternatives: Vec<PlanAlt>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct PlanAlt {
+    pub exercise_id: i64,
+    pub name: String,
+    pub assisted: bool,
+    pub start_weight: Option<f64>,
+    pub last: Option<Last>,
+    pub pb: Option<Pb>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -549,6 +637,14 @@ pub fn plan_for_template(st: &State, tid: i64, before: Option<&str>) -> Option<W
             start_weight: e.start_weight,
             note: e.note.clone(),
             pb: pb_for(st, e.exercise_id, assisted),
+            alternatives: e
+                .alternatives
+                .iter()
+                .map(|a| {
+                    let aa = st.gym.exercises.iter().any(|x| x.id == a.exercise_id && x.assisted);
+                    PlanAlt { exercise_id: a.exercise_id, name: a.name.clone(), assisted: aa, start_weight: a.start_weight, last: last_for(st, a.exercise_id, before), pb: pb_for(st, a.exercise_id, aa) }
+                })
+                .collect(),
         });
     }
     Some(WorkoutPlan {
@@ -688,6 +784,124 @@ pub fn session_create(env: &mut Env, b: SessionIn) -> Res<Session> {
     env.st.gym.sessions.push(s.clone());
     env.changed = true;
     Ok(s)
+}
+
+#[derive(Deserialize)]
+pub struct SwapIn {
+    from: i64,
+    to: i64,
+}
+
+/// `POST /api/sessions/{id}/swap` {from, to}: do an alternative instead (or go back to the main exercise). The sets
+/// keep their place in the workout and are refilled from the new exercise's own last time (or its starting weight).
+pub fn session_swap(env: &mut Env, id: i64, b: SwapIn) -> Res<Session> {
+    let s = session_get(env.st, id)?;
+    if s.completed {
+        return Err(ApiErr::bad("that workout is already finished"));
+    }
+    let t = s.template_id.and_then(|tid| env.st.gym.templates.iter().find(|t| t.id == tid)).cloned().ok_or_else(|| ApiErr::bad("this workout has no template"))?;
+    // the slot: the template exercise that `from` is, or is an alternative of
+    let slot = t.exercises.iter().find(|e| e.exercise_id == b.from || e.alternatives.iter().any(|a| a.exercise_id == b.from)).ok_or_else(|| ApiErr::bad("that exercise isn't in this workout"))?;
+    let start = if slot.exercise_id == b.to {
+        slot.start_weight
+    } else {
+        slot.alternatives.iter().find(|a| a.exercise_id == b.to).ok_or_else(|| ApiErr::bad("that isn't an alternative for this exercise"))?.start_weight
+    };
+    if b.from == b.to {
+        return Ok(s);
+    }
+    let last = last_for(env.st, b.to, Some(&s.date));
+    let sess = env.st.gym.sessions.iter_mut().find(|x| x.id == id).unwrap();
+    for x in sess.sets.iter_mut().filter(|x| x.exercise_id == b.from) {
+        let prev = last.as_ref().and_then(|l| l.sets.get((x.set_no - 1) as usize).or(l.sets.last()));
+        let (w, r) = match (prev, start) {
+            (Some(p), _) => (p.weight, if p.reps > 0 { p.reps } else { slot.rep_min }),
+            (None, Some(w)) => (w, slot.rep_min),
+            _ => (0.0, slot.rep_min),
+        };
+        x.exercise_id = b.to;
+        x.weight = w;
+        x.reps = r;
+        x.done = false;
+    }
+    let out = sess.clone();
+    env.changed = true;
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct OverviewRow {
+    pub exercise_id: i64,
+    pub name: String,
+    pub assisted: bool,
+    pub pb: Option<Pb>,
+    /// the latest date it was done
+    pub last_date: Option<String>,
+    /// the workouts it is in ("Push 1, Push 2")
+    pub workouts: Vec<String>,
+    /// the main exercise it can stand in for (an alternative)
+    pub alt_for: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct OverviewGroup {
+    pub group: String,
+    pub exercises: Vec<OverviewRow>,
+}
+
+/// The group a workout belongs to, from its name: Push, Pull, Legs, or Other.
+fn group_of(template_name: &str) -> &'static str {
+    let n = template_name.to_lowercase();
+    if n.contains("push") {
+        "Push"
+    } else if n.contains("pull") {
+        "Pull"
+    } else if n.contains("leg") {
+        "Legs"
+    } else {
+        "Other"
+    }
+}
+
+/// `GET /api/exercises/overview`: every exercise, grouped Push / Pull / Legs / Other by the workouts it is in (an
+/// alternative sits with its main exercise), in workout order, with its personal best.
+pub fn exercises_overview(st: &State) -> Value {
+    let order = ["Push", "Pull", "Legs", "Other"];
+    let mut groups: Vec<OverviewGroup> = order.iter().map(|g| OverviewGroup { group: g.to_string(), exercises: vec![] }).collect();
+    let mut placed: Vec<i64> = vec![];
+    let row = |id: i64, alt_for: Option<String>| -> Option<OverviewRow> {
+        let e = st.gym.exercises.iter().find(|x| x.id == id)?;
+        let workouts: Vec<String> = st.gym.templates.iter().filter(|t| t.exercises.iter().any(|x| x.exercise_id == id || x.alternatives.iter().any(|a| a.exercise_id == id))).map(|t| t.name.clone()).collect();
+        let last_date = st.gym.sessions.iter().filter(|s| s.completed && s.sets.iter().any(|x| x.exercise_id == id && x.done)).map(|s| s.date.clone()).max();
+        Some(OverviewRow { exercise_id: id, name: e.name.clone(), assisted: e.assisted, pb: pb_for(st, id, e.assisted), last_date, workouts, alt_for })
+    };
+    for t in st.gym.templates.iter().filter(|t| t.kind != "cardio") {
+        let gi = order.iter().position(|g| *g == group_of(&t.name)).unwrap_or(3);
+        for te in &t.exercises {
+            if !placed.contains(&te.exercise_id) {
+                placed.push(te.exercise_id);
+                if let Some(r) = row(te.exercise_id, None) {
+                    groups[gi].exercises.push(r);
+                }
+            }
+            for a in &te.alternatives {
+                if !placed.contains(&a.exercise_id) {
+                    placed.push(a.exercise_id);
+                    if let Some(r) = row(a.exercise_id, Some(te.name.clone())) {
+                        groups[gi].exercises.push(r);
+                    }
+                }
+            }
+        }
+    }
+    for e in &st.gym.exercises {
+        if !placed.contains(&e.id) {
+            if let Some(r) = row(e.id, None) {
+                groups[3].exercises.push(r);
+            }
+        }
+    }
+    json!(groups.into_iter().filter(|g| !g.exercises.is_empty()).collect::<Vec<_>>())
 }
 
 pub fn session_get(st: &State, id: i64) -> Res<Session> {
