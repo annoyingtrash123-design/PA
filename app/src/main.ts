@@ -8,6 +8,7 @@ import { refreshWeather } from "./services/weather";
 import { loadNews } from "./services/news";
 import { clear, h, loading } from "./ui";
 import { setupUpdates } from "./updates";
+import { setupBack } from "./util/back";
 import { renderGoals } from "./views/goals";
 import { renderGym } from "./views/gym";
 import { renderHome } from "./views/home";
@@ -51,10 +52,21 @@ const tabs = document.getElementById("tabs")!;
 
 function drawChrome(active: string) {
   clear(topbar, h("h1", null, assistantName()));
-  clear(tabs, ...TABS.map((t) => h("a", { href: t.hash, class: t.id === active ? "active" : "", "aria-current": t.id === active ? "page" : null }, h("span", { class: "pill" }, icon(t.icon, 24)), t.label)));
+  // switching tabs replaces the history entry, so the back button never walks back through old tabs
+  clear(tabs, ...TABS.map((t) => h("a", { href: t.hash, class: t.id === active ? "active" : "", "aria-current": t.id === active ? "page" : null, onclick: (e: Event) => {
+    e.preventDefault();
+    if (location.hash === t.hash) return window.scrollTo({ top: 0, behavior: "smooth" });
+    history.replaceState(history.state, "", t.hash);
+    route();
+  } }, h("span", { class: "pill" }, icon(t.icon, 24)), t.label)));
 }
 
 let cleanup: (() => void) | void;
+const isHome = () => (location.hash.replace(/^#/, "").split("?")[0] || "/") === "/";
+const back = setupBack(isHome, () => {
+  history.replaceState(history.state, "", "#/");
+  route();
+});
 let renderedDay = "";
 function route() {
   const path = location.hash.replace(/^#/, "").split("?")[0] || "/";
@@ -77,6 +89,7 @@ function route() {
     clear(root);
     cleanup = entry[1](root);
     renderedDay = today();
+    back.ensureTrap();
   } catch (e) {
     clear(root, h("div", { class: "card stack" }, h("h2", { class: "title-sm" }, "Hmm, something went wrong"), h("p", { class: "muted" }, String((e as Error).message ?? e)), h("button", { type: "button", class: "btn btn-primary", onclick: route }, "Retry")));
   }
@@ -90,7 +103,9 @@ async function start() {
     clear(view, h("div", { class: "card" }, `Could not start the app core: ${String((e as Error).message ?? e)}`));
     return;
   }
-  window.addEventListener("hashchange", route);
+  window.addEventListener("hashchange", () => {
+    if (!back.skipHashChange()) route();
+  });
   window.addEventListener("pa-settings", () => { const t = topbar.querySelector("h1"); if (t) t.textContent = assistantName(); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && renderedDay && renderedDay !== today() && !document.querySelector(".sheet-overlay")) route();

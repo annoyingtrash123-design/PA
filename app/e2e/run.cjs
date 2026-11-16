@@ -202,6 +202,48 @@ const tests = {
     await ctx.close();
   },
 
+  "back: first press goes to the top, second goes Home; gym sub-tabs swipe": async (browser) => {
+    const { ctx, page, problems } = await newPage(browser, { when: MORNING });
+    await go(page, "#/tasks");
+    await go(page, "#/settings");
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await page.waitForTimeout(100);
+    await page.goBack();
+    await page.waitForTimeout(700);
+    assert((await page.evaluate(() => window.scrollY)) < 5, "first back scrolls to the top");
+    assert(page.url().endsWith("#/settings"), `still on Settings: ${page.url()}`);
+    await page.goBack();
+    await page.waitForTimeout(300);
+    assert(page.url().endsWith("#/"), `second back goes Home (not to Tasks): ${page.url()}`);
+    assert((await text(page)).includes("Read it to me"), "Home is showing");
+    // a sheet closes first
+    await go(page, "#/tasks");
+    await page.click('button:has-text("New task")');
+    await page.goBack();
+    await page.waitForTimeout(300);
+    assert((await page.locator(".sheet-overlay").count()) === 0 && page.url().endsWith("#/tasks"), "back closes the sheet and stays put");
+    // swipe between gym sub-tabs
+    await go(page, "#/gym");
+    const swipe = async (from, to) => {
+      await page.evaluate(([a, b]) => {
+        const el = document.querySelector("#view .page");
+        const mk = (type, x) => { const t = new Touch({ identifier: 1, target: el, clientX: x, clientY: 400 }); el.dispatchEvent(new TouchEvent(type, { touches: type === "touchend" ? [] : [t], changedTouches: [t], bubbles: true })); };
+        mk("touchstart", a);
+        mk("touchend", b);
+      }, [from, to]);
+      await page.waitForTimeout(150);
+    };
+    await swipe(300, 100);
+    assert((await page.locator('[role="tab"][aria-selected="true"]').innerText()) === "Rotation", "swipe left: next sub-tab");
+    await swipe(300, 100);
+    await swipe(300, 100);
+    assert((await page.locator('[role="tab"][aria-selected="true"]').innerText()) === "Exercises", "and on to Exercises");
+    await swipe(100, 300);
+    assert((await page.locator('[role="tab"][aria-selected="true"]').innerText()) === "Templates", "swipe right: back one");
+    assert(!problems.length, `console problems: ${problems.join(" | ")}`);
+    await ctx.close();
+  },
+
   "with a key, the summary is written by three small requests": async (browser) => {
     const calls = [];
     const { ctx, page, problems } = await newPage(browser, { when: MORNING, key: "test-key", geminiHandler: gemini(calls) });

@@ -3,6 +3,7 @@ import { icon } from "../icons";
 import { button, card, chip, clear, confirmDialog, field, h, muted, openModal, segmented, select, textInput, toast, toggle } from "../ui";
 import { axisTicks } from "../util/chart";
 import { fmtRepRange, fmtSetsReps, fmtWeight, parseNum } from "../util/text";
+import { onSwipe } from "../util/swipe";
 import type { Exercise, HistoryPoint, OverviewGroup, Rotation, Session, Template, TemplateExercise, TemplateKind, WorkoutExercise, WorkoutPlan } from "../types";
 
 type Sub = "today" | "rotation" | "templates" | "progress";
@@ -26,6 +27,15 @@ export function renderGym(root: HTMLElement): void {
     clear(root, seg, ...body);
     window.scrollTo(0, y);
   };
+  // swipe left / right to flip between Today, Rotation, Templates and Exercises
+  onSwipe(root, (dir) => {
+    const i = SUBS.findIndex(([v]) => v === sub);
+    const j = dir === "left" ? i + 1 : i - 1;
+    if (j < 0 || j >= SUBS.length) return;
+    sub = SUBS[j][0];
+    draw();
+    window.scrollTo(0, 0);
+  });
   draw();
 }
 
