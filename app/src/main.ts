@@ -9,6 +9,7 @@ import { loadNews } from "./services/news";
 import { clear, h, loading } from "./ui";
 import { setupUpdates } from "./updates";
 import { setupBack } from "./util/back";
+import { installBackButton, IS_NATIVE, nativeExit } from "./lib/native";
 import { renderGoals } from "./views/goals";
 import { renderGym } from "./views/gym";
 import { renderHome } from "./views/home";
@@ -66,7 +67,8 @@ const isHome = () => (location.hash.replace(/^#/, "").split("?")[0] || "/") === 
 const back = setupBack(isHome, () => {
   history.replaceState(history.state, "", "#/");
   route();
-});
+}, IS_NATIVE ? () => void nativeExit() : undefined);
+void installBackButton();
 let renderedDay = "";
 function route() {
   const path = location.hash.replace(/^#/, "").split("?")[0] || "/";

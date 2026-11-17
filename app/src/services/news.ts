@@ -3,6 +3,7 @@
 import type { NewsItem } from "../types";
 import { ctxCache } from "./cache";
 import { kvGet, kvSet } from "./idb";
+import { SITE_BASE } from "../lib/native";
 
 const DB = "pa-news";
 const KEY = "latest";
@@ -49,7 +50,7 @@ export async function loadNews(): Promise<NewsFile> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 8000);
     try {
-      const r = await fetch(`${import.meta.env.BASE_URL}news.json`, { cache: "no-cache", signal: ctl.signal });
+      const r = await fetch(`${SITE_BASE}news.json`, { cache: "no-cache", signal: ctl.signal });
       if (r.ok) file = parseNewsFile(await r.json());
     } finally {
       clearTimeout(timer);

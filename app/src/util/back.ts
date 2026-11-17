@@ -25,7 +25,7 @@ export const setTabAway = (fn: (() => boolean) | null) => void (tabAway = fn);
 const TRAP = { pa: "trap" };
 
 /** Set up the back handling. `onHome()` says whether Home is showing; `goHome()` switches to it. */
-export function setupBack(onHome: () => boolean, goHome: () => void): { ensureTrap: () => void; skipHashChange: () => boolean; clearTab: () => void } {
+export function setupBack(onHome: () => boolean, goHome: () => void, exit?: () => void): { ensureTrap: () => void; skipHashChange: () => boolean; clearTab: () => void } {
   // the page that is showing; the entry under the trap may still carry an older address, which must not re-route
   let shown = location.href;
   let skipHash = false;
@@ -42,9 +42,10 @@ export function setupBack(onHome: () => boolean, goHome: () => void): { ensureTr
     const scrolled = window.scrollY > 5;
     const act = decide({ sheetOpen: !!sheet, canReset: scrolled || !!tabAway?.(), onHome: onHome() });
     if (act === "leave") {
-      // we are on the entry below the trap: one more step back leaves the app
+      // we are on the entry below the trap: one more step back leaves the app (the Android app closes itself)
       skipHash = false;
-      history.back();
+      if (exit) exit();
+      else history.back();
       return;
     }
     history.pushState(TRAP, "", location.href);

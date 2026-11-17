@@ -2,8 +2,9 @@
 // whenever you come back to the app and every 30 minutes, then reloads onto the new version.
 import { registerSW } from "virtual:pwa-register";
 import { toast } from "./ui";
+import { IS_NATIVE } from "./lib/native";
 
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = __APP_VERSION__;
 const SEEN_KEY = "pa-version-seen";
 const CHECK_EVERY_MS = 30 * 60 * 1000;
 let pendingReload = false;
@@ -28,7 +29,8 @@ function announceIfUpdated() {
 }
 
 export function setupUpdates() {
-  if (!("serviceWorker" in navigator)) return;
+  // the Android app updates by installing a new APK (Settings > Check for updates), not by a service worker
+  if (IS_NATIVE || !("serviceWorker" in navigator)) return;
   announceIfUpdated();
   registerSW({
     immediate: true,

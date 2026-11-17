@@ -1,4 +1,5 @@
 // Read-aloud with the Web Speech API (speechSynthesis).
+import { IS_NATIVE, nativeSpeak, nativeStopSpeaking } from "../lib/native";
 import { speechChunks } from "../util/text";
 import { getSpeed } from "./voice-prefs";
 
@@ -14,7 +15,7 @@ const set = (s: SpeechState) => {
   listeners.forEach((l) => l(s));
 };
 
-export const speechSupported = () => typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+export const speechSupported = () => IS_NATIVE || (typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined");
 export const speechState = () => state;
 export function onSpeechState(fn: (s: SpeechState) => void): () => void {
   listeners.add(fn);
@@ -61,6 +62,20 @@ export async function speak(text: string, voiceName?: string): Promise<void> {
   if (!speechSupported()) throw new Error("This browser can't read aloud");
   stop();
   const id = ++runId;
+  if (IS_NATIVE) {
+    // the app's WebView has no speechSynthesis: Android's own text-to-speech, a paragraph at a time
+    set("playing");
+    for (const para of text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)) {
+      if (id !== runId) return;
+      try {
+        await nativeSpeak(para, getSpeed());
+      } catch {
+        break;
+      }
+    }
+    if (id === runId) set("idle");
+    return;
+  }
   const voice = pickVoice(await listVoices(), voiceName);
   // blank lines separate the spoken parts: a short natural pause after the last chunk of each paragraph
   const chunks: { text: string; pause: number }[] = [];
@@ -94,6 +109,7 @@ export async function speak(text: string, voiceName?: string): Promise<void> {
 
 export function pause() {
   if (state !== "playing") return;
+  if (IS_NATIVE) return stop();
   speechSynthesis.pause();
   set("paused");
 }
@@ -104,6 +120,7 @@ export function resume() {
 }
 export function stop() {
   runId++;
-  if (speechSupported()) speechSynthesis.cancel();
+  if (IS_NATIVE) void nativeStopSpeaking();
+  else if (speechSupported()) speechSynthesis.cancel();
   if (state !== "idle") set("idle");
 }

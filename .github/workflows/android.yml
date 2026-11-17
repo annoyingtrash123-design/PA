@@ -1,0 +1,116 @@
+name: Build Android app
+
+# The Android app: the same web app bundled into an APK by Capacitor (app/android). Its data lives in the app's own
+# private storage, so clearing Chrome can't remove it. Each build is published to the "android-latest" release;
+# Settings > Check for updates in the app offers it. The signing key must never change (Android only installs an
+# update over the app if it is signed with the same key).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "core/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
+    env:
+      ANDROID_VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check signing secrets
+        working-directory: .
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$KS_PASS" ]; then
+            echo "::error::Repository secrets ANDROID_KEYSTORE_B64 and ANDROID_KEYSTORE_PASSWORD are required to sign the APK (key alias: miranda). Add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Version
+        run: echo "ANDROID_VERSION_NAME=$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Restore wasm-pack
+        id: wasmpack
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-0.15.0-${{ runner.os }}
+      - name: Install wasm-pack
+        if: steps.wasmpack.outputs.cache-hit != 'true'
+        run: cargo install wasm-pack --locked --version 0.15.0
+
+      - name: Core tests (nothing is published if these fail)
+        working-directory: .
+        run: cargo test -p pa-core
+      - run: npm ci
+      - name: Build web app for Android
+        run: npm run build:web
+        env:
+          BASE_PATH: /
+          VITE_NATIVE: "1"
+      - run: npx cap sync android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      # GitHub's ubuntu runners ship the Android SDK (ANDROID_HOME)
+      - name: Android SDK
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && test -d "$ANDROID_HOME"
+
+      - name: Decode keystore
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          printf '%s' "$KS" | base64 -d > "$RUNNER_TEMP/miranda.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/miranda.jks" >> "$GITHUB_ENV"
+
+      - name: Gradle assembleRelease
+        working-directory: app/android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: miranda
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Publish release android-latest
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/android/app/build/outputs/apk/release/app-release.apk miranda.apk
+          printf 'Miranda Android app (latest build)\n\nversion: %s\n\nCommit: %s\n' \
+            "$ANDROID_VERSION_NAME" "$GITHUB_SHA" > notes.md
+          if gh release view android-latest >/dev/null 2>&1; then
+            gh release edit android-latest --notes-file notes.md --target "$GITHUB_SHA"
+          else
+            gh release create android-latest --title "Android app (latest)" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
+          gh release upload android-latest miranda.apk --clobber

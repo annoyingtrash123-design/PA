@@ -12,6 +12,8 @@ import { icon } from "../icons";
 import { DEFAULT_SPEED, getGeminiVoice, getFavourites, getSpeed, getStyle, getVoiceType, orderVoices, toggleFavourite, SPEED_MAX, SPEED_MIN, SPEED_STEP, savePrefs, type VoiceType } from "../services/voice-prefs";
 import { addExtra, quotaMessage } from "../services/ai-budget";
 import { aiLog, GeminiError } from "../services/gemini";
+import { IS_NATIVE, nativeSaveFile, openExternal } from "../lib/native";
+import { checkAppUpdate } from "../lib/app-update";
 import { decodeProfile, ProfileCodeError, summarize, type ApplySummary } from "../util/profile-code";
 import { isValidTimezone } from "../util/dates";
 import type { Category, Memory } from "../types";
@@ -181,6 +183,18 @@ function build(redraw: () => void): HTMLElement[] {
     redraw();
   };
 
+  // ---- the Android app: a newer APK on GitHub
+  const updLine = h("p", { class: "small muted" });
+  const checkUpdate = async () => {
+    updLine.textContent = "Checking…";
+    const u = await checkAppUpdate();
+    if (!u) {
+      updLine.textContent = "You're on the latest version.";
+      return;
+    }
+    clear(updLine, `Version ${u.latest} is available. `, h("a", { class: "link", href: u.url, onclick: (e: Event) => { e.preventDefault(); openExternal(u.url); } }, "Download it"), " and install it over this one: your data stays.");
+  };
+
   // ---- automatic daily snapshots
   const snapBox = h("details", { class: "small" }, h("summary", null, "Restore from a daily copy"));
   snapBox.addEventListener("toggle", async () => {
@@ -202,6 +216,10 @@ function build(redraw: () => void): HTMLElement[] {
   // ---- backup / data
   const download = () => {
     const data = api("GET", "/api/export");
+    if (IS_NATIVE) {
+      nativeSaveFile(`miranda-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2)).catch(() => toast("Couldn't save the backup"));
+      return;
+    }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = h("a", { href: URL.createObjectURL(blob), download: `pa-backup-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.appendChild(a);
@@ -265,7 +283,8 @@ function build(redraw: () => void): HTMLElement[] {
     memoryCard(name),
     profileCard(redraw),
     categoriesCard(),
-    card("stack", h("h3", { class: "title-sm" }, "Backup"), muted("Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick,
+    IS_NATIVE ? card("stack", h("h3", { class: "title-sm" }, "App"), h("p", { class: "small" }, `Version ${__APP_VERSION__}`), muted("Your data is kept in the app's own storage, so clearing Chrome can't remove it. Uninstalling the app does."), updLine, button("Check for updates", checkUpdate, { kind: "outline", icon: "restore" })) : null,
+    card("stack", h("h3", { class: "title-sm" }, "Backup"), muted(IS_NATIVE ? "Save a backup now and then (it opens the share sheet: save it to Drive or Files)." : "Your data lives only on this device. Download a backup now and then."), h("div", { class: "row wrap" }, button("Download backup", download, { kind: "outline", icon: "download" }), button("Restore from backup", () => filePick.click(), { kind: "outline", icon: "upload" })), filePick,
       muted("Miranda also keeps a copy of everything once a day on this phone, for the last two weeks."), snapBox),
     card("stack", h("h3", { class: "title-sm" }, "Data"), h("div", { class: "row wrap" }, button("Load sample data", () => void loadSample(), { kind: "outline", icon: "add" }), button("Reset everything", () => void reset(), { kind: "text", icon: "delete", cls: "danger" }))),
     h("p", { class: "muted small", style: { textAlign: "center" } }, "Miranda runs entirely on your device."),

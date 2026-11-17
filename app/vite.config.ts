@@ -6,11 +6,14 @@ import { VitePWA } from "vite-plugin-pwa";
 // VITE_MOCK_CORE=1 swaps in a plain TypeScript stand-in so the UI can be developed without the wasm.
 const mock = process.env.VITE_MOCK_CORE === "1";
 const base = process.env.BASE_PATH ?? "/";
+const native = process.env.VITE_NATIVE === "1";
+const appVersion = process.env.ANDROID_VERSION_NAME ?? (native ? "dev" : "web");
 const src = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
   base,
   clearScreen: false,
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   resolve: { alias: { "pa-wasm": mock ? src("./src/dev/mock-core.ts") : src("./src/core-wasm/pa_wasm.js") } },
   plugins: [
     // Built pages only: scripts may come from the app itself and nowhere else, and the app may only talk to the
@@ -26,7 +29,7 @@ export default defineConfig({
           "img-src 'self' data: blob:",
           "media-src 'self' blob: data:",
           "font-src 'self' data:",
-          "connect-src 'self' https://generativelanguage.googleapis.com https://api.open-meteo.com https://date.nager.at",
+          `connect-src 'self' https://generativelanguage.googleapis.com https://api.open-meteo.com https://date.nager.at${native ? " https://annoyingtrash123-design.github.io https://api.github.com" : ""}`,
           "worker-src 'self'",
           "manifest-src 'self'",
           "object-src 'none'",

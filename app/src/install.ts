@@ -1,4 +1,5 @@
 // "Install this app" banner. Android/desktop Chrome fire `beforeinstallprompt`; iOS Safari gets instructions.
+import { IS_NATIVE } from "./lib/native";
 import { button, h } from "./ui";
 
 interface InstallPromptEvent extends Event {
@@ -45,6 +46,7 @@ function showBanner() {
 }
 
 export function setupInstall() {
+  if (IS_NATIVE) return;
   window.addEventListener("beforeinstallprompt", (e) => {
     e.preventDefault();
     deferred = e as InstallPromptEvent;
